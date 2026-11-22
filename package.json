@@ -5,7 +5,8 @@
   "description": "Local read-only bridge for the Liene PixCut S1",
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "status": "node bin/status.mjs"
   },
   "dependencies": {
     "usb": "^2.14.0"
