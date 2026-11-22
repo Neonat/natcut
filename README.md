@@ -14,6 +14,8 @@ Customer-facing features are intentionally deferred until the printer connection
 - macOS detects it as `Liene PixCut S1` with USB VID/PID `0x302c:0x3101`.
 - The device exposes four interfaces: Print (0), Debug (1), vendor control (2), and vendor data (3).
 - Interfaces 2 and 3 match the endpoints documented by existing open-source PixCut projects.
+- A read-only protocol check successfully identified model `DHP700`, SKU `DHP700W#EU1`, firmware `1.0.15_0054`, and hardware revision `x05`.
+- At discovery time the printer reported `idle / idle`, no alerts, and no active jobs.
 - No print or cut test has been performed yet, and no sticker sheets are currently loaded.
 
 ## Direction
@@ -66,7 +68,7 @@ These details are empirical and must be validated against this specific printer 
 - Record printer firmware/hardware information and initial state.
 - Do not create jobs or send mutation commands during discovery.
 
-Exit condition: the Mac can open the expected interfaces, receive valid protocol replies, and close cleanly.
+Exit condition: the Mac can open the expected interfaces, receive valid protocol replies, and close cleanly. **Completed.**
 
 ### 1. Controlled hardware proof
 
@@ -130,11 +132,10 @@ Exit condition: customers submit quickly while the single printer processes jobs
 
 ## Immediate next steps
 
-1. Run the upstream read-only status tool and save the identity/status result.
-2. Record the printer firmware, hardware revision, and any active alerts or jobs.
-3. Audit the upstream status and job-submission paths before copying code.
-4. Add NatCut's initial package structure and mocked protocol tests.
-5. Prepare a single conservative test-sheet fixture and review it before loading paper or creating a job.
+1. Audit the upstream status and job-submission paths before copying code.
+2. Add NatCut's initial package structure and mocked protocol tests.
+3. Prepare a single conservative test-sheet fixture and review it before loading paper or creating a job.
+4. Load one sticker sheet and agree on knife pressure before permitting the first physical job.
 
 ## License
 
