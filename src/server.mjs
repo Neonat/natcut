@@ -22,18 +22,27 @@ function publicError(error) {
   return { status: 500, code: 'PRINTER_ERROR', message: 'The printer status request failed.' };
 }
 
-export function createServer({ getSnapshot }) {
+export function createServer({ getSnapshot, readOperatorPage = () => readFile(operatorPageUrl) }) {
   if (typeof getSnapshot !== 'function') throw new TypeError('getSnapshot must be a function');
-  let snapshotQueue = Promise.resolve();
+  let snapshotInFlight = null;
 
   const queueSnapshot = () => {
-    const result = snapshotQueue.then(getSnapshot, getSnapshot);
-    snapshotQueue = result.catch(() => {});
-    return result;
+    if (!snapshotInFlight) {
+      snapshotInFlight = Promise.resolve()
+        .then(getSnapshot)
+        .finally(() => { snapshotInFlight = null; });
+    }
+    return snapshotInFlight;
   };
 
-  return createHttpServer(async (request, response) => {
-    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+  const handle = async (request, response) => {
+    let pathname;
+    try {
+      pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    } catch {
+      sendJson(response, 400, { ok: false, error: { code: 'BAD_REQUEST', message: 'Malformed request target.' } });
+      return;
+    }
 
     if (request.method !== 'GET') {
       sendJson(response, 405, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: 'Only read-only GET requests are supported.' } }, { allow: 'GET' });
@@ -57,7 +66,7 @@ export function createServer({ getSnapshot }) {
     }
 
     if (pathname === '/' || pathname === '/index.html') {
-      const html = await readFile(operatorPageUrl);
+      const html = await readOperatorPage();
       response.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
@@ -68,6 +77,16 @@ export function createServer({ getSnapshot }) {
     }
 
     sendJson(response, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'Route not found.' } });
+  };
+
+  return createHttpServer((request, response) => {
+    handle(request, response).catch(() => {
+      if (!response.headersSent) {
+        sendJson(response, 500, { ok: false, error: { code: 'SERVER_ERROR', message: 'The local NatCut server could not complete the request.' } });
+      } else {
+        response.destroy();
+      }
+    });
   });
 }
 

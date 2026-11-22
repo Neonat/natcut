@@ -7,7 +7,10 @@ function printerError(code, message, cause) {
 }
 
 function translateUsbError(error) {
-  if (error?.errno === -3 || /LIBUSB_ERROR_ACCESS/.test(String(error))) {
+  if (error?.errno === 2 || /TIMED_OUT/.test(String(error))) {
+    return printerError('PRINTER_TIMEOUT', 'The PixCut USB transfer timed out.', error);
+  }
+  if (error?.errno === -3 || error?.errno === -6 || /LIBUSB_ERROR_(?:ACCESS|BUSY)/.test(String(error))) {
     return printerError(
       'PRINTER_BUSY',
       'PixCut USB interfaces are busy or unavailable. Close Chrome, Liene Photos, or any other printer connection and try again.',
@@ -56,9 +59,11 @@ export async function openUsbSession({ usbModule, vid = VID, pid = PID } = {}) {
   }
 
   const io = {
-    write(address, bytes) {
+    write(address, bytes, timeoutMs) {
       return new Promise((resolve, reject) => {
-        endpointAt(address).transfer(Buffer.from(bytes), (error) => {
+        const endpoint = endpointAt(address);
+        endpoint.timeout = Math.round(timeoutMs);
+        endpoint.transfer(Buffer.from(bytes), (error) => {
           if (error) reject(translateUsbError(error));
           else resolve();
         });

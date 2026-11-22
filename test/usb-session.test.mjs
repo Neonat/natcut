@@ -8,12 +8,12 @@ function createEndpoint(address, transfer) {
   return { address, timeout: 0, transfer };
 }
 
-function createUsbDevice({ failClaimAt } = {}) {
+function createUsbDevice({ failClaimAt, failClaimErrno = -3, writeError } = {}) {
   const events = [];
   const writes = [];
   const controlOut = createEndpoint(CTRL.out, (buffer, callback) => {
     writes.push([...buffer]);
-    callback(null);
+    callback(writeError ?? null);
   });
   const controlIn = createEndpoint(CTRL.in, (_length, callback) => {
     const error = new Error('LIBUSB_TRANSFER_TIMED_OUT');
@@ -28,8 +28,8 @@ function createUsbDevice({ failClaimAt } = {}) {
     claim() {
       events.push(`claim:${number}`);
       if (number === failClaimAt) {
-        const error = new Error('LIBUSB_ERROR_ACCESS');
-        error.errno = -3;
+        const error = new Error(failClaimErrno === -6 ? 'LIBUSB_ERROR_BUSY' : 'LIBUSB_ERROR_ACCESS');
+        error.errno = failClaimErrno;
         throw error;
       }
     },
@@ -91,4 +91,28 @@ test('translates access denial and releases a partially claimed session', async 
     return true;
   });
   assert.deepEqual(events, ['open', 'claim:2', 'claim:3', 'release:2', 'close']);
+});
+
+test('translates libusb busy ownership errors into actionable guidance', async () => {
+  const { usbModule, events } = createUsbDevice({ failClaimAt: DATA.iface, failClaimErrno: -6 });
+
+  await assert.rejects(openUsbSession({ usbModule }), (error) => {
+    assert.equal(error.code, 'PRINTER_BUSY');
+    assert.match(error.message, /Close Chrome/);
+    return true;
+  });
+  assert.deepEqual(events, ['open', 'claim:2', 'claim:3', 'release:2', 'close']);
+});
+
+test('applies a write deadline and translates endpoint timeout', async () => {
+  const timeout = Object.assign(new Error('LIBUSB_TRANSFER_TIMED_OUT'), { errno: 2 });
+  const { usbModule, events } = createUsbDevice({ writeError: timeout });
+  const session = await openUsbSession({ usbModule });
+
+  await assert.rejects(session.io.write(CTRL.out, Uint8Array.of(1), 17), (error) => {
+    assert.equal(error.code, 'PRINTER_TIMEOUT');
+    return true;
+  });
+  await session.close();
+  assert.deepEqual(events, ['open', 'claim:2', 'claim:3', 'release:3', 'release:2', 'close']);
 });

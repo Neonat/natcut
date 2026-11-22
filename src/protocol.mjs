@@ -53,40 +53,46 @@ export function frameJson(object) {
 
 export function takeJson(text) {
   const objects = [];
-  let index = text.indexOf('{');
-  let start = index;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
   let consumed = 0;
+  let incompleteStart = null;
 
-  for (; index >= 0 && index < text.length; index += 1) {
-    const character = text[index];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (character === '\\') escaped = true;
-      else if (character === '"') inString = false;
+  for (const candidate of text.matchAll(/\{\s*"(?:id|method)"\s*:/g)) {
+    const start = candidate.index;
+    if (start < consumed) continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+    for (let index = start; index < text.length; index += 1) {
+      const character = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === '{') depth += 1;
+      else if (character === '}' && --depth === 0) {
+        end = index;
+        break;
+      }
+    }
+    if (end < 0) {
+      incompleteStart ??= start;
       continue;
     }
-    if (character === '"') inString = true;
-    else if (character === '{') {
-      if (depth === 0) start = index;
-      depth += 1;
-    } else if (character === '}' && depth > 0) {
-      depth -= 1;
-      if (depth === 0) {
-        const raw = text.slice(start, index + 1).replace(/[\0\r]/g, '');
-        try {
-          objects.push(JSON.parse(raw));
-        } catch {
-          // Ignore malformed noise and continue looking for a valid reply.
-        }
-        consumed = index + 1;
-      }
+    try {
+      objects.push(JSON.parse(text.slice(start, end + 1).replace(/[\0\r]/g, '')));
+      consumed = end + 1;
+      incompleteStart = null;
+    } catch {
+      // Ignore malformed diagnostic fragments and look for the next envelope.
     }
   }
 
-  return [objects, text.slice(consumed)];
+  const remainderStart = incompleteStart ?? consumed;
+  return [objects, text.slice(remainderStart)];
 }
 
 export function alertCodes(value) {
@@ -121,6 +127,9 @@ export class ReadOnlyPixCut {
     const properties = await this.#getProps(['printer-state', 'printer-sub-state', 'printer-state-alerts']);
     const state = Number(properties['printer-state']);
     const sub = Number(properties['printer-sub-state']);
+    if (!Number.isFinite(state) || !Number.isFinite(sub)) {
+      throw new Error('invalid printer status response');
+    }
     const alerts = alertCodes(properties['printer-state-alerts']);
     return {
       state,
@@ -154,6 +163,8 @@ export class ReadOnlyPixCut {
       const value = values[index];
       properties[name] = value && typeof value === 'object' && name in value ? value[name] : value;
     });
+    const missing = names.filter((name) => properties[name] === undefined);
+    if (missing.length) throw new Error(`invalid get-prop response; missing ${missing.join(', ')}`);
     return properties;
   }
 
@@ -161,8 +172,13 @@ export class ReadOnlyPixCut {
     const run = async () => {
       const id = this.#nextId;
       this.#nextId += 1;
-      await this.#io.write(CTRL.out, frameJson({ id, method, params }));
       const deadline = Date.now() + this.#timeoutMs;
+      await this.#io.write(CTRL.out, frameJson({ id, method, params }), this.#timeoutMs);
+      if (Date.now() >= deadline) {
+        const error = new Error(`no reply to ${method}`);
+        error.code = 'PRINTER_TIMEOUT';
+        throw error;
+      }
 
       while (Date.now() < deadline) {
         const bytes = await this.#io.read(CTRL.in, 4096, Math.max(1, deadline - Date.now()));
@@ -170,7 +186,18 @@ export class ReadOnlyPixCut {
         const [objects, remainder] = takeJson(this.#pending + decoder.decode(bytes));
         this.#pending = remainder.length > 65_536 ? '' : remainder;
         for (const object of objects) {
-          if (object.id === id) return object;
+          if (object.id === id) {
+            const errorDetail = object.error
+              ?? object['error-code']
+              ?? (object.result && typeof object.result === 'object' && !Array.isArray(object.result)
+                ? object.result.error ?? object.result['error-code']
+                : undefined);
+            if (errorDetail !== undefined) {
+              throw new Error(`printer rejected ${method}: ${JSON.stringify(errorDetail)}`);
+            }
+            if (!Object.hasOwn(object, 'result')) throw new Error(`invalid ${method} response; missing result`);
+            return object;
+          }
           if (object.method === 'event.rpt_err') {
             throw new Error(`printer error event: ${JSON.stringify(object.params ?? object)}`);
           }
@@ -178,7 +205,9 @@ export class ReadOnlyPixCut {
         }
       }
 
-      throw new Error(`no reply to ${method}`);
+      const error = new Error(`no reply to ${method}`);
+      error.code = 'PRINTER_TIMEOUT';
+      throw error;
     };
 
     const result = this.#queue.then(run, run);

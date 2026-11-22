@@ -117,7 +117,7 @@ test('serializes concurrent read-only requests', async () => {
       const method = writes.at(-1);
       if (method === 'get-prop') {
         firstResolved = true;
-        return encoder.encode(JSON.stringify({ id: 1, result: [] }));
+        return encoder.encode(JSON.stringify({ id: 1, result: ['DHP700', 'DHP700W#EU1', '1.0.15_0054', 'x05', 5009] }));
       }
       return encoder.encode(JSON.stringify({ id: 2, result: [] }));
     },
@@ -140,4 +140,48 @@ test('times out when the printer never replies', async () => {
   const client = new ReadOnlyPixCut(io, { startingId: 1, timeoutMs: 5 });
 
   await assert.rejects(client.identify(), /no reply to get-prop/);
+});
+
+test('includes a slow write in the request deadline', async () => {
+  const io = {
+    async write() { await new Promise((resolve) => setTimeout(resolve, 20)); },
+    async read() { return encoder.encode(JSON.stringify({ id: 1, result: [] })); },
+  };
+  const client = new ReadOnlyPixCut(io, { startingId: 1, timeoutMs: 5 });
+
+  await assert.rejects(client.identify(), (error) => {
+    assert.equal(error.code, 'PRINTER_TIMEOUT');
+    return true;
+  });
+});
+
+test('rejects a matching printer error envelope', async () => {
+  const { io } = scriptedIo((request) => ({
+    id: request.id,
+    error: { code: 5401, message: 'out of paper' },
+  }));
+  const client = new ReadOnlyPixCut(io, { startingId: 1 });
+
+  await assert.rejects(client.identify(), /printer rejected get-prop.*5401/);
+});
+
+test('rejects a successful envelope with missing identity properties', async () => {
+  const { io } = scriptedIo((request) => ({ id: request.id, result: [] }));
+  const client = new ReadOnlyPixCut(io, { startingId: 1 });
+
+  await assert.rejects(client.identify(), /invalid get-prop response.*model/);
+});
+
+test('resynchronizes after malformed noise and ignores a wrong-id frame', async () => {
+  const chunks = [
+    '{"id":8,"result":[]}',
+    'diagnostic {oops {"id":9,"result":["DHP700","DHP700W#EU1","1.0.15_0054","x05",5009]}',
+  ];
+  const io = {
+    async write() {},
+    async read() { return encoder.encode(chunks.shift() ?? ''); },
+  };
+  const client = new ReadOnlyPixCut(io, { startingId: 9, timeoutMs: 20 });
+
+  assert.equal((await client.identify()).model, 'DHP700');
 });
