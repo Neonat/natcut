@@ -16,7 +16,23 @@ Customer-facing features are intentionally deferred until the printer connection
 - Interfaces 2 and 3 match the endpoints documented by existing open-source PixCut projects.
 - A read-only protocol check successfully identified model `DHP700`, SKU `DHP700W#EU1`, firmware `1.0.15_0054`, and hardware revision `x05`.
 - At discovery time the printer reported `idle / idle`, no alerts, and no active jobs.
+- NatCut now has a tested read-only protocol core, USB status CLI, localhost API, and operator status page.
 - No print or cut test has been performed yet, and no sticker sheets are currently loaded.
+
+## Run the read-only bridge
+
+Requires Node.js 22 or newer.
+
+```bash
+npm install
+npm test
+npm run status -- --json
+npm start
+```
+
+Open `http://127.0.0.1:4173` after starting the server. The current API exposes only `GET /api/health` and `GET /api/printer`; it cannot create, upload, confirm, cancel, pause, resume, print, or cut a job.
+
+USB interfaces are exclusive. Close BrenCut, Liene Photos, and any Chrome tab that has connected to the printer before using the CLI or dashboard. NatCut reports a connection-busy error instead of detaching another process.
 
 ## Direction
 
@@ -91,6 +107,8 @@ Exit condition: one sheet prints and contour-cuts correctly without Liene Photos
 
 Exit condition: repeatable driver tests plus a small CLI that can query status and submit a prepared job.
 
+Read-only foundation completed: protocol framing/parsing, identity, status, active-job listing, USB lifecycle, and a tested status CLI. Job creation and upload remain intentionally absent.
+
 ### 3. Local website bridge
 
 - Run a localhost HTTP service on the USB-connected computer.
@@ -100,6 +118,8 @@ Exit condition: repeatable driver tests plus a small CLI that can query status a
 - Bind to localhost by default; LAN access must be an explicit configuration choice.
 
 Exit condition: an operator can submit a prepared sheet from the website and watch it complete.
+
+Read-only foundation completed: localhost health/status endpoints and an operator dashboard. Submission controls remain intentionally absent.
 
 ### 4. Reliability and throughput
 
@@ -132,11 +152,11 @@ Exit condition: customers submit quickly while the single printer processes jobs
 
 ## Immediate next steps
 
-1. Audit the upstream status and job-submission paths before copying code.
-2. Add NatCut's initial package structure and mocked protocol tests.
-3. Prepare a single conservative test-sheet fixture and review it before loading paper or creating a job.
-4. Load one sticker sheet and agree on knife pressure before permitting the first physical job.
+1. Audit the upstream job declaration, data upload, acknowledgement, polling, and recovery paths without adding them to the executable API.
+2. Design the job safety gate: validated fixture, explicit armed state, loaded-media confirmation, and duplicate prevention.
+3. Prepare a single conservative test-sheet fixture and review its raster and contour offline.
+4. Defer all physical job execution until a sheet is intentionally loaded and the operator separately approves the test.
 
 ## License
 
-The NatCut license has not yet been selected. MIT is the likely choice because the main upstream references are MIT licensed. Add a license before redistributing code.
+NatCut is MIT licensed. See `LICENSE` and `THIRD_PARTY_NOTICES.md`.

@@ -5,6 +5,7 @@
   "description": "Local read-only bridge for the Liene PixCut S1",
   "type": "module",
   "scripts": {
+    "start": "node src/server.mjs",
     "test": "node --test",
     "status": "node bin/status.mjs"
   },
