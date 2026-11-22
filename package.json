@@ -1,0 +1,17 @@
+{
+  "name": "natcut",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local read-only bridge for the Liene PixCut S1",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "usb": "^2.14.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
