@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import { DEVFEST_SG_V1 } from '@natcut/domain';
 import type { ClaimedSubmission } from './cloud-queue.ts';
 
@@ -110,6 +111,10 @@ export class JobStore {
         ownerToken TEXT NOT NULL,
         processId INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS job_execution_identity (
+        submissionId TEXT PRIMARY KEY,
+        executionToken TEXT NOT NULL
+      );
     `);
   }
 
@@ -161,16 +166,17 @@ export class JobStore {
     if (existing.manifestHash !== claim.submission.manifestHash || existing.queueNumber !== claim.submission.queueNumber) {
       throw new Error(`Cloud lease for ${claim.submission.id} does not match the local journal`);
     }
-    if (claim.submission.publicStatus === 'printing' && ![
-      'declaring', 'uploading_cut', 'uploading_image', 'printing', 'cutting', 'ready', 'needs_reconciliation',
-    ].includes(existing.state)) {
-      this.transition(
-        existing.submissionId,
-        'needs_reconciliation',
-        claim.claimedAt,
-        'Cloud status is ahead of the local journal.',
-      );
-      return false;
+    if (claim.submission.publicStatus === 'printing' && existing.state !== 'needs_reconciliation') {
+      const localExecutionToken = this.getOrCreateExecutionToken(existing.submissionId);
+      if (!claim.executionToken || claim.executionToken !== localExecutionToken) {
+        this.transition(
+          existing.submissionId,
+          'needs_reconciliation',
+          claim.claimedAt,
+          'Cloud execution belongs to a different or missing local journal generation.',
+        );
+        return false;
+      }
     }
     return true;
   }
@@ -250,6 +256,20 @@ export class JobStore {
 
   releaseExecutionGuard(ownerToken: string) {
     this.database.prepare('DELETE FROM execution_guard WHERE singleton = 1 AND ownerToken = ?').run(ownerToken);
+  }
+
+  getOrCreateExecutionToken(submissionId: string): string {
+    return this.database.transaction(() => {
+      const existing = this.database.prepare(
+        'SELECT executionToken FROM job_execution_identity WHERE submissionId = ?',
+      ).get(submissionId) as { executionToken: string } | undefined;
+      if (existing) return existing.executionToken;
+      const executionToken = randomUUID();
+      this.database.prepare(
+        'INSERT INTO job_execution_identity (submissionId, executionToken) VALUES (?, ?)',
+      ).run(submissionId, executionToken);
+      return executionToken;
+    })();
   }
 
   close() {

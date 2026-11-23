@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PublicQueueStatus, VisitorApi } from '../api.ts';
 import { usePullToRefresh } from './use-pull-to-refresh.ts';
 
@@ -16,16 +16,21 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
   const [status, setStatus] = useState<PublicQueueStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const refreshGeneration = useRef(0);
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     setLoading(true);
     setError(null);
     try {
-      setStatus(await props.api.getStatus(props.submissionId, props.statusToken));
+      const latest = await props.api.getStatus(props.submissionId, props.statusToken);
+      if (generation === refreshGeneration.current) setStatus(latest);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not refresh. Try again.');
+      if (generation === refreshGeneration.current) {
+        setError(cause instanceof Error ? cause.message : 'Could not refresh. Try again.');
+      }
     } finally {
-      setLoading(false);
+      if (generation === refreshGeneration.current) setLoading(false);
     }
   }, [props.api, props.statusToken, props.submissionId]);
 
@@ -33,6 +38,8 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
   const pullHandlers = usePullToRefresh(() => { void refresh(); });
 
   const leave = async () => {
+    refreshGeneration.current++;
+    setLoading(false);
     setError(null);
     try {
       await props.api.leave(props.submissionId, props.statusToken);

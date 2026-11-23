@@ -60,10 +60,37 @@ emulatorDescribe('cloud claim race', () => {
     expect((await firestore.doc('workerSlots/devfest-sg').get()).data()?.submissionId).toBe(winners[0]!.submission.id);
     expect((await cloud.recoverClaim(winners[0]!.workerId))?.submission.id).toBe(winners[0]!.submission.id);
 
+    expect(await cloud.beginExecution(
+      winners[0]!.submission.id,
+      winners[0]!.workerId,
+      'journal-a',
+      '2026-11-23T12:00:02.000Z',
+    )).toBe('acquired');
+    expect(await cloud.beginExecution(
+      winners[0]!.submission.id,
+      winners[0]!.workerId,
+      'journal-b',
+      '2026-11-23T12:00:03.000Z',
+    )).toBe('fenced');
+    expect(await cloud.beginExecution(
+      winners[0]!.submission.id,
+      winners[0]!.workerId,
+      'journal-a',
+      '2026-11-23T12:00:04.000Z',
+    )).toBe('acquired');
+    expect((await cloud.recoverClaim(winners[0]!.workerId))?.executionToken).toBe('journal-a');
+
     const store = new JobStore(':memory:');
     store.insertClaimed(winners[0]!);
     expect(() => store.insertClaimed(winners[0]!)).toThrow(/unique/i);
     expect(store.list()).toHaveLength(1);
     store.close();
+
+    await cloud.updatePublicStatus(winners[0]!.submission.id, 'ready', '2026-11-23T12:00:05.000Z');
+    await expect(cloud.updatePublicStatus(
+      winners[0]!.submission.id,
+      'printing',
+      '2026-11-23T12:00:06.000Z',
+    )).resolves.toBeUndefined();
   }, 20_000);
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { JobStore, SimulatedPrinter, runWorkerOnce, type ClaimedSubmission, type CloudQueue } from '../src/index.ts';
+import { JobStore, SimulatedPrinter, runLocalJob, runWorkerOnce, type ClaimedSubmission, type CloudQueue } from '../src/index.ts';
 
 function claimed(): ClaimedSubmission {
   return {
@@ -54,6 +54,7 @@ describe('simulated worker', () => {
     const cloud: CloudQueue = {
       recoverClaim: vi.fn().mockResolvedValue(null),
       claimNextSubmission: vi.fn().mockResolvedValueOnce(claim),
+      beginExecution: vi.fn().mockResolvedValue('acquired'),
       updatePublicStatus: vi.fn().mockResolvedValue(undefined),
     };
     const store = new JobStore(':memory:');
@@ -80,8 +81,8 @@ describe('simulated worker', () => {
       'cutting',
       'ready',
     ]);
-    expect(cloud.updatePublicStatus).toHaveBeenNthCalledWith(1, 'submission-1', 'printing', expect.any(String));
-    expect(cloud.updatePublicStatus).toHaveBeenNthCalledWith(2, 'submission-1', 'ready', expect.any(String));
+    expect(cloud.beginExecution).toHaveBeenCalledWith('submission-1', 'mac-1', expect.any(String), expect.any(String));
+    expect(cloud.updatePublicStatus).toHaveBeenCalledWith('submission-1', 'ready', expect.any(String));
     expect(store.getBySubmissionId('submission-1')?.state).toBe('ready');
     store.close();
   });
@@ -90,7 +91,7 @@ describe('simulated worker', () => {
     const store = new JobStore(':memory:');
     const result = await runWorkerOnce({
       workerId: 'mac-1',
-      cloud: { recoverClaim: vi.fn().mockResolvedValue(null), claimNextSubmission: vi.fn().mockResolvedValue(null), updatePublicStatus: vi.fn() },
+      cloud: { recoverClaim: vi.fn().mockResolvedValue(null), claimNextSubmission: vi.fn().mockResolvedValue(null), beginExecution: vi.fn(), updatePublicStatus: vi.fn() },
       store,
       executor: new SimulatedPrinter(),
       now: () => '2026-11-23T12:00:00.000Z',
@@ -105,6 +106,7 @@ describe('simulated worker', () => {
     const cloud: CloudQueue = {
       recoverClaim: vi.fn().mockResolvedValue(claim),
       claimNextSubmission: vi.fn(),
+      beginExecution: vi.fn().mockResolvedValue('acquired'),
       updatePublicStatus: vi.fn().mockResolvedValue(undefined),
     };
     const store = new JobStore(':memory:');
@@ -122,6 +124,7 @@ describe('simulated worker', () => {
     const cloud: CloudQueue = {
       recoverClaim: vi.fn().mockResolvedValue(claim),
       claimNextSubmission: vi.fn(),
+      beginExecution: vi.fn().mockResolvedValue('acquired'),
       updatePublicStatus: vi.fn().mockResolvedValue(undefined),
     };
     const store = new JobStore(':memory:');
@@ -145,6 +148,7 @@ describe('simulated worker', () => {
     const cloud: CloudQueue = {
       recoverClaim: vi.fn().mockResolvedValue(claim),
       claimNextSubmission: vi.fn(),
+      beginExecution: vi.fn(),
       updatePublicStatus: vi.fn(),
     };
     const store = new JobStore(':memory:');
@@ -161,6 +165,7 @@ describe('simulated worker', () => {
     const cloud: CloudQueue = {
       recoverClaim: vi.fn().mockResolvedValueOnce(claim).mockResolvedValue(null),
       claimNextSubmission: vi.fn().mockResolvedValue(null),
+      beginExecution: vi.fn(),
       updatePublicStatus: vi.fn().mockResolvedValue(undefined),
     };
     const store = new JobStore(':memory:');
@@ -185,6 +190,7 @@ describe('simulated worker', () => {
     const cloud: CloudQueue = {
       recoverClaim: vi.fn().mockResolvedValue(claim),
       claimNextSubmission: vi.fn(),
+      beginExecution: vi.fn(),
       updatePublicStatus: vi.fn().mockRejectedValue(new Error('offline')),
     };
     const store = new JobStore(':memory:');
@@ -197,12 +203,13 @@ describe('simulated worker', () => {
     store.close();
   });
 
-  it('retains completed local state and queues monotonic cloud updates during an outage', async () => {
+  it('retains completed local state when ready publication fails after the execution marker', async () => {
     const claim = claimed();
     const updatePublicStatus = vi.fn().mockRejectedValue(new Error('offline'));
     const cloud: CloudQueue = {
       recoverClaim: vi.fn().mockResolvedValue(null),
       claimNextSubmission: vi.fn().mockResolvedValueOnce(claim),
+      beginExecution: vi.fn().mockResolvedValue('acquired'),
       updatePublicStatus,
     };
     const store = new JobStore(':memory:');
@@ -212,7 +219,49 @@ describe('simulated worker', () => {
     });
     expect(result.kind).toBe('completed');
     expect(store.getBySubmissionId('submission-1')?.state).toBe('ready');
-    expect(store.listPendingPublicStatuses().map((entry) => entry.status)).toEqual(['printing', 'ready']);
+    expect(store.listPendingPublicStatuses().map((entry) => entry.status)).toEqual(['ready']);
+    store.close();
+  });
+
+  it('stops before physical execution when the cloud execution marker cannot be published', async () => {
+    const claim = claimed();
+    const cloud: CloudQueue = {
+      recoverClaim: vi.fn().mockResolvedValue(null),
+      claimNextSubmission: vi.fn().mockResolvedValueOnce(claim),
+      beginExecution: vi.fn().mockRejectedValue(new Error('offline')),
+      updatePublicStatus: vi.fn().mockRejectedValue(new Error('offline')),
+    };
+    const phases: string[] = [];
+    const store = new JobStore(':memory:');
+    const result = await runWorkerOnce({
+      workerId: 'mac-1', cloud, store,
+      executor: new SimulatedPrinter({ onPhase: (phase) => phases.push(phase) }),
+      now: () => '2026-11-23T12:00:10.000Z',
+    });
+    expect(result.kind).toBe('waiting_for_cloud');
+    expect(phases).toEqual([]);
+    expect(store.getBySubmissionId('submission-1')?.state).toBe('claimed');
+    expect(store.listPendingPublicStatuses()).toEqual([]);
+    store.close();
+  });
+
+  it('does not execute a stale prepared snapshot after another invocation completed it', async () => {
+    const claim = claimed();
+    const cloud: CloudQueue = {
+      recoverClaim: vi.fn(), claimNextSubmission: vi.fn(), beginExecution: vi.fn().mockResolvedValue('acquired'), updatePublicStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const store = new JobStore(':memory:');
+    store.insertClaimed(claim);
+    const staleSnapshot = store.getBySubmissionId('submission-1')!;
+    const firstExecutor = new SimulatedPrinter();
+    await runLocalJob({ workerId: 'mac-1', cloud, store, executor: firstExecutor }, staleSnapshot);
+    const secondExecutor = { execute: vi.fn() };
+    const result = await runLocalJob(
+      { workerId: 'mac-1', cloud, store, executor: secondExecutor },
+      staleSnapshot,
+    );
+    expect(result).toEqual({ kind: 'completed', submissionId: 'submission-1' });
+    expect(secondExecutor.execute).not.toHaveBeenCalled();
     store.close();
   });
 });

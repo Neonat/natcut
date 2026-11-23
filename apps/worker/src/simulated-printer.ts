@@ -1,5 +1,6 @@
 import type { LocalJobState, LocalPrintJob } from './job-store.ts';
 
+// Executors must await this transition before performing any side effect for the phase.
 export type PhaseTransition = (state: LocalJobState, changedAt: string) => Promise<void> | void;
 export interface PhysicalExecutor {
   execute(job: LocalPrintJob, transition: PhaseTransition): Promise<void>;

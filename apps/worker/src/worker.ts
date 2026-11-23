@@ -26,21 +26,22 @@ const safelyExecutableStates = new Set<LocalJobState>([
 export async function flushPublicStatusOutbox(
   store: JobStore,
   cloud: CloudQueue,
-): Promise<void> {
+): Promise<boolean> {
   for (const pending of store.listPendingPublicStatuses()) {
     try {
       await cloud.updatePublicStatus(pending.submissionId, pending.status, pending.updatedAt);
       store.clearPendingPublicStatus(pending.id);
     } catch {
       // Preserve ordering: `ready` must never overtake an unpublished `printing`.
-      return;
+      return false;
     }
   }
+  return true;
 }
 
 function publicStatusFor(state: LocalJobState): 'next' | 'printing' | 'ready' {
   if (state === 'ready') return 'ready';
-  if (['uploading_cut', 'uploading_image', 'printing', 'cutting'].includes(state)) return 'printing';
+  if (['declaring', 'uploading_cut', 'uploading_image', 'printing', 'cutting'].includes(state)) return 'printing';
   return 'next';
 }
 
@@ -96,15 +97,49 @@ export async function runLocalJob(
   job: LocalPrintJob,
 ): Promise<WorkerResult> {
   const now = deps.now ?? (() => new Date().toISOString());
-  let staged = publicStatusFor(job.state);
   const executionToken = randomUUID();
   if (!deps.store.tryAcquireExecutionGuard(executionToken, process.pid)) {
     return { kind: 'busy', submissionId: job.submissionId };
   }
 
   try {
+    const authoritativeJob = deps.store.getBySubmissionId(job.submissionId);
+    if (!authoritativeJob) {
+      return { kind: 'needs_reconciliation', submissionId: job.submissionId };
+    }
+    if (authoritativeJob.state === 'ready') {
+      return { kind: 'completed', submissionId: job.submissionId };
+    }
+    if (!safelyExecutableStates.has(authoritativeJob.state)) {
+      return { kind: 'needs_reconciliation', submissionId: job.submissionId };
+    }
+    let staged = publicStatusFor(authoritativeJob.state);
+    if (staged === 'next') {
+      const journalExecutionToken = deps.store.getOrCreateExecutionToken(job.submissionId);
+      let executionFence: 'acquired' | 'fenced';
+      try {
+        executionFence = await deps.cloud.beginExecution(
+          job.submissionId,
+          deps.workerId,
+          journalExecutionToken,
+          now(),
+        );
+      } catch {
+        return { kind: 'waiting_for_cloud', submissionId: job.submissionId };
+      }
+      if (executionFence === 'fenced') {
+        deps.store.transition(
+          job.submissionId,
+          'needs_reconciliation',
+          now(),
+          'Cloud execution fence is owned by another worker journal.',
+        );
+        return { kind: 'needs_reconciliation', submissionId: job.submissionId };
+      }
+      staged = 'printing';
+    }
     try {
-      await deps.executor.execute(job, async (state, changedAt) => {
+      await deps.executor.execute(authoritativeJob, async (state, changedAt) => {
         const nextPublic = publicStatusFor(state);
         if (nextPublic !== staged && nextPublic !== 'next') {
           deps.store.transitionAndStagePublicStatus(job.submissionId, state, changedAt, nextPublic);

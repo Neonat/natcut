@@ -88,6 +88,24 @@ describe('queue page', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('Network unavailable');
   });
 
+  it('does not let an older refresh overwrite a successful leave', async () => {
+    const visitorApi = api('queued');
+    let resolveStale!: (value: PublicQueueStatus) => void;
+    const stale = new Promise<PublicQueueStatus>((resolve) => { resolveStale = resolve; });
+    vi.mocked(visitorApi.getStatus)
+      .mockResolvedValueOnce(status('queued'))
+      .mockReturnValueOnce(stale);
+    render(<QueuePage submissionId="submission-1" statusToken="token" api={visitorApi} />);
+    await screen.findByText(/1 ahead/i);
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+    fireEvent.click(screen.getByRole('button', { name: /leave queue/i }));
+    expect(await screen.findByRole('button', { name: /rejoin queue/i })).toBeTruthy();
+    resolveStale(status('queued'));
+    await Promise.resolve();
+    expect(screen.getByRole('button', { name: /rejoin queue/i })).toBeTruthy();
+    expect(screen.queryByText(/1 ahead/i)).toBeNull();
+  });
+
   it.each([
     ['printing', /your sticker is being made/i],
     ['ready', /ready for pickup/i],

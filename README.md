@@ -24,7 +24,7 @@ The current vertical slice proves the phone-to-cloud-to-Mac queue using Firebase
 
 Prerequisites:
 
-- Node.js 22 or newer. Node 24.12 or newer is recommended for the current Firebase packages.
+- Node.js 24.12 or newer (required by the locked Firebase packages).
 - Java 21 for the Firestore emulator. On this Mac, `brew install openjdk@21` is sufficient; the project runner sets `JAVA_HOME` without changing shell startup files.
 - Playwright Chromium for browser tests.
 
@@ -74,7 +74,7 @@ npm run test:e2e
 
 ## Run the read-only bridge
 
-Requires Node.js 22 or newer.
+Requires Node.js 24.12 or newer.
 
 ```bash
 npm install

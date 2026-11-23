@@ -65,6 +65,7 @@ describe('restart recovery', () => {
         claimedAt: '2026-11-23T12:00:01.000Z',
       }),
       claimNextSubmission: vi.fn(),
+      beginExecution: vi.fn().mockResolvedValue('acquired'),
       updatePublicStatus: vi.fn(),
     };
     const result = await startWorker({

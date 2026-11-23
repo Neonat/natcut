@@ -8,7 +8,7 @@
 
 **Architecture:** Convert the repository into npm workspaces while preserving the existing read-only printer bridge. A React visitor app calls a trusted TypeScript submission service backed by Firebase emulators; shared domain, render, and cut-geometry packages keep manifests and validation consistent. A separate Node worker atomically claims cloud submissions, journals them in SQLite, and uses a simulated printer adapter only—no USB mutation is added in this milestone.
 
-**Tech Stack:** Node.js 22+, npm workspaces, TypeScript, React, Vite, Vitest, Playwright, Fastify, Firebase Auth/Firestore emulators, Firebase Admin SDK, Zod, Sharp, better-sqlite3
+**Tech Stack:** Node.js 24.12+, npm workspaces, TypeScript, React, Vite, Vitest, Playwright, Fastify, Firebase Auth/Firestore emulators, Firebase Admin SDK, Zod, Sharp, better-sqlite3
 
 **Spec:** `docs/superpowers/specs/2026-11-23-booth-platform-design.md`
 
