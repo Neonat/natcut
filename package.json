@@ -9,6 +9,14 @@
     "packages/*"
   ],
   "scripts": {
+    "preinstall": "node scripts/check-node.mjs",
+    "predev": "node scripts/check-node.mjs",
+    "pretest": "node scripts/check-node.mjs",
+    "pretypecheck": "node scripts/check-node.mjs",
+    "prestart": "node scripts/check-node.mjs",
+    "prestatus": "node scripts/check-node.mjs",
+    "preemulators:test": "node scripts/check-node.mjs",
+    "pretest:e2e": "node scripts/check-node.mjs",
     "start": "node src/server.mjs",
     "dev": "node scripts/dev.mjs",
     "test": "npm run test:legacy && npm run test:unit",

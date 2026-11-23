@@ -28,6 +28,16 @@ Prerequisites:
 - Java 21 for the Firestore emulator. On this Mac, `brew install openjdk@21` is sufficient; the project runner sets `JAVA_HOME` without changing shell startup files.
 - Playwright Chromium for browser tests.
 
+This repository pins Node `24.22.3` in both `.nvmrc` and `.node-version`. If this Mac still reports Node 22, either run `nvm use` or install Homebrew's Node 24 and put it first for the current shell:
+
+```bash
+brew install node@24
+export PATH="/opt/homebrew/opt/node@24/bin:$PATH"
+node --version
+```
+
+The project commands stop with a clear version error if the shell is still using Node 22.
+
 Install once:
 
 ```bash
