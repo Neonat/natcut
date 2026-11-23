@@ -66,10 +66,20 @@ function processIdentity(processId: number): string | null {
     const startedAt = execFileSync('/bin/ps', ['-p', String(processId), '-o', 'lstart='], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, TZ: 'UTC', LC_ALL: 'C', LANG: 'C' },
     }).trim();
     return startedAt || null;
   } catch {
     return processId === process.pid ? fallbackProcessIdentity : null;
+  }
+}
+
+function processExists(processId: number): boolean {
+  try {
+    process.kill(processId, 0);
+    return true;
+  } catch (cause) {
+    return (cause as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
 
@@ -270,8 +280,10 @@ export class JobStore {
         'SELECT ownerToken, processId, processIdentity FROM execution_guard WHERE singleton = 1',
       ).get() as { ownerToken: string; processId: number; processIdentity: string } | undefined;
       if (existing) {
-        const alive = existing.processIdentity !== '' &&
-          processIdentity(existing.processId) === existing.processIdentity;
+        const observedIdentity = processIdentity(existing.processId);
+        const alive = observedIdentity === null
+          ? processExists(existing.processId)
+          : existing.processIdentity !== '' && observedIdentity === existing.processIdentity;
         if (alive) return false;
         this.database.prepare('DELETE FROM execution_guard WHERE singleton = 1 AND ownerToken = ?')
           .run(existing.ownerToken);

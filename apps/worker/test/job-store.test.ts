@@ -74,13 +74,20 @@ describe('JobStore', () => {
     const databasePath = path.join(directory, 'worker.sqlite');
     const first = new JobStore(databasePath);
     const second = new JobStore(databasePath);
-    expect(first.tryAcquireExecutionGuard('first', process.pid)).toBe(true);
-    expect(() => second.tryAcquireExecutionGuard('second', process.pid)).not.toThrow();
-    expect(second.tryAcquireExecutionGuard('second', process.pid)).toBe(false);
-    first.releaseExecutionGuard('first');
-    expect(second.tryAcquireExecutionGuard('second', process.pid)).toBe(true);
-    second.releaseExecutionGuard('second');
-    first.close();
-    second.close();
+    const originalTimezone = process.env.TZ;
+    try {
+      process.env.TZ = 'UTC';
+      expect(first.tryAcquireExecutionGuard('first', process.pid)).toBe(true);
+      process.env.TZ = 'Asia/Singapore';
+      expect(() => second.tryAcquireExecutionGuard('second', process.pid)).not.toThrow();
+      expect(second.tryAcquireExecutionGuard('second', process.pid)).toBe(false);
+      first.releaseExecutionGuard('first');
+      expect(second.tryAcquireExecutionGuard('second', process.pid)).toBe(true);
+      second.releaseExecutionGuard('second');
+    } finally {
+      process.env.TZ = originalTimezone;
+      first.close();
+      second.close();
+    }
   });
 });

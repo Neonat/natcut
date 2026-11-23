@@ -32,8 +32,8 @@ export class SimulatedPrinter implements PhysicalExecutor {
   async execute(_job: LocalPrintJob, transition: PhaseTransition) {
     for (const phase of phases) {
       if (this.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.delayMs));
-      this.onPhase(phase);
       await transition(phase, this.now());
+      this.onPhase(phase);
     }
   }
 }
