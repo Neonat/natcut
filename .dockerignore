@@ -1,0 +1,14 @@
+.git
+.gitignore
+.superpowers
+.worktrees
+node_modules
+**/dist
+test-results
+playwright-report
+*-debug.log
+.env
+.env.*
+*.pem
+*.key
+*.json.bak

@@ -144,6 +144,29 @@ describe('submission routes', () => {
     });
   });
 
+  it('reports service health without touching the repository', async () => {
+    const response = await app.inject({ method: 'GET', url: '/health' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true });
+    expect(repository.records.size).toBe(0);
+  });
+
+  it('can mount the API below the Hosting rewrite prefix', async () => {
+    const prefixed = buildSubmissionServer({
+      eventId: 'devfest-sg',
+      statusTokenSecret: 'test-secret-at-least-32-bytes-long',
+      repository,
+      verifyBearerToken: async () => ({ uid: 'alice' }),
+      validateManifest: async () => report('ok'),
+      routePrefix: '/api',
+    });
+
+    expect((await prefixed.inject({ method: 'GET', url: '/api/health' })).statusCode).toBe(200);
+    expect((await prefixed.inject({ method: 'POST', url: '/api/v1/submissions' })).statusCode).toBe(401);
+    expect((await prefixed.inject({ method: 'POST', url: '/v1/submissions' })).statusCode).toBe(404);
+    await prefixed.close();
+  });
+
   async function submit(
     body: Record<string, unknown> = { manifest, idempotencyKey: 'request-1' },
     token = 'alice-token',

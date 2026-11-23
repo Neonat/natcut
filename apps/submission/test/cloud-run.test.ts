@@ -1,0 +1,39 @@
+import { describe, expect, it } from 'vitest';
+import { readCloudRunConfig } from '../src/cloud-run.ts';
+
+const validEnvironment = {
+  NATCUT_PROJECT_ID: 'sprout-dev-66f08',
+  NATCUT_DATABASE_ID: 'natcut',
+  NATCUT_STATUS_TOKEN_SECRET: 'a-status-token-secret-with-32-bytes',
+  PORT: '8080',
+};
+
+describe('Cloud Run configuration', () => {
+  it('accepts only the isolated NatCut production resources', () => {
+    expect(readCloudRunConfig(validEnvironment)).toEqual({
+      projectId: 'sprout-dev-66f08',
+      databaseId: 'natcut',
+      statusTokenSecret: 'a-status-token-secret-with-32-bytes',
+      port: 8080,
+      host: '0.0.0.0',
+    });
+  });
+
+  it('rejects a missing secret or invalid Cloud Run port', () => {
+    expect(() => readCloudRunConfig({ ...validEnvironment, NATCUT_STATUS_TOKEN_SECRET: undefined })).toThrow(
+      'NATCUT_STATUS_TOKEN_SECRET',
+    );
+    expect(() => readCloudRunConfig({ ...validEnvironment, PORT: '0' })).toThrow('PORT');
+    expect(() => readCloudRunConfig({ ...validEnvironment, PORT: 'not-a-port' })).toThrow('PORT');
+  });
+
+  it('rejects the default Firestore database and emulator variables', () => {
+    expect(() => readCloudRunConfig({ ...validEnvironment, NATCUT_DATABASE_ID: '(default)' })).toThrow(
+      'NATCUT_DATABASE_ID=natcut',
+    );
+    expect(() => readCloudRunConfig({
+      ...validEnvironment,
+      FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+    })).toThrow('must not use FIRESTORE_EMULATOR_HOST');
+  });
+});
