@@ -52,6 +52,7 @@ describe('simulated worker', () => {
   it('persists the exact phase order and publishes only visitor-facing states', async () => {
     const claim = claimed();
     const cloud: CloudQueue = {
+      recoverClaim: vi.fn().mockResolvedValue(null),
       claimNextSubmission: vi.fn().mockResolvedValueOnce(claim),
       updatePublicStatus: vi.fn().mockResolvedValue(undefined),
     };
@@ -89,13 +90,49 @@ describe('simulated worker', () => {
     const store = new JobStore(':memory:');
     const result = await runWorkerOnce({
       workerId: 'mac-1',
-      cloud: { claimNextSubmission: vi.fn().mockResolvedValue(null), updatePublicStatus: vi.fn() },
+      cloud: { recoverClaim: vi.fn().mockResolvedValue(null), claimNextSubmission: vi.fn().mockResolvedValue(null), updatePublicStatus: vi.fn() },
       store,
       executor: new SimulatedPrinter(),
       now: () => '2026-11-23T12:00:00.000Z',
     });
     expect(result).toEqual({ kind: 'idle' });
     expect(store.list()).toHaveLength(0);
+    store.close();
+  });
+
+  it('recreates the durable local row when a crash happened immediately after the cloud claim', async () => {
+    const claim = claimed();
+    const cloud: CloudQueue = {
+      recoverClaim: vi.fn().mockResolvedValue(claim),
+      claimNextSubmission: vi.fn(),
+      updatePublicStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const store = new JobStore(':memory:');
+    const result = await runWorkerOnce({
+      workerId: 'mac-1', cloud, store, executor: new SimulatedPrinter(),
+    });
+    expect(result).toEqual({ kind: 'completed', submissionId: 'submission-1' });
+    expect(cloud.claimNextSubmission).not.toHaveBeenCalled();
+    expect(store.getBySubmissionId('submission-1')?.state).toBe('ready');
+    store.close();
+  });
+
+  it('retains completed local state and queues monotonic cloud updates during an outage', async () => {
+    const claim = claimed();
+    const updatePublicStatus = vi.fn().mockRejectedValue(new Error('offline'));
+    const cloud: CloudQueue = {
+      recoverClaim: vi.fn().mockResolvedValue(null),
+      claimNextSubmission: vi.fn().mockResolvedValueOnce(claim),
+      updatePublicStatus,
+    };
+    const store = new JobStore(':memory:');
+    const result = await runWorkerOnce({
+      workerId: 'mac-1', cloud, store, executor: new SimulatedPrinter(),
+      now: () => '2026-11-23T12:00:10.000Z',
+    });
+    expect(result.kind).toBe('completed');
+    expect(store.getBySubmissionId('submission-1')?.state).toBe('ready');
+    expect(store.listPendingPublicStatuses().map((entry) => entry.status)).toEqual(['printing', 'ready']);
     store.close();
   });
 });

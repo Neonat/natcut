@@ -43,6 +43,13 @@ export type LocalPrintJob = {
   lastError: string | null;
 };
 
+export type PendingPublicStatus = {
+  id: number;
+  submissionId: string;
+  status: 'printing' | 'ready';
+  updatedAt: string;
+};
+
 const columns = [
   'id', 'submissionId', 'queueNumber', 'manifestHash', 'rasterHash',
   'printProfileSnapshotJson', 'geometryReportJson', 'jpegPath', 'jpegSha256', 'jpegBytes',
@@ -90,7 +97,14 @@ export class JobStore {
         acceptedAt TEXT NOT NULL,
         stateChangedAt TEXT NOT NULL,
         lastError TEXT
-      )
+      );
+      CREATE TABLE IF NOT EXISTS public_status_outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        submissionId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        UNIQUE(submissionId, status)
+      );
     `);
   }
 
@@ -124,6 +138,17 @@ export class JobStore {
     });
   }
 
+  ensureClaimed(claim: ClaimedSubmission) {
+    const existing = this.getBySubmissionId(claim.submission.id);
+    if (!existing) {
+      this.insertClaimed(claim);
+      return;
+    }
+    if (existing.manifestHash !== claim.submission.manifestHash || existing.queueNumber !== claim.submission.queueNumber) {
+      throw new Error(`Cloud lease for ${claim.submission.id} does not match the local journal`);
+    }
+  }
+
   transition(submissionId: string, state: LocalJobState, stateChangedAt: string, lastError: string | null = null) {
     const uploadPhase = uploadPhaseFor(state);
     const statement = uploadPhase
@@ -141,6 +166,22 @@ export class JobStore {
 
   list(): LocalPrintJob[] {
     return this.database.prepare('SELECT * FROM local_print_jobs ORDER BY queueNumber, acceptedAt').all() as LocalPrintJob[];
+  }
+
+  stagePublicStatus(submissionId: string, status: 'printing' | 'ready', updatedAt: string) {
+    this.database.prepare(`
+      INSERT INTO public_status_outbox (submissionId, status, updatedAt)
+      VALUES (?, ?, ?)
+      ON CONFLICT(submissionId, status) DO UPDATE SET updatedAt = excluded.updatedAt
+    `).run(submissionId, status, updatedAt);
+  }
+
+  listPendingPublicStatuses(): PendingPublicStatus[] {
+    return this.database.prepare('SELECT * FROM public_status_outbox ORDER BY id').all() as PendingPublicStatus[];
+  }
+
+  clearPendingPublicStatus(id: number) {
+    this.database.prepare('DELETE FROM public_status_outbox WHERE id = ?').run(id);
   }
 
   close() {

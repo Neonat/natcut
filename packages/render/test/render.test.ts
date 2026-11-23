@@ -131,6 +131,19 @@ describe('renderServerRaster', () => {
     expect(first.rgba[3]).toBe(0);
   });
 
+  it('uses the same alpha resampling for the trusted raster and cut masks', async () => {
+    const plan = planComposition(manifest, DEVFEST_SG_V1);
+    const raster = await renderServerRaster(plan, assets);
+    const masks = renderCutGroupMasks(plan, assets);
+    let mismatchCount = 0;
+    for (let pixel = 0; pixel < plan.width * plan.height; pixel++) {
+      const rasterForeground = raster.rgba[pixel * 4 + 3]! >= DEVFEST_SG_V1.alphaThreshold;
+      const maskForeground = masks.some((mask) => mask.alpha[pixel]! >= DEVFEST_SG_V1.alphaThreshold);
+      if (rasterForeground !== maskForeground) mismatchCount++;
+    }
+    expect(mismatchCount).toBe(0);
+  });
+
   it('hard-fails before rendering a layer outside the sheet', async () => {
     const plan = planComposition(manifest, DEVFEST_SG_V1);
     const invalid: PlannedComposition = {

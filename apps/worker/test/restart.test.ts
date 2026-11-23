@@ -54,7 +54,19 @@ describe('restart recovery', () => {
     const store = new JobStore(':memory:');
     store.insert(job('validating'));
     const executor = { execute: vi.fn(async () => undefined) };
-    const cloud = { claimNextSubmission: vi.fn(), updatePublicStatus: vi.fn() };
+    const cloud = {
+      recoverClaim: vi.fn().mockResolvedValue({
+        submission: {
+          id: 'submission-validating',
+          manifestHash: 'a'.repeat(64),
+          queueNumber: 1,
+        },
+        workerId: 'mac-1',
+        claimedAt: '2026-11-23T12:00:01.000Z',
+      }),
+      claimNextSubmission: vi.fn(),
+      updatePublicStatus: vi.fn(),
+    };
     const result = await startWorker({
       workerId: 'mac-1', cloud, store, executor, now: () => '2026-11-23T12:05:00.000Z',
     });

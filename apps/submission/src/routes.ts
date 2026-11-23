@@ -3,6 +3,7 @@ import {
   CompositionManifestSchema,
   DEVFEST_SG_V1,
   canVisitorLeave,
+  geometryIssuesHash,
   manifestHash,
 } from '@natcut/domain';
 import Fastify from 'fastify';
@@ -22,7 +23,12 @@ const CreateBodySchema = z
     manifest: CompositionManifestSchema,
     idempotencyKey: z.string().trim().min(1).max(128),
     warningAcknowledgement: z
-      .object({ geometryVersion: z.string().trim().min(1), rasterHash: sha256 })
+      .object({
+        geometryVersion: z.string().trim().min(1),
+        rasterHash: sha256,
+        manifestHash: sha256,
+        issuesHash: sha256,
+      })
       .strict()
       .optional(),
     requeuedFrom: z.string().trim().min(1).max(256).nullable().optional(),
@@ -80,19 +86,22 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
     }
 
     const acceptedAt = now();
+    const canonicalHash = await manifestHash(parsed.data.manifest);
+    const trustedIssuesHash = await geometryIssuesHash(validation.issues);
     if (validation.severity === 'warning') {
       const acknowledgement = parsed.data.warningAcknowledgement;
       if (
         !acknowledgement ||
         acknowledgement.geometryVersion !== validation.geometryVersion ||
-        acknowledgement.rasterHash !== validation.rasterHash
+        acknowledgement.rasterHash !== validation.rasterHash ||
+        acknowledgement.manifestHash !== canonicalHash ||
+        acknowledgement.issuesHash !== trustedIssuesHash
       ) {
         return reply.code(409).send({ error: 'WARNING_ACKNOWLEDGEMENT_REQUIRED', validation });
       }
       validation = { ...validation, acknowledgedByVisitor: true, acknowledgedAt: acceptedAt };
     }
 
-    const canonicalHash = await manifestHash(parsed.data.manifest);
     const publicStatusToken = statusToken(
       deps.statusTokenSecret,
       visitor.uid,

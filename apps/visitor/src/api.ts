@@ -2,7 +2,12 @@ import type { CompositionManifest, PublicStatus } from '@natcut/domain';
 import { getApps, initializeApp, type FirebaseOptions } from 'firebase/app';
 import { connectAuthEmulator, getAuth, signInAnonymously } from 'firebase/auth';
 
-export type WarningAcknowledgement = { geometryVersion: string; rasterHash: string };
+export type WarningAcknowledgement = {
+  geometryVersion: string;
+  rasterHash: string;
+  manifestHash: string;
+  issuesHash: string;
+};
 export type SubmissionRequest = {
   manifest: CompositionManifest;
   idempotencyKey: string;

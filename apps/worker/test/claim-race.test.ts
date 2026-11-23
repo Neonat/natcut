@@ -8,9 +8,9 @@ const enabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 const emulatorDescribe = enabled ? describe : describe.skip;
 const projectId = 'demo-natcut';
 
-function submission() {
+function submission(id = 'submission-race', queueNumber = 1) {
   return {
-    id: 'submission-race', ownerUid: 'visitor', eventId: 'devfest-sg', idempotencyKey: 'race',
+    id, ownerUid: 'visitor', eventId: 'devfest-sg', idempotencyKey: `race-${queueNumber}`,
     manifest: {
       schemaVersion: 1, spriteAssetId: 'sprite/monstera-v1', trainerAssetId: null,
       theme: 'default', brandingVariant: 'logo',
@@ -23,7 +23,7 @@ function submission() {
       minimumContourGapMm: null, edgeClearanceMm: 4, geometryVersion: 'natcut-geometry-v1',
       rasterHash: 'b'.repeat(64), acknowledgedByVisitor: false, acknowledgedAt: null,
     },
-    publicStatus: 'queued', publicStatusTokenHash: 'c'.repeat(64), queueNumber: 1, jobsAhead: 0,
+    publicStatus: 'queued', publicStatusTokenHash: 'c'.repeat(64), queueNumber, jobsAhead: queueNumber - 1,
     acceptedAt: '2026-11-23T12:00:00.000Z', cancelledAt: null, requeuedFrom: null,
     updatedAt: '2026-11-23T12:00:00.000Z',
   } as const;
@@ -45,6 +45,7 @@ emulatorDescribe('cloud claim race', () => {
 
   it('allows exactly one worker lease and one durable local row', async () => {
     await firestore.doc('submissions/submission-race').set(submission());
+    await firestore.doc('submissions/submission-second').set(submission('submission-second', 2));
     const cloud = createFirestoreCloudQueue(firestore, () => '2026-11-23T12:00:01.000Z');
     const claims = await Promise.all([
       cloud.claimNextSubmission('mac-a'),
@@ -55,6 +56,9 @@ emulatorDescribe('cloud claim race', () => {
     const storedCloud = (await firestore.doc('submissions/submission-race').get()).data();
     expect(storedCloud?.workerLease).toEqual({ workerId: winners[0]!.workerId, claimedAt: '2026-11-23T12:00:01.000Z' });
     expect(storedCloud?.publicStatus).toBe('next');
+    expect(await cloud.claimNextSubmission('mac-c')).toBeNull();
+    expect((await firestore.doc('workerSlots/devfest-sg').get()).data()?.submissionId).toBe(winners[0]!.submission.id);
+    expect((await cloud.recoverClaim(winners[0]!.workerId))?.submission.id).toBe(winners[0]!.submission.id);
 
     const store = new JobStore(':memory:');
     store.insertClaimed(winners[0]!);

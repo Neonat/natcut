@@ -99,5 +99,7 @@ emulatorDescribe('Firebase emulator integration', () => {
 
     const second = await repository.create(input('different-request'));
     expect(second.submission.queueNumber).toBe(2);
+    await getAdminFirestore(adminApp).doc(`submissions/${first.submission.id}`).update({ publicStatus: 'ready' });
+    expect((await repository.getPublicStatus(second.submission.id, 'c'.repeat(64)))?.jobsAhead).toBe(0);
   }, 20_000);
 });

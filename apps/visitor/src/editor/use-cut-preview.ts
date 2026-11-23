@@ -3,7 +3,12 @@ import { useEffect, useRef, useState } from 'react';
 
 export type ContourPreview = Array<{ x: number; y: number }>;
 export type CutPreviewRequest = { revision: number; exact: true; manifest: CompositionManifest };
-export type CutPreviewResult = { revision: number; report: GeometryReport; contours: ContourPreview[] };
+export type CutPreviewResult = {
+  revision: number;
+  report: GeometryReport;
+  contours: ContourPreview[];
+  manifestFingerprint?: string;
+};
 
 export class CutPreviewCoordinator {
   private revision = 0;

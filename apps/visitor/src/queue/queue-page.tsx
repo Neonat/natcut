@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { PublicQueueStatus, VisitorApi } from '../api.ts';
-import { fixtureManifest } from '../editor/editor-page.tsx';
 import { usePullToRefresh } from './use-pull-to-refresh.ts';
-
-function requestId(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-}
 
 const statusCopy = {
   joining: { title: 'Joining the queue', detail: 'Saving your sticker…' },
@@ -42,10 +37,8 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
     setStatus((current) => current ? { ...current, publicStatus: 'cancelled', canLeaveQueue: false, jobsAhead: 0 } : current);
   };
 
-  const rejoin = async () => {
-    const accepted = await props.api.submit({ manifest: fixtureManifest, idempotencyKey: requestId(), requeuedFrom: props.submissionId });
-    sessionStorage.setItem(`natcut:status:${accepted.submissionId}`, accepted.statusToken);
-    const path = `/queue/${accepted.submissionId}#token=${accepted.statusToken}`;
+  const rejoin = () => {
+    const path = `/edit?requeuedFrom=${encodeURIComponent(props.submissionId)}`;
     if (props.onNavigate) props.onNavigate(path);
     else window.location.assign(path);
   };
@@ -66,7 +59,7 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
         {status && status.publicStatus !== 'cancelled' && status.publicStatus !== 'collected' ? (
           <button className="text-action" type="button" onClick={() => void leave()} disabled={!status.canLeaveQueue}>Leave queue</button>
         ) : null}
-        {status?.publicStatus === 'cancelled' ? <button className="primary-action" type="button" onClick={() => void rejoin()}>Rejoin queue</button> : null}
+        {status?.publicStatus === 'cancelled' ? <button className="primary-action" type="button" onClick={rejoin}>Rejoin queue</button> : null}
       </div>
       <p className="pull-hint">Pull down or tap Refresh for the latest status.</p>
     </main>

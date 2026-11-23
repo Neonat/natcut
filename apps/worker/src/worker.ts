@@ -5,6 +5,7 @@ import type { PhysicalExecutor } from './simulated-printer.ts';
 export type WorkerResult =
   | { kind: 'idle' }
   | { kind: 'completed'; submissionId: string }
+  | { kind: 'needs_reconciliation'; submissionId: string }
   | { kind: 'failed'; submissionId: string; error: string };
 
 export type WorkerDependencies = {
@@ -15,6 +16,25 @@ export type WorkerDependencies = {
   now?: () => string;
 };
 
+const safelyExecutableStates = new Set<LocalJobState>([
+  'claimed', 'rendering', 'validating', 'ready_to_declare',
+]);
+
+export async function flushPublicStatusOutbox(
+  store: JobStore,
+  cloud: CloudQueue,
+): Promise<void> {
+  for (const pending of store.listPendingPublicStatuses()) {
+    try {
+      await cloud.updatePublicStatus(pending.submissionId, pending.status, pending.updatedAt);
+      store.clearPendingPublicStatus(pending.id);
+    } catch {
+      // Preserve ordering: `ready` must never overtake an unpublished `printing`.
+      return;
+    }
+  }
+}
+
 function publicStatusFor(state: LocalJobState): 'next' | 'printing' | 'ready' {
   if (state === 'ready') return 'ready';
   if (['uploading_cut', 'uploading_image', 'printing', 'cutting'].includes(state)) return 'printing';
@@ -22,10 +42,20 @@ function publicStatusFor(state: LocalJobState): 'next' | 'printing' | 'ready' {
 }
 
 export async function runWorkerOnce(deps: WorkerDependencies): Promise<WorkerResult> {
-  const claim = await deps.cloud.claimNextSubmission(deps.workerId);
+  await flushPublicStatusOutbox(deps.store, deps.cloud);
+  const claim = await deps.cloud.recoverClaim(deps.workerId)
+    ?? await deps.cloud.claimNextSubmission(deps.workerId);
   if (!claim) return { kind: 'idle' };
-  deps.store.insertClaimed(claim);
+  deps.store.ensureClaimed(claim);
   const job = deps.store.getBySubmissionId(claim.submission.id)!;
+  if (job.state === 'ready') {
+    deps.store.stagePublicStatus(job.submissionId, 'ready', job.stateChangedAt);
+    await flushPublicStatusOutbox(deps.store, deps.cloud);
+    return { kind: 'completed', submissionId: job.submissionId };
+  }
+  if (!safelyExecutableStates.has(job.state)) {
+    return { kind: 'needs_reconciliation', submissionId: job.submissionId };
+  }
   return runLocalJob(deps, job);
 }
 
@@ -34,15 +64,18 @@ export async function runLocalJob(
   job: LocalPrintJob,
 ): Promise<WorkerResult> {
   const now = deps.now ?? (() => new Date().toISOString());
-  let published = publicStatusFor(job.state);
+  let staged = publicStatusFor(job.state);
 
   try {
     await deps.executor.execute(job, async (state, changedAt) => {
       deps.store.transition(job.submissionId, state, changedAt);
       const nextPublic = publicStatusFor(state);
-      if (nextPublic !== published) {
-        await deps.cloud.updatePublicStatus(job.submissionId, nextPublic, changedAt);
-        published = nextPublic;
+      if (nextPublic !== staged) {
+        staged = nextPublic;
+        if (nextPublic !== 'next') {
+          deps.store.stagePublicStatus(job.submissionId, nextPublic, changedAt);
+          await flushPublicStatusOutbox(deps.store, deps.cloud);
+        }
       }
     });
     return { kind: 'completed', submissionId: job.submissionId };

@@ -48,7 +48,7 @@ function idempotencyDocumentId(ownerUid: string, eventId: string, key: string): 
 }
 
 function isUnfinished(status: Submission['publicStatus']): boolean {
-  return status !== 'cancelled' && status !== 'collected';
+  return ['joining', 'queued', 'next', 'printing'].includes(status);
 }
 
 export function createSubmissionRepository(firestore: Firestore): SubmissionRepository {

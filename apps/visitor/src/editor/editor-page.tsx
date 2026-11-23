@@ -1,5 +1,12 @@
-import { CompositionManifestSchema, type CompositionManifest, type GeometryReport } from '@natcut/domain';
-import { useEffect, useState } from 'react';
+import {
+  canonicalManifestJson,
+  CompositionManifestSchema,
+  geometryIssuesHash,
+  manifestHash,
+  type CompositionManifest,
+  type GeometryReport,
+} from '@natcut/domain';
+import { useEffect, useRef, useState } from 'react';
 import type { SubmissionRequest, SubmissionResponse } from '../api.ts';
 import { CutBorderControl } from './cut-border-control.tsx';
 import { CutPreview } from './cut-preview.tsx';
@@ -51,6 +58,9 @@ export function EditorPage(props: EditorPageProps) {
   const [error, setError] = useState<string | null>(null);
   const preview = useCutPreview();
   const report = props.previewReportOverride ?? preview.result?.report ?? null;
+  const idempotencyKey = useRef(requestId());
+  const previewCurrent = props.previewReportOverride !== undefined ||
+    preview.result?.manifestFingerprint === canonicalManifestJson(manifest);
 
   useEffect(() => {
     preview.release(manifest);
@@ -61,6 +71,7 @@ export function EditorPage(props: EditorPageProps) {
   const updateMargin = (cutMarginMm: number, immediate: boolean) => {
     const next = CompositionManifestSchema.parse({ ...manifest, cutMarginMm });
     setManifest(next);
+    idempotencyKey.current = requestId();
     props.onPreviewRequest?.(next, immediate);
     if (immediate) preview.release(next);
     else preview.move(next);
@@ -71,10 +82,15 @@ export function EditorPage(props: EditorPageProps) {
     setError(null);
     const request: SubmissionRequest = {
       manifest,
-      idempotencyKey: requestId(),
+      idempotencyKey: idempotencyKey.current,
       ...(props.requeuedFrom ? { requeuedFrom: props.requeuedFrom } : {}),
       ...(report?.severity === 'warning'
-        ? { warningAcknowledgement: { geometryVersion: report.geometryVersion, rasterHash: report.rasterHash } }
+        ? { warningAcknowledgement: {
+          geometryVersion: report.geometryVersion,
+          rasterHash: report.rasterHash,
+          manifestHash: await manifestHash(manifest),
+          issuesHash: await geometryIssuesHash(report.issues),
+        } }
         : {}),
     };
     try {
@@ -99,7 +115,7 @@ export function EditorPage(props: EditorPageProps) {
         <h1>Your sprite sticker</h1>
         <p>Pick the border, check the cut line, then join the print queue.</p>
       </div>
-      <CutPreview marginMm={manifest.cutMarginMm} contours={preview.result?.contours ?? []} />
+      <CutPreview manifest={manifest} contours={preview.result?.contours ?? []} />
       <CutBorderControl
         value={manifest.cutMarginMm}
         custom={custom}
@@ -116,8 +132,8 @@ export function EditorPage(props: EditorPageProps) {
       ) : null}
       {error ? <div className="notice error" role="alert">{error}</div> : null}
       <div className="sticky-action">
-        <button className="primary-action" type="button" disabled={submitting || structuralError} onClick={() => void submit()}>
-          {submitting ? 'Joining queue…' : report?.severity === 'warning' ? 'Print anyway' : 'Join print queue'}
+        <button className="primary-action" type="button" disabled={submitting || structuralError || !report || !previewCurrent} onClick={() => void submit()}>
+          {submitting ? 'Joining queue…' : !report || !previewCurrent ? 'Checking cut…' : report.severity === 'warning' ? 'Print anyway' : 'Join print queue'}
         </button>
       </div>
     </main>

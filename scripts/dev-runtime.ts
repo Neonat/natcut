@@ -6,7 +6,14 @@ import { cert, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { createFirebaseBearerVerifier, buildSubmissionServer, createSubmissionRepository, createTrustedManifestValidator } from '../apps/submission/src/index.ts';
-import { createFirestoreCloudQueue, JobStore, runLocalJob, SimulatedPrinter } from '../apps/worker/src/index.ts';
+import {
+  createFirestoreCloudQueue,
+  flushPublicStatusOutbox,
+  JobStore,
+  recoverInterruptedJobs,
+  runLocalJob,
+  SimulatedPrinter,
+} from '../apps/worker/src/index.ts';
 import { loadRgbaAsset, type AssetCatalog } from '../packages/render/src/index.ts';
 
 const projectId = process.env.NATCUT_PROJECT_ID;
@@ -42,6 +49,8 @@ await submission.listen({ host: '127.0.0.1', port: 8088 });
 
 const cloud = createFirestoreCloudQueue(firestore);
 const store = new JobStore(process.env.NATCUT_SQLITE_PATH ?? ':memory:');
+recoverInterruptedJobs(store, new Date().toISOString());
+await flushPublicStatusOutbox(store, cloud);
 let currentSubmissionId: string | null = null;
 let execution: Promise<unknown> | null = null;
 
@@ -55,9 +64,10 @@ const control = createServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/health') return send(response, 200, { ok: true });
     if (request.method === 'POST' && request.url === '/claim') {
       if (execution) return send(response, 409, { error: 'SIMULATOR_BUSY' });
-      const claim = await cloud.claimNextSubmission('dev-mac');
+      if (currentSubmissionId) return send(response, 409, { error: 'JOB_ALREADY_CLAIMED' });
+      const claim = await cloud.recoverClaim('dev-mac') ?? await cloud.claimNextSubmission('dev-mac');
       if (!claim) return send(response, 404, { error: 'QUEUE_EMPTY' });
-      store.insertClaimed(claim);
+      store.ensureClaimed(claim);
       currentSubmissionId = claim.submission.id;
       return send(response, 200, { submissionId: currentSubmissionId, publicStatus: 'next' });
     }
@@ -66,11 +76,18 @@ const control = createServer(async (request, response) => {
       if (execution) return send(response, 409, { error: 'SIMULATOR_BUSY' });
       const job = store.getBySubmissionId(currentSubmissionId);
       if (!job) return send(response, 404, { error: 'LOCAL_JOB_MISSING' });
+      if (!['claimed', 'rendering', 'validating', 'ready_to_declare'].includes(job.state)) {
+        return send(response, 409, { error: 'JOB_NOT_SAFE_TO_START', state: job.state });
+      }
+      const startedSubmissionId = currentSubmissionId;
       execution = runLocalJob(
         { workerId: 'dev-mac', cloud, store, executor: new SimulatedPrinter({ delayMs: 260 }) },
         job,
-      ).finally(() => { execution = null; });
-      return send(response, 202, { submissionId: currentSubmissionId, started: true });
+      ).finally(() => {
+        execution = null;
+        currentSubmissionId = null;
+      });
+      return send(response, 202, { submissionId: startedSubmissionId, started: true });
     }
     return send(response, 404, { error: 'NOT_FOUND' });
   } catch (cause) {

@@ -1,3 +1,5 @@
+import { DEVFEST_SG_V1, type CompositionManifest } from '@natcut/domain';
+import { planComposition } from '@natcut/render/browser';
 import type { ContourPreview } from './use-cut-preview.ts';
 
 function pathData(points: ContourPreview): string {
@@ -5,23 +7,40 @@ function pathData(points: ContourPreview): string {
   return `M ${points.map((point) => `${point.x} ${point.y}`).join(' L ')} Z`;
 }
 
-export function CutPreview({ marginMm, contours }: { marginMm: number; contours: ContourPreview[] }) {
-  const approximateStroke = 8 + marginMm * 24;
+function assetUrl(assetId: string): string {
+  return assetId.startsWith('branding/') ? '/sprout-wordmark.png' : '/sprite-fixture.png';
+}
+
+export function CutPreview({ manifest, contours }: { manifest: CompositionManifest; contours: ContourPreview[] }) {
+  const plan = planComposition(manifest, DEVFEST_SG_V1);
+  const dilationPx = (manifest.cutMarginMm * 300) / 25.4;
   return (
     <section className="preview-shell" aria-label="Sticker preview">
-      <div className="preview-label"><span>Live preview</span><span>{marginMm.toFixed(1)} mm border</span></div>
-      <svg className="sticker-preview" viewBox="0 0 1200 2100" role="img" aria-label="Monstera sprite sticker with Sprout branding">
+      <div className="preview-label"><span>Live preview</span><span>{manifest.cutMarginMm.toFixed(1)} mm border</span></div>
+      <svg className="sticker-preview" viewBox="0 0 1200 2100" role="img" aria-label="Trusted sprite sticker composition preview">
         <defs>
           <filter id="paper-shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="24" stdDeviation="22" floodOpacity="0.22" /></filter>
-          <clipPath id="sprite-clip"><ellipse cx="600" cy="850" rx="380" ry="380" /></clipPath>
+          <filter id="cut-border" x="-30%" y="-30%" width="160%" height="160%">
+            <feMorphology in="SourceAlpha" operator="dilate" radius={dilationPx} result="dilated" />
+            <feFlood floodColor="white" result="white" />
+            <feComposite in="white" in2="dilated" operator="in" result="border" />
+            <feMerge><feMergeNode in="border" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
         </defs>
         <rect width="1200" height="2100" rx="72" fill="#dceac7" />
-        <ellipse cx="600" cy="850" rx="380" ry="380" fill="white" stroke="white" strokeWidth={approximateStroke} filter="url(#paper-shadow)" />
-        <image href="/sprite-fixture.png" x="240" y="490" width="720" height="720" preserveAspectRatio="xMidYMid meet" clipPath="url(#sprite-clip)" />
-        <g filter="url(#paper-shadow)">
-          <rect x="365" y="1815" width="470" height="155" rx="70" fill="white" stroke="white" strokeWidth={approximateStroke / 2} />
-          <text x="600" y="1918" textAnchor="middle" fontFamily="Arial Rounded MT Bold, sans-serif" fontSize="82" fontWeight="800" fill="#18392b">sprout</text>
-        </g>
+        {plan.layers.map((layer) => (
+          <g key={layer.id} filter="url(#paper-shadow)">
+            <image
+              href={assetUrl(layer.assetId)}
+              x={layer.x}
+              y={layer.y}
+              width={layer.width}
+              height={layer.height}
+              preserveAspectRatio="none"
+              filter="url(#cut-border)"
+            />
+          </g>
+        ))}
         {contours.map((contour, index) => <path key={index} d={pathData(contour)} fill="none" stroke="#ff5a36" strokeWidth="8" strokeDasharray="22 16" />)}
       </svg>
     </section>

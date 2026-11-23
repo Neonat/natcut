@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { GeometryReport, PublicStatus, Submission } from '@natcut/domain';
+import { geometryIssuesHash, manifestHash, type GeometryReport, type PublicStatus, type Submission } from '@natcut/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   IdempotencyConflictError,
@@ -168,17 +168,34 @@ describe('submission routes', () => {
 
   it('requires an exact acknowledgement for warnings', async () => {
     const warningManifest = { ...manifest, renderVersion: 'warning' };
+    const exactManifestHash = await manifestHash(warningManifest);
+    const exactIssuesHash = await geometryIssuesHash(report('warning').issues);
     expect((await submit({ manifest: warningManifest, idempotencyKey: 'one' })).statusCode).toBe(409);
     expect((await submit({
       manifest: warningManifest,
       idempotencyKey: 'two',
-      warningAcknowledgement: { geometryVersion: 'natcut-geometry-v1', rasterHash: 'b'.repeat(64) },
+      warningAcknowledgement: {
+        geometryVersion: 'natcut-geometry-v1', rasterHash: 'b'.repeat(64),
+        manifestHash: exactManifestHash, issuesHash: exactIssuesHash,
+      },
+    })).statusCode).toBe(409);
+
+    expect((await submit({
+      manifest: warningManifest,
+      idempotencyKey: 'stale-manifest',
+      warningAcknowledgement: {
+        geometryVersion: 'natcut-geometry-v1', rasterHash: 'a'.repeat(64),
+        manifestHash: 'f'.repeat(64), issuesHash: exactIssuesHash,
+      },
     })).statusCode).toBe(409);
 
     const accepted = await submit({
       manifest: warningManifest,
       idempotencyKey: 'three',
-      warningAcknowledgement: { geometryVersion: 'natcut-geometry-v1', rasterHash: 'a'.repeat(64) },
+      warningAcknowledgement: {
+        geometryVersion: 'natcut-geometry-v1', rasterHash: 'a'.repeat(64),
+        manifestHash: exactManifestHash, issuesHash: exactIssuesHash,
+      },
     });
     expect(accepted.statusCode).toBe(201);
     expect(repository.records.get('submission-1')?.validation.acknowledgedByVisitor).toBe(true);

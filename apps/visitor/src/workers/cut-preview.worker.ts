@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import { buildDistanceField, evaluateCutGeometry } from '@natcut/cut-geometry';
-import { DEVFEST_SG_V1 } from '@natcut/domain';
+import { canonicalManifestJson, DEVFEST_SG_V1 } from '@natcut/domain';
 import {
   planComposition,
   renderCutGroupMasks,
@@ -29,24 +29,43 @@ const assetsPromise: Promise<AssetCatalog> = Promise.all([
   loadAsset('/sprout-wordmark.png', 'branding/logo-and-species'),
 ]).then((assets) => new Map(assets.map((asset) => [asset.id, asset])));
 
-let cachedKey = '';
-let cachedMasks: ReturnType<typeof renderCutGroupMasks> = [];
-let cachedFields: ReturnType<typeof buildDistanceField>[] = [];
+type PreparedGeometry = {
+  masks: ReturnType<typeof renderCutGroupMasks>;
+  fields: ReturnType<typeof buildDistanceField>[];
+};
+
+const geometryCache = new Map<string, Promise<PreparedGeometry>>();
+
+function prepareGeometry(key: string, manifest: CutPreviewRequest['manifest']): Promise<PreparedGeometry> {
+  const existing = geometryCache.get(key);
+  if (existing) return existing;
+  const pending = assetsPromise.then((assets) => {
+    const masks = renderCutGroupMasks(planComposition(manifest, DEVFEST_SG_V1), assets);
+    return {
+      masks,
+      fields: masks.map((mask) => buildDistanceField(mask, DEVFEST_SG_V1.alphaThreshold)),
+    };
+  });
+  geometryCache.set(key, pending);
+  return pending;
+}
 
 self.addEventListener('message', async (event: MessageEvent<CutPreviewRequest>) => {
   const { revision, manifest } = event.data;
   const { cutMarginMm: _cutMarginMm, ...geometryManifest } = manifest;
   const key = JSON.stringify(geometryManifest);
-  if (key !== cachedKey) {
-    cachedKey = key;
-    cachedMasks = renderCutGroupMasks(planComposition(manifest, DEVFEST_SG_V1), await assetsPromise);
-    cachedFields = cachedMasks.map((mask) => buildDistanceField(mask, DEVFEST_SG_V1.alphaThreshold));
-  }
-  const evaluation = await evaluateCutGeometry(cachedMasks, manifest.cutMarginMm, DEVFEST_SG_V1, cachedFields);
+  const prepared = await prepareGeometry(key, manifest);
+  const evaluation = await evaluateCutGeometry(
+    prepared.masks,
+    manifest.cutMarginMm,
+    DEVFEST_SG_V1,
+    prepared.fields,
+  );
   const result: CutPreviewResult = {
     revision,
     report: evaluation.report,
     contours: evaluation.contours.map((contour) => contour.outer),
+    manifestFingerprint: canonicalManifestJson(manifest),
   };
   self.postMessage(result);
 });

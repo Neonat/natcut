@@ -24,11 +24,13 @@ export function VisitorApp({ api }: { api: VisitorApi }) {
   const fixture = import.meta.env.DEV
     ? new URLSearchParams(window.location.search).get('fixture')
     : null;
+  const requeuedFrom = new URLSearchParams(window.location.search).get('requeuedFrom') ?? undefined;
   return (
     <EditorPage
       submitSubmission={(request) => api.submit(request)}
       onNavigate={navigate}
       {...(fixture === 'overlap' ? { initialManifest: overlapFixtureManifest } : {})}
+      {...(requeuedFrom ? { requeuedFrom } : {})}
     />
   );
 }

@@ -23,6 +23,8 @@ test('leaving cancels the immutable job and rejoining goes behind the next visit
   await first.getByRole('button', { name: 'Leave queue' }).click();
   await expect(first.getByRole('heading', { name: 'You left the queue' })).toBeVisible();
   await first.getByRole('button', { name: 'Rejoin queue' }).click();
+  await expect(first.getByRole('heading', { name: 'Your sprite sticker' })).toBeVisible();
+  await first.getByRole('button', { name: 'Join print queue' }).click();
   await expect(first.getByRole('heading', { name: 'In the print queue' })).toBeVisible();
   const rejoinedQueueText = await first.getByText(/Queue #\d+/).textContent();
   const rejoinedQueueNumber = Number(rejoinedQueueText?.match(/\d+/)?.[0]);

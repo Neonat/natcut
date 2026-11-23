@@ -52,7 +52,7 @@ describe('queue page', () => {
     expect(screen.getByRole('button', { name: /leave queue/i })).toHaveProperty('disabled', true);
   });
 
-  it('rejoins from a cancelled submission as a new immutable request', async () => {
+  it('opens a fresh editable draft when rejoining from a cancelled submission', async () => {
     const visitorApi = api('cancelled');
     const onNavigate = vi.fn();
     render(
@@ -64,9 +64,8 @@ describe('queue page', () => {
       />,
     );
     fireEvent.click(await screen.findByRole('button', { name: /rejoin queue/i }));
-    await waitFor(() => expect(visitorApi.submit).toHaveBeenCalledTimes(1));
-    expect(visitorApi.submit).toHaveBeenCalledWith(expect.objectContaining({ requeuedFrom: 'submission-1' }));
-    expect(onNavigate).toHaveBeenCalledWith('/queue/submission-2#token=new-token');
+    expect(visitorApi.submit).not.toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledWith('/edit?requeuedFrom=submission-1');
   });
 
   it.each([

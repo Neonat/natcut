@@ -55,37 +55,44 @@ function stop(code = 0) {
   for (const child of children) {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
   }
-  setTimeout(() => process.exit(code), 1_500).unref();
+  setTimeout(() => process.exit(code), 1_500);
 }
 
 process.once('SIGINT', () => stop(0));
 process.once('SIGTERM', () => stop(0));
 
-launch('npx', ['firebase', 'emulators:start', '--project', projectId, '--only', 'auth,firestore'], {
-  JAVA_HOME: javaHome,
-  PATH: `${javaHome}/bin:${process.env.PATH ?? ''}`,
-});
-await Promise.all([waitForPort(8080), waitForPort(9099)]);
+async function start() {
+  launch('npx', ['firebase', 'emulators:start', '--project', projectId, '--only', 'auth,firestore'], {
+    JAVA_HOME: javaHome,
+    PATH: `${javaHome}/bin:${process.env.PATH ?? ''}`,
+  });
+  await Promise.all([waitForPort(8080), waitForPort(9099)]);
 
-const sharedEnv = {
-  NATCUT_PROJECT_ID: projectId,
-  FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
-  FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
-  NATCUT_SQLITE_PATH: path.join(stateDirectory, 'worker.sqlite'),
-};
-launch('npx', ['tsx', 'scripts/dev-runtime.ts'], sharedEnv);
-await Promise.all([waitForPort(8088), waitForPort(8090)]);
+  const sharedEnv = {
+    NATCUT_PROJECT_ID: projectId,
+    FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+    FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
+    NATCUT_SQLITE_PATH: path.join(stateDirectory, 'worker.sqlite'),
+  };
+  launch('npx', ['tsx', 'scripts/dev-runtime.ts'], sharedEnv);
+  await Promise.all([waitForPort(8088), waitForPort(8090)]);
 
-launch('npm', ['run', 'dev', '--workspace', '@natcut/visitor', '--', '--host', '127.0.0.1', '--port', '4174'], {
-  ...sharedEnv,
-  VITE_SUBMISSION_API_URL: 'http://127.0.0.1:8088',
-  VITE_FIREBASE_PROJECT_ID: projectId,
-  VITE_FIREBASE_API_KEY: 'demo-key',
-  VITE_FIREBASE_AUTH_DOMAIN: 'demo-natcut.firebaseapp.com',
-  VITE_FIREBASE_AUTH_EMULATOR_URL: 'http://127.0.0.1:9099',
+  launch('npm', ['run', 'dev', '--workspace', '@natcut/visitor', '--', '--host', '127.0.0.1', '--port', '4174'], {
+    ...sharedEnv,
+    VITE_SUBMISSION_API_URL: 'http://127.0.0.1:8088',
+    VITE_FIREBASE_PROJECT_ID: projectId,
+    VITE_FIREBASE_API_KEY: 'demo-key',
+    VITE_FIREBASE_AUTH_DOMAIN: 'demo-natcut.firebaseapp.com',
+    VITE_FIREBASE_AUTH_EMULATOR_URL: 'http://127.0.0.1:9099',
+  });
+  await waitForPort(4174);
+  console.log('NatCut visitor: http://127.0.0.1:4174');
+  console.log('Submission API: http://127.0.0.1:8088');
+  console.log('Simulated worker control: http://127.0.0.1:8090');
+  setInterval(() => undefined, 60_000);
+}
+
+start().catch((cause) => {
+  console.error(cause instanceof Error ? cause.message : cause);
+  stop(1);
 });
-await waitForPort(4174);
-console.log('NatCut visitor: http://127.0.0.1:4174');
-console.log('Submission API: http://127.0.0.1:8088');
-console.log('Simulated worker control: http://127.0.0.1:8090');
-setInterval(() => undefined, 60_000);
