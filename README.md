@@ -36,6 +36,8 @@ USB interfaces are exclusive. Close BrenCut, Liene Photos, and any Chrome tab th
 
 ## Direction
 
+The agreed mobile booth, cloud queue, live cut-preview, marketing, and Mac-worker architecture is specified in [`docs/superpowers/specs/2026-11-23-booth-platform-design.md`](docs/superpowers/specs/2026-11-23-booth-platform-design.md).
+
 NatCut will use a local bridge rather than making the website own the USB connection.
 
 ```text
