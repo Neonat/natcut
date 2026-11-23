@@ -6,22 +6,21 @@
 
 ## Goal
 
-Build a mobile-first sticker-booth system for one event operator, one MacBook, and one Liene PixCut S1. Visitors create and approve a trainer-and-sprite sticker on their phones, submit an immutable design to a cloud queue, follow its status, and collect the physical sticker. The Mac owns physical execution and feeds the printer one job at a time.
+Build a mobile-first sticker-booth system for one event operator, one MacBook, and one Liene PixCut S1. Visitors create and approve a sprite sticker on their phones, submit an immutable design to a cloud queue, follow its status, and collect the physical sticker. A separate private route may add a photographed person for selected visitors when the booth has spare capacity. The Mac owns physical execution and feeds the printer one job at a time.
 
 The visitor interface must use **sprite**, never “Plantemon.”
 
 ## Experience
 
-1. A visitor opens the web app without installing anything.
+1. A visitor scans the main public QR code and opens the web app without installing anything.
 2. They choose an approved local sprite or request a live-generated sprite from a plant search.
 3. A live-generated sprite is shown behind an “Is this cute enough?” approval gate. Rejection returns the visitor to the approved library.
-4. The booth captures their photo and the pipeline creates a trainer-style asset.
-5. They choose a composition theme, sprite variation, and branding placement.
-6. They preview the final sticker and choose a cut-border preset or custom border slider.
-7. Cut contours and overlap warnings update dynamically.
-8. They submit once. The accepted composition becomes immutable.
-9. They see queue status and refresh it with a button or native pull-to-refresh.
-10. When ready, they collect the sticker and may complete a one-question rating plus optional selfie.
+4. They choose a composition theme, sprite variation, and branding placement.
+5. They preview the final sticker and choose a cut-border preset or custom border slider.
+6. Cut contours and overlap warnings update dynamically.
+7. They submit once. The accepted composition becomes immutable.
+8. They see queue status and refresh it with a button or native pull-to-refresh.
+9. When ready, they collect the sticker and may complete a one-question rating plus optional selfie.
 
 The editing choices are intentionally constrained:
 
@@ -98,6 +97,28 @@ Anonymous Authentication supplies a stable, opaque UID for a browser session. Th
 
 Anonymous sessions are device-local. The status link therefore contains an unguessable public status token so a visitor can reopen their job without exposing operator data or requiring an account.
 
+## Private portrait route
+
+Adding the visitor to the artwork is not advertised in the public flow. The operator keeps a separate portrait QR code and shows it only to selected friends or during quiet periods.
+
+The portrait QR opens an unlisted route containing a rotatable event invite token. Scanning it creates a capture request and displays a short matching code on the visitor’s phone and operator screen. The operator must activate the request before a photo can be attached, so possession of an old QR image does not create printable work or consume AI budget.
+
+```text
+Private portrait QR
+  -> capture request and matching code
+  -> operator activates one request
+  -> visitor stands at the fixed Sony α6000 and tripod
+  -> operator captures through Sony Imaging Edge Desktop
+  -> operator imports the saved JPEG into the active request
+  -> trainer generation and visitor approval
+  -> normal composition editor
+  -> normal immutable print submission
+```
+
+The α6000 connects to the Mac over USB in PC Remote mode. The first implementation uses Sony Imaging Edge Desktop to trigger the shutter and save the JPEG, followed by a simple operator import. Direct camera control is deferred because the α6000 is not supported by Sony’s current Camera Remote SDK. A watched-folder importer may later remove the manual import step without changing the visitor flow.
+
+Portrait capture and generation happen before print submission. They never reserve a print-queue position. If capture or generation fails, the visitor can continue with the standard sprite-only composition. The operator should normally offer this route only when the regular queue is empty or short.
+
 ## Composition manifest
 
 The phone edits a declarative manifest rather than a flattened image:
@@ -106,7 +127,7 @@ The phone edits a declarative manifest rather than a flattened image:
 type CompositionManifest = {
   schemaVersion: number;
   spriteAssetId: string;
-  trainerAssetId: string;
+  trainerAssetId: string | null;
   theme: "default" | "hugging" | "battling" | "side-by-side";
   brandingVariant: "logo" | "logo-and-sprites" | "logo-and-species";
   cutGroups: CutGroup[];
@@ -389,10 +410,18 @@ The operator app must never offer firmware, factory, calibration, arbitrary prop
 - Approved sprite library.
 - Existing Sprout backend adapter tests.
 - Live sprite generation with cuteness approval and library fallback.
-- Trainer generation and controlled layouts.
 - Golden-set quality evaluation and provider cost controls.
 
-### Milestone 5: production readiness
+### Milestone 5: private portrait add-on
+
+- Separate private QR route and rotatable invite token.
+- Operator-approved capture requests and matching codes.
+- Sony α6000 setup through Imaging Edge Desktop.
+- Manual JPEG import into the active capture request.
+- Trainer generation, approval, and controlled portrait layouts.
+- Sprite-only fallback without losing the visitor session.
+
+### Milestone 6: production readiness
 
 - Firebase deployment, App Check, rate limits, budgets, and observability.
 - Load and queue soak tests.
@@ -407,6 +436,7 @@ The operator app must never offer firmware, factory, calibration, arbitrary prop
 - Transfer-speed optimization.
 - Unbounded freeform layout editing.
 - Importing the existing Sprout frontend.
+- Private portrait route and camera integration.
 
 ## Upstream attribution
 
@@ -415,6 +445,8 @@ NatCut is inspired by [BrenCut](https://github.com/LTKMN/brencut) and its PixCut
 ## Acceptance criteria for this design
 
 - A visitor can complete the workflow without an account or email.
+- The public workflow never requires or advertises portrait capture.
+- A private portrait session cannot enter the print queue before its final design is approved.
 - Preview geometry changes dynamically with the cut-border control.
 - Quality risks warn and can be acknowledged; structurally invalid output cannot print.
 - Accepted designs cannot be edited.
