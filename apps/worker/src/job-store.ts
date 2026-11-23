@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { DEVFEST_SG_V1 } from '@natcut/domain';
 import type { ClaimedSubmission } from './cloud-queue.ts';
@@ -58,6 +59,20 @@ const columns = [
   'lastPrinterState', 'lastPrinterSubState', 'lastAlertsJson', 'acceptedAt', 'stateChangedAt', 'lastError',
 ] as const;
 
+const fallbackProcessIdentity = randomUUID();
+
+function processIdentity(processId: number): string | null {
+  try {
+    const startedAt = execFileSync('/bin/ps', ['-p', String(processId), '-o', 'lstart='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return startedAt || null;
+  } catch {
+    return processId === process.pid ? fallbackProcessIdentity : null;
+  }
+}
+
 function uploadPhaseFor(state: LocalJobState): UploadPhase | null {
   if (state === 'uploading_cut') return 'cut';
   if (state === 'uploading_image') return 'image';
@@ -70,6 +85,7 @@ export class JobStore {
 
   constructor(path: string) {
     this.database = new Database(path);
+    this.database.pragma('busy_timeout = 5000');
     this.initialize();
   }
 
@@ -109,13 +125,18 @@ export class JobStore {
       CREATE TABLE IF NOT EXISTS execution_guard (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         ownerToken TEXT NOT NULL,
-        processId INTEGER NOT NULL
+        processId INTEGER NOT NULL,
+        processIdentity TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS job_execution_identity (
         submissionId TEXT PRIMARY KEY,
         executionToken TEXT NOT NULL
       );
     `);
+    const guardColumns = this.database.pragma('table_info(execution_guard)') as Array<{ name: string }>;
+    if (!guardColumns.some((column) => column.name === 'processIdentity')) {
+      this.database.exec("ALTER TABLE execution_guard ADD COLUMN processIdentity TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   insert(job: LocalPrintJob) {
@@ -149,36 +170,38 @@ export class JobStore {
   }
 
   ensureClaimed(claim: ClaimedSubmission): boolean {
-    const existing = this.getBySubmissionId(claim.submission.id);
-    if (!existing) {
-      this.insertClaimed(claim);
-      if (claim.submission.publicStatus !== 'next') {
-        this.transition(
-          claim.submission.id,
-          'needs_reconciliation',
-          claim.claimedAt,
-          `Local journal was missing while cloud status was ${claim.submission.publicStatus}.`,
-        );
-        return false;
+    return this.database.transaction(() => {
+      const existing = this.getBySubmissionId(claim.submission.id);
+      if (!existing) {
+        this.insertClaimed(claim);
+        if (claim.submission.publicStatus !== 'next') {
+          this.transition(
+            claim.submission.id,
+            'needs_reconciliation',
+            claim.claimedAt,
+            `Local journal was missing while cloud status was ${claim.submission.publicStatus}.`,
+          );
+          return false;
+        }
+        return true;
+      }
+      if (existing.manifestHash !== claim.submission.manifestHash || existing.queueNumber !== claim.submission.queueNumber) {
+        throw new Error(`Cloud lease for ${claim.submission.id} does not match the local journal`);
+      }
+      if (claim.submission.publicStatus === 'printing' && existing.state !== 'needs_reconciliation') {
+        const localExecutionToken = this.getOrCreateExecutionToken(existing.submissionId);
+        if (!claim.executionToken || claim.executionToken !== localExecutionToken) {
+          this.transition(
+            existing.submissionId,
+            'needs_reconciliation',
+            claim.claimedAt,
+            'Cloud execution belongs to a different or missing local journal generation.',
+          );
+          return false;
+        }
       }
       return true;
-    }
-    if (existing.manifestHash !== claim.submission.manifestHash || existing.queueNumber !== claim.submission.queueNumber) {
-      throw new Error(`Cloud lease for ${claim.submission.id} does not match the local journal`);
-    }
-    if (claim.submission.publicStatus === 'printing' && existing.state !== 'needs_reconciliation') {
-      const localExecutionToken = this.getOrCreateExecutionToken(existing.submissionId);
-      if (!claim.executionToken || claim.executionToken !== localExecutionToken) {
-        this.transition(
-          existing.submissionId,
-          'needs_reconciliation',
-          claim.claimedAt,
-          'Cloud execution belongs to a different or missing local journal generation.',
-        );
-        return false;
-      }
-    }
-    return true;
+    }).immediate();
   }
 
   transition(submissionId: string, state: LocalJobState, stateChangedAt: string, lastError: string | null = null) {
@@ -190,6 +213,19 @@ export class JobStore {
       ? statement.run(state, stateChangedAt, lastError, uploadPhase, submissionId)
       : statement.run(state, stateChangedAt, lastError, submissionId);
     if (result.changes !== 1) throw new Error(`Unknown local job for submission ${submissionId}`);
+  }
+
+  transitionIfCurrentState(
+    submissionId: string,
+    expectedState: LocalJobState,
+    state: LocalJobState,
+    stateChangedAt: string,
+    lastError: string | null = null,
+  ): boolean {
+    const result = this.database.prepare(
+      'UPDATE local_print_jobs SET state = ?, stateChangedAt = ?, lastError = ? WHERE submissionId = ? AND state = ?',
+    ).run(state, stateChangedAt, lastError, submissionId, expectedState);
+    return result.changes === 1;
   }
 
   getBySubmissionId(submissionId: string): LocalPrintJob | null {
@@ -231,27 +267,20 @@ export class JobStore {
   tryAcquireExecutionGuard(ownerToken: string, processId: number): boolean {
     return this.database.transaction(() => {
       const existing = this.database.prepare(
-        'SELECT ownerToken, processId FROM execution_guard WHERE singleton = 1',
-      ).get() as { ownerToken: string; processId: number } | undefined;
+        'SELECT ownerToken, processId, processIdentity FROM execution_guard WHERE singleton = 1',
+      ).get() as { ownerToken: string; processId: number; processIdentity: string } | undefined;
       if (existing) {
-        let alive = existing.processId === processId;
-        if (!alive) {
-          try {
-            process.kill(existing.processId, 0);
-            alive = true;
-          } catch (cause) {
-            alive = (cause as NodeJS.ErrnoException).code !== 'ESRCH';
-          }
-        }
+        const alive = existing.processIdentity !== '' &&
+          processIdentity(existing.processId) === existing.processIdentity;
         if (alive) return false;
         this.database.prepare('DELETE FROM execution_guard WHERE singleton = 1 AND ownerToken = ?')
           .run(existing.ownerToken);
       }
       this.database.prepare(
-        'INSERT INTO execution_guard (singleton, ownerToken, processId) VALUES (1, ?, ?)',
-      ).run(ownerToken, processId);
+        'INSERT INTO execution_guard (singleton, ownerToken, processId, processIdentity) VALUES (1, ?, ?, ?)',
+      ).run(ownerToken, processId, processIdentity(processId) ?? fallbackProcessIdentity);
       return true;
-    })();
+    }).immediate();
   }
 
   releaseExecutionGuard(ownerToken: string) {
@@ -269,7 +298,7 @@ export class JobStore {
         'INSERT INTO job_execution_identity (submissionId, executionToken) VALUES (?, ?)',
       ).run(submissionId, executionToken);
       return executionToken;
-    })();
+    }).immediate();
   }
 
   close() {

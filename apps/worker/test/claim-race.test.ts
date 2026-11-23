@@ -77,7 +77,7 @@ emulatorDescribe('cloud claim race', () => {
       winners[0]!.workerId,
       'journal-a',
       '2026-11-23T12:00:04.000Z',
-    )).toBe('acquired');
+    )).toBe('fenced');
     expect((await cloud.recoverClaim(winners[0]!.workerId))?.executionToken).toBe('journal-a');
 
     const store = new JobStore(':memory:');

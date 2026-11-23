@@ -93,10 +93,7 @@ export function createFirestoreCloudQueue(
           slotData?.submissionId !== submissionId ||
           slotData?.workerId !== workerId
         ) return 'fenced';
-        const storedToken = snapshot.data()?.executionLease?.token;
-        if (submission.publicStatus === 'printing') {
-          return storedToken === executionToken ? 'acquired' : 'fenced';
-        }
+        if (submission.publicStatus === 'printing') return 'fenced';
         if (submission.publicStatus !== 'next') return 'fenced';
         transaction.update(ref, {
           publicStatus: 'printing',
@@ -118,7 +115,10 @@ export function createFirestoreCloudQueue(
           if (status === 'ready' && slotSnapshot.data()?.submissionId === submissionId) transaction.delete(slot);
           return;
         }
-        if (status === 'printing' && ['ready', 'collected'].includes(submission.publicStatus)) {
+        const superseded =
+          (status === 'printing' && ['ready', 'collected'].includes(submission.publicStatus)) ||
+          (status === 'ready' && submission.publicStatus === 'collected');
+        if (superseded) {
           if (slotSnapshot.data()?.submissionId === submissionId) transaction.delete(slot);
           return;
         }

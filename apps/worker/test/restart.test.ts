@@ -50,6 +50,17 @@ describe('restart recovery', () => {
     },
   );
 
+  it('does not rewrite uncertain work while another live executor owns the journal', () => {
+    const store = new JobStore(':memory:');
+    store.insert(job('cutting'));
+    expect(store.tryAcquireExecutionGuard('live-executor', process.pid)).toBe(true);
+    expect(recoverInterruptedJobs(store, '2026-11-23T12:05:00.000Z')).toEqual([]);
+    expect(store.getBySubmissionId('submission-cutting')?.state).toBe('cutting');
+    store.releaseExecutionGuard('live-executor');
+    expect(recoverInterruptedJobs(store, '2026-11-23T12:06:00.000Z')).toEqual(['submission-cutting']);
+    store.close();
+  });
+
   it('resumes a safe pre-declaration journal before claiming new cloud work', async () => {
     const store = new JobStore(':memory:');
     store.insert(job('validating'));

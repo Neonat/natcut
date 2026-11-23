@@ -23,6 +23,14 @@ const safelyExecutableStates = new Set<LocalJobState>([
   'claimed', 'rendering', 'validating', 'ready_to_declare',
 ]);
 
+class ExecutionFenceError extends Error {
+  constructor(readonly outcome: 'waiting_for_cloud' | 'needs_reconciliation') {
+    super(outcome === 'waiting_for_cloud'
+      ? 'Cloud execution fence could not be reached.'
+      : 'Cloud execution fence has already been consumed.');
+  }
+}
+
 export async function flushPublicStatusOutbox(
   store: JobStore,
   cloud: CloudQueue,
@@ -114,33 +122,29 @@ export async function runLocalJob(
       return { kind: 'needs_reconciliation', submissionId: job.submissionId };
     }
     let staged = publicStatusFor(authoritativeJob.state);
-    if (staged === 'next') {
-      const journalExecutionToken = deps.store.getOrCreateExecutionToken(job.submissionId);
-      let executionFence: 'acquired' | 'fenced';
-      try {
-        executionFence = await deps.cloud.beginExecution(
-          job.submissionId,
-          deps.workerId,
-          journalExecutionToken,
-          now(),
-        );
-      } catch {
-        return { kind: 'waiting_for_cloud', submissionId: job.submissionId };
-      }
-      if (executionFence === 'fenced') {
-        deps.store.transition(
-          job.submissionId,
-          'needs_reconciliation',
-          now(),
-          'Cloud execution fence is owned by another worker journal.',
-        );
-        return { kind: 'needs_reconciliation', submissionId: job.submissionId };
-      }
-      staged = 'printing';
-    }
     try {
       await deps.executor.execute(authoritativeJob, async (state, changedAt) => {
         const nextPublic = publicStatusFor(state);
+        if (staged === 'next' && nextPublic === 'printing') {
+          const journalExecutionToken = deps.store.getOrCreateExecutionToken(job.submissionId);
+          let executionFence: 'acquired' | 'fenced';
+          try {
+            executionFence = await deps.cloud.beginExecution(
+              job.submissionId,
+              deps.workerId,
+              journalExecutionToken,
+              changedAt,
+            );
+          } catch {
+            throw new ExecutionFenceError('waiting_for_cloud');
+          }
+          if (executionFence === 'fenced') {
+            throw new ExecutionFenceError('needs_reconciliation');
+          }
+          staged = 'printing';
+          deps.store.transition(job.submissionId, state, changedAt);
+          return;
+        }
         if (nextPublic !== staged && nextPublic !== 'next') {
           deps.store.transitionAndStagePublicStatus(job.submissionId, state, changedAt, nextPublic);
           staged = nextPublic;
@@ -151,6 +155,17 @@ export async function runLocalJob(
       });
       return { kind: 'completed', submissionId: job.submissionId };
     } catch (cause) {
+      if (cause instanceof ExecutionFenceError) {
+        if (cause.outcome === 'needs_reconciliation') {
+          deps.store.transition(
+            job.submissionId,
+            'needs_reconciliation',
+            now(),
+            cause.message,
+          );
+        }
+        return { kind: cause.outcome, submissionId: job.submissionId };
+      }
       const error = cause instanceof Error ? cause.message : String(cause);
       deps.store.transition(job.submissionId, 'failed', now(), error);
       return { kind: 'failed', submissionId: job.submissionId, error };
@@ -169,11 +184,23 @@ export function recoverInterruptedJobs(
   changedAt: string,
   _executor?: PhysicalExecutor,
 ): string[] {
+  const recoveryToken = randomUUID();
+  if (!store.tryAcquireExecutionGuard(recoveryToken, process.pid)) return [];
   const recovered: string[] = [];
-  for (const job of store.list()) {
-    if (!uncertainStates.has(job.state)) continue;
-    store.transition(job.submissionId, 'needs_reconciliation', changedAt, 'Worker restarted during physical execution.');
-    recovered.push(job.submissionId);
+  try {
+    for (const job of store.list()) {
+      if (!uncertainStates.has(job.state)) continue;
+      const changed = store.transitionIfCurrentState(
+        job.submissionId,
+        job.state,
+        'needs_reconciliation',
+        changedAt,
+        'Worker restarted during physical execution.',
+      );
+      if (changed) recovered.push(job.submissionId);
+    }
+  } finally {
+    store.releaseExecutionGuard(recoveryToken);
   }
   return recovered;
 }

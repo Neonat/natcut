@@ -15,10 +15,13 @@ const statusCopy = {
 export function QueuePage(props: { submissionId: string; statusToken: string; api: VisitorApi; onNavigate?: (path: string) => void }) {
   const [status, setStatus] = useState<PublicQueueStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const refreshGeneration = useRef(0);
+  const leavingRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (leavingRef.current) return;
     const generation = ++refreshGeneration.current;
     setLoading(true);
     setError(null);
@@ -38,18 +41,28 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
   const pullHandlers = usePullToRefresh(() => { void refresh(); });
 
   const leave = async () => {
+    if (leavingRef.current) return;
+    leavingRef.current = true;
+    setLeaving(true);
     refreshGeneration.current++;
     setLoading(false);
     setError(null);
     try {
       await props.api.leave(props.submissionId, props.statusToken);
+      refreshGeneration.current++;
+      setLoading(false);
       setStatus((current) => current ? { ...current, publicStatus: 'cancelled', canLeaveQueue: false, jobsAhead: 0 } : current);
     } catch (cause) {
       if (cause instanceof Error && cause.message === 'QUEUE_LEAVE_LOCKED') {
+        leavingRef.current = false;
+        setLeaving(false);
         await refresh();
         return;
       }
       setError(cause instanceof Error ? cause.message : 'Could not leave the queue. Try again.');
+    } finally {
+      leavingRef.current = false;
+      setLeaving(false);
     }
   };
 
@@ -71,7 +84,7 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
       </section>
       {error ? <div className="notice error" role="alert">{error}</div> : null}
       <div className="queue-actions">
-        <button className="secondary-action" type="button" onClick={() => void refresh()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
+        <button className="secondary-action" type="button" onClick={() => void refresh()} disabled={loading || leaving}>{loading ? 'Refreshing…' : 'Refresh'}</button>
         {status && status.publicStatus !== 'cancelled' && status.publicStatus !== 'collected' ? (
           <button className="text-action" type="button" onClick={() => void leave()} disabled={!status.canLeaveQueue}>Leave queue</button>
         ) : null}

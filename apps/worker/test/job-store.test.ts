@@ -68,4 +68,19 @@ describe('JobStore', () => {
     expect(reopened.getBySubmissionId('submission-1')).toEqual(job());
     reopened.close();
   });
+
+  it('serializes execution guards across two connections without throwing SQLITE_BUSY', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'natcut-store-'));
+    const databasePath = path.join(directory, 'worker.sqlite');
+    const first = new JobStore(databasePath);
+    const second = new JobStore(databasePath);
+    expect(first.tryAcquireExecutionGuard('first', process.pid)).toBe(true);
+    expect(() => second.tryAcquireExecutionGuard('second', process.pid)).not.toThrow();
+    expect(second.tryAcquireExecutionGuard('second', process.pid)).toBe(false);
+    first.releaseExecutionGuard('first');
+    expect(second.tryAcquireExecutionGuard('second', process.pid)).toBe(true);
+    second.releaseExecutionGuard('second');
+    first.close();
+    second.close();
+  });
 });

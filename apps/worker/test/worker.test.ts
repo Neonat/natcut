@@ -239,8 +239,8 @@ describe('simulated worker', () => {
       now: () => '2026-11-23T12:00:10.000Z',
     });
     expect(result.kind).toBe('waiting_for_cloud');
-    expect(phases).toEqual([]);
-    expect(store.getBySubmissionId('submission-1')?.state).toBe('claimed');
+    expect(phases).toEqual(['rendering', 'validating', 'ready_to_declare', 'declaring']);
+    expect(store.getBySubmissionId('submission-1')?.state).toBe('ready_to_declare');
     expect(store.listPendingPublicStatuses()).toEqual([]);
     store.close();
   });

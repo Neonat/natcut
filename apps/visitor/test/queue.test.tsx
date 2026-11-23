@@ -106,6 +106,25 @@ describe('queue page', () => {
     expect(screen.queryByText(/1 ahead/i)).toBeNull();
   });
 
+  it('does not start a refresh while Leave is pending', async () => {
+    const visitorApi = api('queued');
+    let finishLeave!: () => void;
+    vi.mocked(visitorApi.leave).mockReturnValueOnce(new Promise((resolve) => {
+      finishLeave = () => resolve({ submissionId: 'submission-1', publicStatus: 'cancelled' });
+    }));
+    render(<QueuePage submissionId="submission-1" statusToken="token" api={visitorApi} />);
+    await screen.findByText(/1 ahead/i);
+    fireEvent.click(screen.getByRole('button', { name: /leave queue/i }));
+    expect(screen.getByRole('button', { name: /refresh/i })).toHaveProperty('disabled', true);
+    const page = screen.getByTestId('queue-page');
+    fireEvent.touchStart(page, { touches: [{ clientY: 10 }] });
+    fireEvent.touchMove(page, { touches: [{ clientY: 100 }] });
+    fireEvent.touchEnd(page);
+    expect(visitorApi.getStatus).toHaveBeenCalledTimes(1);
+    finishLeave();
+    expect(await screen.findByRole('button', { name: /rejoin queue/i })).toBeTruthy();
+  });
+
   it.each([
     ['printing', /your sticker is being made/i],
     ['ready', /ready for pickup/i],
