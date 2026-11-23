@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "rootDir": "." },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "compilerOptions": { "rootDir": "../.." },
+  "include": ["src/**/*.ts", "test/**/*.ts", "../../vendor/pixcut-trace/**/*.ts"]
 }

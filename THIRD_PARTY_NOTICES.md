@@ -4,7 +4,13 @@ NatCut's PixCut S1 protocol work is inspired by [BrenCut](https://github.com/LTK
 
 The protocol was originally reverse-engineered by [PixCut-App](https://github.com/popcornhax/PixCut-App), used under the MIT License.
 
-Contour generation will later be informed by [honeymaro/pixcut](https://github.com/honeymaro/pixcut), used under the MIT License. No contour-generation code is included in the current milestone.
+The alpha-mask contour tracer in `vendor/pixcut-trace` is copied from BrenCut at
+commit `b153c614f441dbc663e2fafeb66ef1f731191872`. Its original MIT license and
+source record are preserved in that directory. NatCut owns its distance-field,
+clearance, collision, warning, and complexity-policy code.
+
+[honeymaro/pixcut](https://github.com/honeymaro/pixcut) is also credited by the
+upstream tracer and is used under the MIT License.
 
 ## BrenCut MIT License
 
