@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Queue state is server-owned. Visitor access goes through the authenticated
+    // submission API and opaque status-token endpoints.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
