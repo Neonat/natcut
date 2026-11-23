@@ -21,10 +21,11 @@
     "dev": "node scripts/dev.mjs",
     "build:hosting": "npm run build --workspace @natcut/visitor",
     "deploy:hosting": "firebase deploy --project sprout-dev-66f08 --only hosting:natcut",
+    "worker:cloud:sim": "tsx scripts/cloud-worker.ts",
     "test": "npm run test:legacy && npm run test:unit",
     "test:e2e": "playwright test",
     "test:legacy": "node --test test/protocol.test.mjs test/server.test.mjs test/snapshot.test.mjs test/usb-session.test.mjs",
-    "test:unit": "node --test test/workspace-smoke.test.mjs && vitest run --passWithNoTests",
+    "test:unit": "node --test test/workspace-smoke.test.mjs test/cloud-worker-entrypoint.test.mjs && vitest run --passWithNoTests",
     "emulators:test": "node scripts/emulators-test.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "status": "node bin/status.mjs"

@@ -92,6 +92,19 @@ npm run deploy:hosting
 
 Do not run bare `firebase deploy` in this project. The cloud provisioning and recovery commands are recorded in [`docs/runbooks/cloud-preview.md`](docs/runbooks/cloud-preview.md).
 
+On the booth Mac, authenticate Application Default Credentials once and run the outbound simulator with a durable journal:
+
+```bash
+gcloud auth application-default login
+NATCUT_PROJECT_ID=sprout-dev-66f08 \
+NATCUT_DATABASE_ID=natcut \
+NATCUT_SQLITE_PATH="$PWD/.local/natcut-worker.sqlite" \
+NATCUT_WORKER_ID=devfest-macbook \
+npm run worker:cloud:sim
+```
+
+This cloud worker uses only `SimulatedPrinter`; it does not import or open the USB printer bridge. It processes one queue record at a time and stops if a job needs operator reconciliation.
+
 Run verification independently:
 
 ```bash
