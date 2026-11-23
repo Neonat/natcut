@@ -77,10 +77,10 @@ NatCut's public preview uses its own Firebase Hosting target (`natcut`), Cloud R
 After creating the separate NatCut Firebase web app, provide its public SDK values and build the visitor bundle:
 
 ```bash
-VITE_FIREBASE_PROJECT_ID=sprout-dev-66f08 \
-VITE_FIREBASE_API_KEY='public Firebase web API key' \
-VITE_FIREBASE_AUTH_DOMAIN='sprout-dev-66f08.firebaseapp.com' \
-VITE_FIREBASE_APP_ID='NatCut Firebase web app ID' \
+VITE_NATCUT_FIREBASE_PROJECT_ID=sprout-dev-66f08 \
+VITE_NATCUT_FIREBASE_API_KEY='public Firebase web API key' \
+VITE_NATCUT_FIREBASE_AUTH_DOMAIN='sprout-dev-66f08.firebaseapp.com' \
+VITE_NATCUT_FIREBASE_APP_ID='NatCut Firebase web app ID' \
 npm run build:hosting
 ```
 
@@ -95,7 +95,8 @@ Do not run bare `firebase deploy` in this project. The cloud provisioning and re
 On the booth Mac, authenticate Application Default Credentials once and run the outbound simulator with a durable journal:
 
 ```bash
-gcloud auth application-default login
+gcloud auth application-default login \
+  --impersonate-service-account=natcut-worker@sprout-dev-66f08.iam.gserviceaccount.com
 NATCUT_PROJECT_ID=sprout-dev-66f08 \
 NATCUT_DATABASE_ID=natcut \
 NATCUT_SQLITE_PATH="$PWD/.local/natcut-worker.sqlite" \

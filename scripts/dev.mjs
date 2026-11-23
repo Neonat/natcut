@@ -68,7 +68,7 @@ process.once('SIGINT', () => stop(0));
 process.once('SIGTERM', () => stop(0));
 
 async function start() {
-  launch('npx', ['firebase', 'emulators:start', '--project', projectId, '--only', 'auth,firestore'], {
+  launch('npx', ['firebase', 'emulators:start', '--config', 'firebase.emulators.json', '--project', projectId, '--only', 'auth,firestore'], {
     JAVA_HOME: javaHome,
     PATH: `${javaHome}/bin:${process.env.PATH ?? ''}`,
   });
@@ -85,11 +85,11 @@ async function start() {
 
   launch('npm', ['run', 'dev', '--workspace', '@natcut/visitor', '--', '--host', '127.0.0.1', '--port', '4174'], {
     ...sharedEnv,
-    VITE_SUBMISSION_API_URL: 'http://127.0.0.1:8088',
-    VITE_FIREBASE_PROJECT_ID: projectId,
-    VITE_FIREBASE_API_KEY: 'demo-key',
-    VITE_FIREBASE_AUTH_DOMAIN: 'demo-natcut.firebaseapp.com',
-    VITE_FIREBASE_AUTH_EMULATOR_URL: 'http://127.0.0.1:9099',
+    VITE_NATCUT_SUBMISSION_API_URL: 'http://127.0.0.1:8088',
+    VITE_NATCUT_FIREBASE_PROJECT_ID: projectId,
+    VITE_NATCUT_FIREBASE_API_KEY: 'demo-key',
+    VITE_NATCUT_FIREBASE_AUTH_DOMAIN: 'demo-natcut.firebaseapp.com',
+    VITE_NATCUT_FIREBASE_AUTH_EMULATOR_URL: 'http://127.0.0.1:9099',
   });
   await waitForPort(4174);
   console.log('NatCut visitor: http://127.0.0.1:4174');

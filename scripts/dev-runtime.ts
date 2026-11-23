@@ -24,6 +24,15 @@ import {
 } from '../apps/worker/src/index.ts';
 import { loadRgbaAsset, type AssetCatalog } from '../packages/render/src/index.ts';
 
+if (process.env.NATCUT_PROJECT_ID !== 'demo-natcut') {
+  throw new Error('Local runtime requires NATCUT_PROJECT_ID=demo-natcut.');
+}
+if (process.env.NATCUT_DATABASE_ID !== undefined) {
+  throw new Error('Local runtime must not set NATCUT_DATABASE_ID.');
+}
+if (process.env.FIRESTORE_EMULATOR_HOST !== '127.0.0.1:8080') {
+  throw new Error('Local runtime requires FIRESTORE_EMULATOR_HOST=127.0.0.1:8080.');
+}
 const submissionSelection = resolveSubmissionFirestoreSelection(process.env);
 const workerSelection = resolveWorkerFirestoreSelection(process.env);
 if (submissionSelection.projectId !== workerSelection.projectId || submissionSelection.databaseId !== workerSelection.databaseId) {

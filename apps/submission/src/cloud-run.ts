@@ -20,6 +20,9 @@ export type CloudRunConfig = {
 };
 
 export function readCloudRunConfig(environment: RuntimeEnvironment): CloudRunConfig {
+  if (environment.FIREBASE_AUTH_EMULATOR_HOST !== undefined) {
+    throw new Error('Production must not use FIREBASE_AUTH_EMULATOR_HOST.');
+  }
   const selection = resolveSubmissionFirestoreSelection(environment);
   if (selection.projectId !== 'sprout-dev-66f08' || selection.databaseId !== 'natcut') {
     throw new Error('Cloud Run requires the isolated NatCut production database.');

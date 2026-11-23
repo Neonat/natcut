@@ -184,6 +184,16 @@ describe('submission routes', () => {
     expect((await submit({ manifest, idempotencyKey: 'two' }, 'invalid')).statusCode).toBe(401);
   });
 
+  it('prevents Hosting from caching token-dependent status responses', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/submissions/missing/status',
+      headers: { 'x-natcut-status-token': 'wrong-token' },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.headers['cache-control']).toBe('private, no-store');
+  });
+
   it('rejects malformed manifests and structurally invalid geometry', async () => {
     expect((await submit({ manifest: { ...manifest, surprise: true }, idempotencyKey: 'one' })).statusCode).toBe(400);
     expect((await submit({ manifest: { ...manifest, renderVersion: 'invalid' }, idempotencyKey: 'two' })).statusCode).toBe(422);

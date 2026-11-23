@@ -16,10 +16,10 @@ describe('visitor runtime configuration', () => {
 
   it('uses the public NatCut web-app config and same-origin API in production', () => {
     expect(readVisitorConfig({
-      VITE_FIREBASE_PROJECT_ID: 'sprout-dev-66f08',
-      VITE_FIREBASE_API_KEY: 'public-web-api-key',
-      VITE_FIREBASE_AUTH_DOMAIN: 'sprout-dev-66f08.firebaseapp.com',
-      VITE_FIREBASE_APP_ID: '1:485412794128:web:natcut',
+      VITE_NATCUT_FIREBASE_PROJECT_ID: 'sprout-dev-66f08',
+      VITE_NATCUT_FIREBASE_API_KEY: 'public-web-api-key',
+      VITE_NATCUT_FIREBASE_AUTH_DOMAIN: 'sprout-dev-66f08.firebaseapp.com',
+      VITE_NATCUT_FIREBASE_APP_ID: '1:485412794128:web:natcut',
     })).toEqual({
       firebase: {
         apiKey: 'public-web-api-key',
@@ -34,26 +34,26 @@ describe('visitor runtime configuration', () => {
 
   it('rejects incomplete production config, emulator URLs, and a cross-origin API', () => {
     const production = {
-      VITE_FIREBASE_PROJECT_ID: 'sprout-dev-66f08',
-      VITE_FIREBASE_API_KEY: 'public-web-api-key',
-      VITE_FIREBASE_AUTH_DOMAIN: 'sprout-dev-66f08.firebaseapp.com',
-      VITE_FIREBASE_APP_ID: '1:485412794128:web:natcut',
+      VITE_NATCUT_FIREBASE_PROJECT_ID: 'sprout-dev-66f08',
+      VITE_NATCUT_FIREBASE_API_KEY: 'public-web-api-key',
+      VITE_NATCUT_FIREBASE_AUTH_DOMAIN: 'sprout-dev-66f08.firebaseapp.com',
+      VITE_NATCUT_FIREBASE_APP_ID: '1:485412794128:web:natcut',
     };
-    expect(() => readVisitorConfig({ VITE_FIREBASE_PROJECT_ID: 'sprout-dev-66f08' })).toThrow(
+    expect(() => readVisitorConfig({ VITE_NATCUT_FIREBASE_PROJECT_ID: 'sprout-dev-66f08' })).toThrow(
       'Firebase web configuration',
     );
     expect(() => readVisitorConfig({
       ...production,
-      VITE_FIREBASE_AUTH_EMULATOR_URL: 'http://127.0.0.1:9099',
+      VITE_NATCUT_FIREBASE_AUTH_EMULATOR_URL: 'http://127.0.0.1:9099',
     })).toThrow('must not use the Auth emulator');
     expect(() => readVisitorConfig({
       ...production,
-      VITE_SUBMISSION_API_URL: 'https://example.com',
+      VITE_NATCUT_SUBMISSION_API_URL: 'https://example.com',
     })).toThrow('same-origin /api');
   });
 
   it('rejects any project other than the emulator or owned Sprout project', () => {
-    expect(() => readVisitorConfig({ VITE_FIREBASE_PROJECT_ID: 'someone-else' })).toThrow(
+    expect(() => readVisitorConfig({ VITE_NATCUT_FIREBASE_PROJECT_ID: 'someone-else' })).toThrow(
       'demo-natcut or sprout-dev-66f08',
     );
   });

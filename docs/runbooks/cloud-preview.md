@@ -18,7 +18,7 @@ Never run bare `firebase deploy`, `firebase deploy --only hosting`, or any Fires
 npm run deploy:hosting
 ```
 
-That script expands to `firebase deploy --project sprout-dev-66f08 --only hosting:natcut`.
+The wrapper rejects additional arguments, uses only `firebase.json`, and invokes the explicit `sprout-dev-66f08` / `hosting:natcut` target. The emulator rules live in `firebase.emulators.json` and are absent from the production deployment configuration.
 
 ## Preserved Sprout baseline
 
@@ -33,12 +33,13 @@ Provisioning NatCut did not deploy to or delete any of those resources. Re-run t
 
 ```bash
 firebase hosting:sites:list --project sprout-dev-66f08
+firebase hosting:sites:get natcut --project sprout-dev-66f08
 firebase apps:list WEB --project sprout-dev-66f08
 firebase firestore:databases:list --project sprout-dev-66f08
 curl -sS -o /dev/null -w '%{http_code}\n' https://sprout-dev-66f08.web.app/
 ```
 
-The last command should remain `404` until the owner intentionally deploys Sprout there.
+The NatCut site result must include app ID `1:485412794128:web:ef3ea0d8607992e27b7f95`. The last command should remain `404` until the owner intentionally deploys Sprout there.
 
 ## Build and deploy the API
 
@@ -83,10 +84,10 @@ Fetch the public SDK configuration for the NatCut web app, then inject only thos
 firebase apps:sdkconfig WEB 1:485412794128:web:ef3ea0d8607992e27b7f95 \
   --project sprout-dev-66f08
 
-VITE_FIREBASE_PROJECT_ID=sprout-dev-66f08 \
-VITE_FIREBASE_API_KEY='public Firebase web API key' \
-VITE_FIREBASE_AUTH_DOMAIN=sprout-dev-66f08.firebaseapp.com \
-VITE_FIREBASE_APP_ID=1:485412794128:web:ef3ea0d8607992e27b7f95 \
+VITE_NATCUT_FIREBASE_PROJECT_ID=sprout-dev-66f08 \
+VITE_NATCUT_FIREBASE_API_KEY='public Firebase web API key' \
+VITE_NATCUT_FIREBASE_AUTH_DOMAIN=sprout-dev-66f08.firebaseapp.com \
+VITE_NATCUT_FIREBASE_APP_ID=1:485412794128:web:ef3ea0d8607992e27b7f95 \
 npm run build:hosting
 
 npm run deploy:hosting
@@ -136,9 +137,8 @@ Before event rehearsal, create a Cloud Billing budget for project `sprout-dev-66
 
 - Stop queue consumption: press `Ctrl-C` in the Mac worker terminal. This does not alter queued records.
 - Inspect Cloud Run revisions: `gcloud run revisions list --service=natcut-submission --region=asia-southeast1 --project=sprout-dev-66f08`.
-- Roll Cloud Run back: `gcloud run services update-traffic natcut-submission --region=asia-southeast1 --project=sprout-dev-66f08 --to-revisions=REVISION_NAME=100`.
-- Roll Hosting back from **Firebase Console → Hosting → natcut → Release history**. Do not touch the `sprout-dev-66f08` site.
-- Rotate the status-token secret by adding a new version, redeploying Cloud Run, and testing existing queue status links before disabling the old version.
+- Roll the public API back from **Firebase Console → Hosting → natcut → Release history** because Hosting pins the Cloud Run revision. Do not touch the `sprout-dev-66f08` site. Verify `/api/health` through `https://natcut.web.app` after rollback.
+- Do not rotate `natcut-status-token` while any idempotency binding or public status link remains valid. The current schema does not store a per-submission key version; safe rotation requires a versioned-token migration or expiry and removal of all earlier bindings.
 - Never delete the `natcut` database during incident response. It has deletion protection; export or inspect data first.
 
 Real printer execution remains a separate, explicitly approved milestone.

@@ -6,6 +6,9 @@ export type VerifyBearerToken = (token: string) => Promise<AuthenticatedVisitor>
 export function createFirebaseBearerVerifier(auth: Auth): VerifyBearerToken {
   return async (token) => {
     const decoded = await auth.verifyIdToken(token);
+    if (decoded.firebase.sign_in_provider !== 'anonymous') {
+      throw new Error('NatCut visitor authentication requires an anonymous Firebase identity.');
+    }
     return { uid: decoded.uid };
   };
 }

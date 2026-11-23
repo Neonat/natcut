@@ -35,5 +35,9 @@ describe('Cloud Run configuration', () => {
       ...validEnvironment,
       FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
     })).toThrow('must not use FIRESTORE_EMULATOR_HOST');
+    expect(() => readCloudRunConfig({
+      ...validEnvironment,
+      FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
+    })).toThrow('must not use FIREBASE_AUTH_EMULATOR_HOST');
   });
 });

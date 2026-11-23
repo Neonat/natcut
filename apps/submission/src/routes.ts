@@ -147,6 +147,7 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
   });
 
   app.get<{ Params: { id: string } }>(route('/v1/submissions/:id/status'), async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store');
     const token = request.headers['x-natcut-status-token'];
     if (typeof token !== 'string' || token.length === 0) return reply.code(401).send({ error: 'STATUS_TOKEN_REQUIRED' });
     const submission = await deps.repository.getPublicStatus(request.params.id, hashToken(token));
