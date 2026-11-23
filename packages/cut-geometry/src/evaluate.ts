@@ -9,6 +9,7 @@ import type { BinaryMask, Contour } from '../../../vendor/pixcut-trace/types.ts'
 import { measureGroupCollisions, minimumExpandedEdgeClearanceMm } from './collisions.ts';
 import { combineMasks, traceCutContours } from './contours.ts';
 import { buildDistanceField } from './distance-field.ts';
+import type { DistanceField } from './distance-field.ts';
 import { previewExpandedMask } from './dilate.ts';
 
 const PRINT_DPI = 300;
@@ -61,6 +62,7 @@ export async function evaluateCutGeometry(
   groups: CutGroupMask[],
   marginMm: number,
   profile: PrintProfile,
+  precomputedFields?: DistanceField[],
 ): Promise<GeometryEvaluation> {
   const issues: GeometryIssue[] = [];
   if (groups.length === 0) {
@@ -78,8 +80,14 @@ export async function evaluateCutGeometry(
     });
   }
 
+  const reusableFields = precomputedFields?.length === groups.length && precomputedFields.every(
+    (field, index) =>
+      field.id === groups[index]?.id &&
+      field.width === profile.sheetWidthPx &&
+      field.height === profile.sheetHeightPx,
+  ) ? precomputedFields : null;
   const fields = dimensionsMatch
-    ? groups.map((group) => buildDistanceField(group, profile.alphaThreshold))
+    ? reusableFields ?? groups.map((group) => buildDistanceField(group, profile.alphaThreshold))
     : [];
   for (const field of fields) {
     if (field.foregroundCount === 0) issues.push(emptyIssue(field.id));
