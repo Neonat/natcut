@@ -1,5 +1,7 @@
 .worktrees/
 .superpowers/
+.local/
+.firebase/
 node_modules/
 .vitest/
 *-debug.log

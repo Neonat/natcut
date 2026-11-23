@@ -1,0 +1,24 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file
+      - Dockerfile.submission
+      - --tag
+      - ${_IMAGE}
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - run
+      - --rm
+      - ${_IMAGE}
+      - node
+      - --input-type=module
+      - --eval
+      - await import('./apps/submission/src/cloud-run.ts')
+images:
+  - ${_IMAGE}
+substitutions:
+  _IMAGE: asia-southeast1-docker.pkg.dev/sprout-dev-66f08/natcut/natcut-submission:latest
+options:
+  logging: CLOUD_LOGGING_ONLY

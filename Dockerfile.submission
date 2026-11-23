@@ -25,6 +25,7 @@ COPY packages/domain/package.json packages/domain/package.json
 COPY packages/domain/src packages/domain/src
 COPY packages/render/package.json packages/render/package.json
 COPY packages/render/src packages/render/src
+COPY vendor/pixcut-trace vendor/pixcut-trace
 COPY fixtures/assets fixtures/assets
 
 USER node
