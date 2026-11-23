@@ -4,3 +4,5 @@ node_modules/
 .vitest/
 *-debug.log
 dist/
+test-results/
+playwright-report/

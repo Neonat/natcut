@@ -1,12 +1,12 @@
 # NatCut
 
-NatCut is an open-source-friendly control and workflow project for the Liene PixCut S1. The immediate goal is simple: press a button on a local website and send a reliable print-and-contour-cut job to a PixCut S1 connected to the same Mac by USB, without using Liene Photos.
+NatCut is an open-source-friendly sticker-booth workflow for one event operator, one Mac, and one Liene PixCut S1. Visitors approve a sprite sticker on their phones, submit an immutable design, and refresh a public queue screen while the Mac serializes production.
 
 The longer-term goal is a fast sticker-booth workflow:
 
 `customer capture -> preset/theme -> generated sticker sheet -> preview -> queue -> local USB bridge -> PixCut S1`
 
-Customer-facing features are intentionally deferred until the printer connection is proven reliable.
+The current vertical slice proves the phone-to-cloud-to-Mac queue using Firebase emulators and a simulated printer. Physical printer execution remains intentionally absent.
 
 ## Current state
 
@@ -17,7 +17,60 @@ Customer-facing features are intentionally deferred until the printer connection
 - A read-only protocol check successfully identified model `DHP700`, SKU `DHP700W#EU1`, firmware `1.0.15_0054`, and hardware revision `x05`.
 - At discovery time the printer reported `idle / idle`, no alerts, and no active jobs.
 - NatCut now has a tested read-only protocol core, USB status CLI, localhost API, and operator status page.
+- NatCut also has a mobile editor, dynamic cut-border preview, trusted submission API, Firestore queue, SQLite Mac journal, and deterministic simulated print phases through pickup-ready.
 - No print or cut test has been performed yet, and no sticker sheets are currently loaded.
+
+## Run the queue-first vertical slice
+
+Prerequisites:
+
+- Node.js 22 or newer. Node 24.12 or newer is recommended for the current Firebase packages.
+- Java 21 for the Firestore emulator. On this Mac, `brew install openjdk@21` is sufficient; the project runner sets `JAVA_HOME` without changing shell startup files.
+- Playwright Chromium for browser tests.
+
+Install once:
+
+```bash
+npm install
+npx playwright install chromium
+```
+
+Start the entire local stack:
+
+```bash
+npm run dev
+```
+
+Open `http://127.0.0.1:4174`. The runner uses only Firebase project `demo-natcut` and fixed local ports:
+
+- Visitor app: `4174`
+- Submission API: `8088`
+- Simulated worker control: `8090`
+- Firestore emulator: `8080`
+- Auth emulator: `9099`
+
+To move one submitted design through the simulator manually:
+
+```bash
+curl -X POST http://127.0.0.1:8090/claim
+curl -X POST http://127.0.0.1:8090/start
+```
+
+Tap **Refresh** on the visitor phone between steps. Claiming changes the public state to **You’re next**; the simulator then advances through internal phases and finishes at **Ready for pickup**. These endpoints operate only on the simulated worker and SQLite journal.
+
+Stopping and restarting `npm run dev` resets the in-memory Firebase emulators and creates a fresh temporary SQLite journal. No production Firebase project is contacted.
+
+Run verification independently:
+
+```bash
+npm test
+npm run typecheck
+npm run emulators:test -- --only submission
+npm run emulators:test -- --only worker
+npm run test:e2e
+```
+
+**Safety boundary:** the queue-first stack contains no printer job declaration, upload, print, cut, cancel, or property-mutation implementation. The simulated worker never imports the USB protocol or opens the printer. The existing hardware bridge remains read-only.
 
 ## Run the read-only bridge
 

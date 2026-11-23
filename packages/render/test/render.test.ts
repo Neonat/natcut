@@ -69,6 +69,21 @@ describe('planComposition', () => {
       expect(layer.y + layer.height).toBeLessThanOrEqual(2_100);
     }
   });
+
+  it('brings battling portrait subjects close enough for the overlap-warning fixture', () => {
+    const portrait = CompositionManifestSchema.parse({
+      ...manifest,
+      trainerAssetId: 'trainer/friend-v1',
+      theme: 'battling',
+      cutGroups: [
+        { id: 'trainer', members: ['trainer'] },
+        { id: 'sprite', members: ['sprite'] },
+        { id: 'brand', members: ['branding'] },
+      ],
+    });
+    const plan = planComposition(portrait, DEVFEST_SG_V1);
+    expect(plan.layers.find((layer) => layer.id === 'sprite')?.x).toBe(590);
+  });
 });
 
 describe('asset loading and masks', () => {

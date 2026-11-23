@@ -10,7 +10,9 @@
   ],
   "scripts": {
     "start": "node src/server.mjs",
+    "dev": "node scripts/dev.mjs",
     "test": "npm run test:legacy && npm run test:unit",
+    "test:e2e": "playwright test",
     "test:legacy": "node --test test/protocol.test.mjs test/server.test.mjs test/snapshot.test.mjs test/usb-session.test.mjs",
     "test:unit": "node --test test/workspace-smoke.test.mjs && vitest run --passWithNoTests",
     "emulators:test": "node scripts/emulators-test.mjs",

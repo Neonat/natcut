@@ -1,6 +1,6 @@
 import type { CompositionManifest, PublicStatus } from '@natcut/domain';
 import { getApps, initializeApp, type FirebaseOptions } from 'firebase/app';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import { connectAuthEmulator, getAuth, signInAnonymously } from 'firebase/auth';
 
 export type WarningAcknowledgement = { geometryVersion: string; rasterHash: string };
 export type SubmissionRequest = {
@@ -39,9 +39,10 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return body;
 }
 
-export function createVisitorApi(options: { firebase: FirebaseOptions; submissionApiUrl: string }): VisitorApi {
+export function createVisitorApi(options: { firebase: FirebaseOptions; submissionApiUrl: string; authEmulatorUrl?: string }): VisitorApi {
   const app = getApps()[0] ?? initializeApp(options.firebase);
   const auth = getAuth(app);
+  if (options.authEmulatorUrl) connectAuthEmulator(auth, options.authEmulatorUrl, { disableWarnings: true });
   const identityToken = async () => {
     const user = auth.currentUser ?? (await signInAnonymously(auth)).user;
     return user.getIdToken();

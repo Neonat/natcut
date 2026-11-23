@@ -6,6 +6,7 @@ import {
   manifestHash,
 } from '@natcut/domain';
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import { z } from 'zod';
 import { bearerTokenFromHeader, type VerifyBearerToken } from './auth.ts';
 import {
@@ -35,6 +36,7 @@ export type SubmissionServerDependencies = {
   verifyBearerToken: VerifyBearerToken;
   validateManifest: ValidateManifest;
   now?: () => string;
+  corsOrigin?: boolean | string | RegExp;
 };
 
 function hashToken(token: string): string {
@@ -50,6 +52,7 @@ function statusToken(secret: string, ownerUid: string, eventId: string, idempote
 export function buildSubmissionServer(deps: SubmissionServerDependencies) {
   if (Buffer.byteLength(deps.statusTokenSecret) < 32) throw new Error('statusTokenSecret must be at least 32 bytes');
   const app = Fastify({ logger: false });
+  if (deps.corsOrigin !== undefined) void app.register(cors, { origin: deps.corsOrigin });
   const now = deps.now ?? (() => new Date().toISOString());
 
   app.post('/v1/submissions', async (request, reply) => {

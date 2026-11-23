@@ -58,7 +58,7 @@ describe('JobStore', () => {
   });
 
   it('preserves jobs after closing and reopening the SQLite file', () => {
-    const directory = mkdtempSync(path.join(tmpdir(), 'natcut-job-store-'));
+    const directory = mkdtempSync(path.join(tmpdir(), 'natcut-store-'));
     const databasePath = path.join(directory, 'worker.sqlite');
     const first = new JobStore(databasePath);
     first.insert(job());

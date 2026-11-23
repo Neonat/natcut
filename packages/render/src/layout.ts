@@ -88,7 +88,7 @@ export function planComposition(
         member: 'sprite',
         assetId: manifest.spriteAssetId,
         cutGroupId: cutGroupFor(manifest, 'sprite'),
-        x: 650,
+        x: manifest.theme === 'battling' ? 590 : 650,
         y: 680,
         width: 420,
         height: 420,

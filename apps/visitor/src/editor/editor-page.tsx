@@ -19,6 +19,17 @@ export const fixtureManifest: CompositionManifest = CompositionManifestSchema.pa
   renderVersion: 'fixture-v1',
 });
 
+export const overlapFixtureManifest: CompositionManifest = CompositionManifestSchema.parse({
+  ...fixtureManifest,
+  trainerAssetId: 'trainer/friend-v1',
+  theme: 'battling',
+  cutGroups: [
+    { id: 'trainer', members: ['trainer'] },
+    { id: 'sprite', members: ['sprite'] },
+    { id: 'brand', members: ['branding'] },
+  ],
+});
+
 function requestId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
@@ -29,10 +40,12 @@ export type EditorPageProps = {
   onPreviewRequest?: (manifest: CompositionManifest, immediate: boolean) => void;
   previewReportOverride?: GeometryReport;
   requeuedFrom?: string;
+  initialManifest?: CompositionManifest;
 };
 
 export function EditorPage(props: EditorPageProps) {
-  const [manifest, setManifest] = useState(fixtureManifest);
+  const initialManifest = props.initialManifest ?? fixtureManifest;
+  const [manifest, setManifest] = useState(initialManifest);
   const [custom, setCustom] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +80,7 @@ export function EditorPage(props: EditorPageProps) {
     try {
       const accepted = await props.submitSubmission(request);
       sessionStorage.setItem(`natcut:status:${accepted.submissionId}`, accepted.statusToken);
-      setManifest(fixtureManifest);
+      setManifest(initialManifest);
       const path = `/queue/${accepted.submissionId}#token=${accepted.statusToken}`;
       if (props.onNavigate) props.onNavigate(path);
       else window.location.assign(path);
