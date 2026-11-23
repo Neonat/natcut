@@ -44,7 +44,11 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return body;
 }
 
-export function createVisitorApi(options: { firebase: FirebaseOptions; submissionApiUrl: string; authEmulatorUrl?: string }): VisitorApi {
+export function createVisitorApi(options: {
+  firebase: FirebaseOptions;
+  submissionApiUrl: string;
+  authEmulatorUrl?: string | undefined;
+}): VisitorApi {
   const app = getApps()[0] ?? initializeApp(options.firebase);
   const auth = getAuth(app);
   if (options.authEmulatorUrl) connectAuthEmulator(auth, options.authEmulatorUrl, { disableWarnings: true });

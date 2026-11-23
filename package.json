@@ -19,6 +19,8 @@
     "pretest:e2e": "node scripts/check-node.mjs",
     "start": "node src/server.mjs",
     "dev": "node scripts/dev.mjs",
+    "build:hosting": "npm run build --workspace @natcut/visitor",
+    "deploy:hosting": "firebase deploy --project sprout-dev-66f08 --only hosting:natcut",
     "test": "npm run test:legacy && npm run test:unit",
     "test:e2e": "playwright test",
     "test:legacy": "node --test test/protocol.test.mjs test/server.test.mjs test/snapshot.test.mjs test/usb-session.test.mjs",

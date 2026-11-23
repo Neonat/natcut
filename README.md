@@ -70,6 +70,28 @@ Tap **Refresh** on the visitor phone between steps. Claiming changes the public 
 
 Stopping and restarting `npm run dev` resets the in-memory Firebase emulators and creates a fresh temporary SQLite journal. No production Firebase project is contacted.
 
+## Build the isolated cloud preview
+
+NatCut's public preview uses its own Firebase Hosting target (`natcut`), Cloud Run service (`natcut-submission`), and named Firestore database (`natcut`) inside `sprout-dev-66f08`. Existing Sprout Hosting and databases are not deployment targets.
+
+After creating the separate NatCut Firebase web app, provide its public SDK values and build the visitor bundle:
+
+```bash
+VITE_FIREBASE_PROJECT_ID=sprout-dev-66f08 \
+VITE_FIREBASE_API_KEY='public Firebase web API key' \
+VITE_FIREBASE_AUTH_DOMAIN='sprout-dev-66f08.firebaseapp.com' \
+VITE_FIREBASE_APP_ID='NatCut Firebase web app ID' \
+npm run build:hosting
+```
+
+The production visitor always calls the same-origin `/api` route and never connects to Firebase emulators. Deploy Hosting only with the repository's explicit target command:
+
+```bash
+npm run deploy:hosting
+```
+
+Do not run bare `firebase deploy` in this project. The cloud provisioning and recovery commands are recorded in [`docs/runbooks/cloud-preview.md`](docs/runbooks/cloud-preview.md).
+
 Run verification independently:
 
 ```bash
