@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Complete and ready for execution; implementation deferred by the owner on 2026-11-23
+
 **Goal:** Build a mobile visitor flow that previews a fixture sprite with a live cut border, submits one immutable job to a local Firebase queue, lets a Mac worker claim it into SQLite, and advances it through simulated printing to pickup-ready status.
 
 **Architecture:** Convert the repository into npm workspaces while preserving the existing read-only printer bridge. A React visitor app calls a trusted TypeScript submission service backed by Firebase emulators; shared domain, render, and cut-geometry packages keep manifests and validation consistent. A separate Node worker atomically claims cloud submissions, journals them in SQLite, and uses a simulated printer adapter only—no USB mutation is added in this milestone.

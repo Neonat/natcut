@@ -1,6 +1,6 @@
 # NatCut Booth Platform Design
 
-**Status:** Proposed for implementation
+**Status:** Approved; implementation deferred by the owner
 
 **Date:** 2026-11-23
 
