@@ -8,6 +8,8 @@ import {
 } from '@natcut/domain';
 import type { Firestore } from 'firebase-admin/firestore';
 
+const StoredSubmissionSchema = SubmissionSchema.strip();
+
 export type CreateSubmissionInput = {
   ownerUid: string;
   eventId: string;
@@ -71,7 +73,7 @@ export function createSubmissionRepository(firestore: Firestore): SubmissionRepo
           }
           const existingSnapshot = await transaction.get(submissions.doc(String(binding.submissionId)));
           if (!existingSnapshot.exists) throw new Error('Idempotency binding references a missing submission');
-          return { submission: SubmissionSchema.parse(existingSnapshot.data()), created: false };
+          return { submission: StoredSubmissionSchema.parse(existingSnapshot.data()), created: false };
         }
 
         const counterSnapshot = await transaction.get(counterRef);
@@ -79,7 +81,7 @@ export function createSubmissionRepository(firestore: Firestore): SubmissionRepo
 
         if (input.requeuedFrom) {
           const priorSnapshot = await transaction.get(submissions.doc(input.requeuedFrom));
-          const prior = priorSnapshot.exists ? SubmissionSchema.parse(priorSnapshot.data()) : null;
+          const prior = priorSnapshot.exists ? StoredSubmissionSchema.parse(priorSnapshot.data()) : null;
           if (!prior || prior.ownerUid !== input.ownerUid || prior.publicStatus !== 'cancelled') {
             throw new RequeueForbiddenError();
           }
@@ -87,7 +89,7 @@ export function createSubmissionRepository(firestore: Firestore): SubmissionRepo
 
         const eventSnapshot = await transaction.get(submissions.where('eventId', '==', input.eventId));
         const jobsAhead = eventSnapshot.docs
-          .map((document) => SubmissionSchema.parse(document.data()))
+          .map((document) => StoredSubmissionSchema.parse(document.data()))
           .filter((submission) => isUnfinished(submission.publicStatus)).length;
 
         const submission = SubmissionSchema.parse({
@@ -123,14 +125,14 @@ export function createSubmissionRepository(firestore: Firestore): SubmissionRepo
     async getPublicStatus(id, tokenHash) {
       const snapshot = await submissions.doc(id).get();
       if (!snapshot.exists) return null;
-      const submission = SubmissionSchema.parse(snapshot.data());
+      const submission = StoredSubmissionSchema.parse(snapshot.data());
       if (submission.publicStatusTokenHash !== tokenHash) return null;
       const aheadSnapshot = await submissions
         .where('eventId', '==', submission.eventId)
         .where('queueNumber', '<', submission.queueNumber)
         .get();
       const jobsAhead = aheadSnapshot.docs
-        .map((document) => SubmissionSchema.parse(document.data()))
+        .map((document) => StoredSubmissionSchema.parse(document.data()))
         .filter((candidate) => isUnfinished(candidate.publicStatus)).length;
       return { ...submission, jobsAhead };
     },
@@ -140,7 +142,7 @@ export function createSubmissionRepository(firestore: Firestore): SubmissionRepo
       return firestore.runTransaction(async (transaction) => {
         const snapshot = await transaction.get(ref);
         if (!snapshot.exists) return 'not-found';
-        const submission = SubmissionSchema.parse(snapshot.data());
+        const submission = StoredSubmissionSchema.parse(snapshot.data());
         if (submission.publicStatusTokenHash !== tokenHash) return 'not-found';
         if (submission.publicStatus !== 'joining' && submission.publicStatus !== 'queued') return 'locked';
         transaction.update(ref, { publicStatus: 'cancelled', cancelledAt: now, updatedAt: now });

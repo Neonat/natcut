@@ -4,7 +4,7 @@ const requested = process.argv.includes('--only')
   ? process.argv[process.argv.indexOf('--only') + 1]
   : 'submission';
 
-if (requested !== 'submission') {
+if (requested !== 'submission' && requested !== 'worker') {
   console.error(`Unknown emulator test target: ${requested}`);
   process.exitCode = 2;
 } else {
@@ -15,7 +15,7 @@ if (requested !== 'submission') {
     'demo-natcut',
     '--only',
     'auth,firestore',
-    'npm run test:unit -- --project submission',
+    `npm run test:unit -- --project ${requested}`,
   ];
   const javaHome = process.env.JAVA_HOME ?? '/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home';
   const child = spawn('npx', command, {
