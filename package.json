@@ -4,13 +4,37 @@
   "private": true,
   "description": "Local read-only bridge for the Liene PixCut S1",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "start": "node src/server.mjs",
-    "test": "node --test",
+    "test": "npm run test:legacy && npm run test:unit",
+    "test:legacy": "node --test test/protocol.test.mjs test/server.test.mjs test/snapshot.test.mjs test/usb-session.test.mjs",
+    "test:unit": "node --test test/workspace-smoke.test.mjs && vitest run --passWithNoTests",
+    "typecheck": "npm run typecheck --workspaces --if-present",
     "status": "node bin/status.mjs"
   },
   "dependencies": {
     "usb": "^2.14.0"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^24.10.1",
+    "@vitejs/plugin-react": "^6.3.0",
+    "firebase-tools": "15.37.0",
+    "jsdom": "^27.2.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
   },
   "engines": {
     "node": ">=22"

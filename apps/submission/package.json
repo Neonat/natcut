@@ -1,0 +1,19 @@
+{
+  "name": "@natcut/submission",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@natcut/cut-geometry": "*",
+    "@natcut/domain": "*",
+    "@natcut/render": "*",
+    "fastify": "^5.12.8",
+    "firebase-admin": "14.5.1"
+  }
+}

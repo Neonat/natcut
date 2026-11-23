@@ -1,0 +1,12 @@
+{
+  "name": "@natcut/render",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@natcut/domain": "*",
+    "sharp": "^0.35.5"
+  }
+}

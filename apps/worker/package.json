@@ -1,0 +1,20 @@
+{
+  "name": "@natcut/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@natcut/domain": "*",
+    "better-sqlite3": "^13.2.0",
+    "firebase-admin": "14.5.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
+  }
+}
