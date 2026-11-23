@@ -1,5 +1,6 @@
 import type { AssetCatalog, RgbaAsset } from './assets.ts';
 import { assertPlanWithinSheet, type PlannedComposition, type PlannedLayer } from './layout.ts';
+import { nearestSourceCoordinate } from './sampling.ts';
 
 export type CutGroupMask = {
   id: string;
@@ -19,9 +20,9 @@ function requireAsset(assets: AssetCatalog, layer: PlannedLayer): RgbaAsset {
 
 function compositeLayerAlpha(mask: Uint8Array, sheetWidth: number, layer: PlannedLayer, asset: RgbaAsset) {
   for (let targetY = 0; targetY < layer.height; targetY++) {
-    const sourceY = Math.min(asset.height - 1, Math.floor(((targetY + 0.5) * asset.height) / layer.height));
+    const sourceY = nearestSourceCoordinate(targetY, layer.height, asset.height);
     for (let targetX = 0; targetX < layer.width; targetX++) {
-      const sourceX = Math.min(asset.width - 1, Math.floor(((targetX + 0.5) * asset.width) / layer.width));
+      const sourceX = nearestSourceCoordinate(targetX, layer.width, asset.width);
       const sourceAlpha = asset.rgba[(sourceY * asset.width + sourceX) * 4 + 3] ?? 0;
       if (sourceAlpha === 0) continue;
       const destination = (layer.y + targetY) * sheetWidth + layer.x + targetX;

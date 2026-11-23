@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { CloudQueue } from './cloud-queue.ts';
 import type { JobStore, LocalJobState, LocalPrintJob } from './job-store.ts';
 import type { PhysicalExecutor } from './simulated-printer.ts';
@@ -5,6 +6,8 @@ import type { PhysicalExecutor } from './simulated-printer.ts';
 export type WorkerResult =
   | { kind: 'idle' }
   | { kind: 'completed'; submissionId: string }
+  | { kind: 'busy'; submissionId: string }
+  | { kind: 'waiting_for_cloud'; submissionId: string }
   | { kind: 'needs_reconciliation'; submissionId: string }
   | { kind: 'failed'; submissionId: string; error: string };
 
@@ -42,21 +45,50 @@ function publicStatusFor(state: LocalJobState): 'next' | 'printing' | 'ready' {
 }
 
 export async function runWorkerOnce(deps: WorkerDependencies): Promise<WorkerResult> {
+  const prepared = await prepareNextWorkerJob(deps);
+  if (prepared.kind !== 'prepared') return prepared;
+  return runLocalJob(deps, prepared.job);
+}
+
+export async function prepareNextWorkerJob(
+  deps: Pick<WorkerDependencies, 'workerId' | 'cloud' | 'store'>,
+): Promise<{ kind: 'prepared'; job: LocalPrintJob } | WorkerResult> {
   await flushPublicStatusOutbox(deps.store, deps.cloud);
-  const claim = await deps.cloud.recoverClaim(deps.workerId)
-    ?? await deps.cloud.claimNextSubmission(deps.workerId);
+  let claim = await deps.cloud.recoverClaim(deps.workerId);
+  if (claim) {
+    const safeToResume = deps.store.ensureClaimed(claim);
+    const recovered = deps.store.getBySubmissionId(claim.submission.id)!;
+    if (!safeToResume) {
+      return { kind: 'needs_reconciliation', submissionId: recovered.submissionId };
+    }
+    if (recovered.state === 'ready') {
+      if (claim.submission.publicStatus === 'next') {
+        deps.store.stagePublicStatus(recovered.submissionId, 'printing', recovered.stateChangedAt);
+      }
+      deps.store.stagePublicStatus(recovered.submissionId, 'ready', recovered.stateChangedAt);
+      await flushPublicStatusOutbox(deps.store, deps.cloud);
+      const stillPending = deps.store.listPendingPublicStatuses()
+        .some((pending) => pending.submissionId === recovered.submissionId);
+      if (stillPending) return { kind: 'waiting_for_cloud', submissionId: recovered.submissionId };
+      claim = null;
+    } else if (!safelyExecutableStates.has(recovered.state)) {
+      return { kind: 'needs_reconciliation', submissionId: recovered.submissionId };
+    } else {
+      return { kind: 'prepared', job: recovered };
+    }
+  }
+
+  claim ??= await deps.cloud.claimNextSubmission(deps.workerId);
   if (!claim) return { kind: 'idle' };
-  deps.store.ensureClaimed(claim);
+  const safeToResume = deps.store.ensureClaimed(claim);
   const job = deps.store.getBySubmissionId(claim.submission.id)!;
-  if (job.state === 'ready') {
-    deps.store.stagePublicStatus(job.submissionId, 'ready', job.stateChangedAt);
-    await flushPublicStatusOutbox(deps.store, deps.cloud);
-    return { kind: 'completed', submissionId: job.submissionId };
+  if (!safeToResume) {
+    return { kind: 'needs_reconciliation', submissionId: job.submissionId };
   }
   if (!safelyExecutableStates.has(job.state)) {
     return { kind: 'needs_reconciliation', submissionId: job.submissionId };
   }
-  return runLocalJob(deps, job);
+  return { kind: 'prepared', job };
 }
 
 export async function runLocalJob(
@@ -65,24 +97,31 @@ export async function runLocalJob(
 ): Promise<WorkerResult> {
   const now = deps.now ?? (() => new Date().toISOString());
   let staged = publicStatusFor(job.state);
+  const executionToken = randomUUID();
+  if (!deps.store.tryAcquireExecutionGuard(executionToken, process.pid)) {
+    return { kind: 'busy', submissionId: job.submissionId };
+  }
 
   try {
-    await deps.executor.execute(job, async (state, changedAt) => {
-      deps.store.transition(job.submissionId, state, changedAt);
-      const nextPublic = publicStatusFor(state);
-      if (nextPublic !== staged) {
-        staged = nextPublic;
-        if (nextPublic !== 'next') {
-          deps.store.stagePublicStatus(job.submissionId, nextPublic, changedAt);
+    try {
+      await deps.executor.execute(job, async (state, changedAt) => {
+        const nextPublic = publicStatusFor(state);
+        if (nextPublic !== staged && nextPublic !== 'next') {
+          deps.store.transitionAndStagePublicStatus(job.submissionId, state, changedAt, nextPublic);
+          staged = nextPublic;
           await flushPublicStatusOutbox(deps.store, deps.cloud);
+        } else {
+          deps.store.transition(job.submissionId, state, changedAt);
         }
-      }
-    });
-    return { kind: 'completed', submissionId: job.submissionId };
-  } catch (cause) {
-    const error = cause instanceof Error ? cause.message : String(cause);
-    deps.store.transition(job.submissionId, 'failed', now(), error);
-    return { kind: 'failed', submissionId: job.submissionId, error };
+      });
+      return { kind: 'completed', submissionId: job.submissionId };
+    } catch (cause) {
+      const error = cause instanceof Error ? cause.message : String(cause);
+      deps.store.transition(job.submissionId, 'failed', now(), error);
+      return { kind: 'failed', submissionId: job.submissionId, error };
+    }
+  } finally {
+    deps.store.releaseExecutionGuard(executionToken);
   }
 }
 

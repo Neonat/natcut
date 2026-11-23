@@ -33,8 +33,17 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
   const pullHandlers = usePullToRefresh(() => { void refresh(); });
 
   const leave = async () => {
-    await props.api.leave(props.submissionId, props.statusToken);
-    setStatus((current) => current ? { ...current, publicStatus: 'cancelled', canLeaveQueue: false, jobsAhead: 0 } : current);
+    setError(null);
+    try {
+      await props.api.leave(props.submissionId, props.statusToken);
+      setStatus((current) => current ? { ...current, publicStatus: 'cancelled', canLeaveQueue: false, jobsAhead: 0 } : current);
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === 'QUEUE_LEAVE_LOCKED') {
+        await refresh();
+        return;
+      }
+      setError(cause instanceof Error ? cause.message : 'Could not leave the queue. Try again.');
+    }
   };
 
   const rejoin = () => {

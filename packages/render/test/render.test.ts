@@ -132,9 +132,14 @@ describe('renderServerRaster', () => {
   });
 
   it('uses the same alpha resampling for the trusted raster and cut masks', async () => {
+    const loaded = await Promise.all([
+      loadRgbaAsset(path.join(repoRoot, 'fixtures/assets/sprite-fixture.png'), 'sprite/monstera-v1'),
+      loadRgbaAsset(path.join(repoRoot, 'fixtures/assets/sprout-wordmark.png'), 'branding/logo'),
+    ]);
+    const realAssets: AssetCatalog = new Map(loaded.map((asset) => [asset.id, asset]));
     const plan = planComposition(manifest, DEVFEST_SG_V1);
-    const raster = await renderServerRaster(plan, assets);
-    const masks = renderCutGroupMasks(plan, assets);
+    const raster = await renderServerRaster(plan, realAssets);
+    const masks = renderCutGroupMasks(plan, realAssets);
     let mismatchCount = 0;
     for (let pixel = 0; pixel < plan.width * plan.height; pixel++) {
       const rasterForeground = raster.rgba[pixel * 4 + 3]! >= DEVFEST_SG_V1.alphaThreshold;

@@ -13,9 +13,11 @@ if (projectId !== 'demo-natcut') {
 const javaHome = process.env.JAVA_HOME ?? '/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home';
 const stateDirectory = mkdtempSync(path.join(tmpdir(), 'natcut-dev-'));
 const children = new Set();
+const processGroups = new Set();
 let stopping = false;
 
 function launch(command, args, env = {}) {
+  if (stopping) throw new Error('Development runtime is stopping.');
   const child = spawn(command, args, {
     stdio: 'inherit',
     shell: false,
@@ -23,6 +25,7 @@ function launch(command, args, env = {}) {
     env: { ...process.env, ...env },
   });
   children.add(child);
+  processGroups.add(child.pid);
   child.once('exit', (code, signal) => {
     children.delete(child);
     if (!stopping) {
@@ -52,8 +55,11 @@ function waitForPort(port, timeoutMs = 60_000) {
 function stop(code = 0) {
   if (stopping) return;
   stopping = true;
-  for (const child of children) {
-    try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
+  for (const processGroup of processGroups) {
+    try { process.kill(-processGroup, 'SIGTERM'); } catch {
+      const child = [...children].find((candidate) => candidate.pid === processGroup);
+      child?.kill('SIGTERM');
+    }
   }
   setTimeout(() => process.exit(code), 1_500);
 }

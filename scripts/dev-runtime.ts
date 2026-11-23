@@ -10,6 +10,7 @@ import {
   createFirestoreCloudQueue,
   flushPublicStatusOutbox,
   JobStore,
+  prepareNextWorkerJob,
   recoverInterruptedJobs,
   runLocalJob,
   SimulatedPrinter,
@@ -65,10 +66,13 @@ const control = createServer(async (request, response) => {
     if (request.method === 'POST' && request.url === '/claim') {
       if (execution) return send(response, 409, { error: 'SIMULATOR_BUSY' });
       if (currentSubmissionId) return send(response, 409, { error: 'JOB_ALREADY_CLAIMED' });
-      const claim = await cloud.recoverClaim('dev-mac') ?? await cloud.claimNextSubmission('dev-mac');
-      if (!claim) return send(response, 404, { error: 'QUEUE_EMPTY' });
-      store.ensureClaimed(claim);
-      currentSubmissionId = claim.submission.id;
+      const prepared = await prepareNextWorkerJob({ workerId: 'dev-mac', cloud, store });
+      if (prepared.kind === 'idle') return send(response, 404, { error: 'QUEUE_EMPTY' });
+      if (prepared.kind === 'waiting_for_cloud') return send(response, 503, { error: 'STATUS_SYNC_PENDING' });
+      if (prepared.kind !== 'prepared') {
+        return send(response, 409, { error: 'JOB_NEEDS_RECONCILIATION', submissionId: prepared.submissionId });
+      }
+      currentSubmissionId = prepared.job.submissionId;
       return send(response, 200, { submissionId: currentSubmissionId, publicStatus: 'next' });
     }
     if (request.method === 'POST' && request.url === '/start') {

@@ -105,6 +105,11 @@ export class JobStore {
         updatedAt TEXT NOT NULL,
         UNIQUE(submissionId, status)
       );
+      CREATE TABLE IF NOT EXISTS execution_guard (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        ownerToken TEXT NOT NULL,
+        processId INTEGER NOT NULL
+      );
     `);
   }
 
@@ -138,15 +143,36 @@ export class JobStore {
     });
   }
 
-  ensureClaimed(claim: ClaimedSubmission) {
+  ensureClaimed(claim: ClaimedSubmission): boolean {
     const existing = this.getBySubmissionId(claim.submission.id);
     if (!existing) {
       this.insertClaimed(claim);
-      return;
+      if (claim.submission.publicStatus !== 'next') {
+        this.transition(
+          claim.submission.id,
+          'needs_reconciliation',
+          claim.claimedAt,
+          `Local journal was missing while cloud status was ${claim.submission.publicStatus}.`,
+        );
+        return false;
+      }
+      return true;
     }
     if (existing.manifestHash !== claim.submission.manifestHash || existing.queueNumber !== claim.submission.queueNumber) {
       throw new Error(`Cloud lease for ${claim.submission.id} does not match the local journal`);
     }
+    if (claim.submission.publicStatus === 'printing' && ![
+      'declaring', 'uploading_cut', 'uploading_image', 'printing', 'cutting', 'ready', 'needs_reconciliation',
+    ].includes(existing.state)) {
+      this.transition(
+        existing.submissionId,
+        'needs_reconciliation',
+        claim.claimedAt,
+        'Cloud status is ahead of the local journal.',
+      );
+      return false;
+    }
+    return true;
   }
 
   transition(submissionId: string, state: LocalJobState, stateChangedAt: string, lastError: string | null = null) {
@@ -182,6 +208,48 @@ export class JobStore {
 
   clearPendingPublicStatus(id: number) {
     this.database.prepare('DELETE FROM public_status_outbox WHERE id = ?').run(id);
+  }
+
+  transitionAndStagePublicStatus(
+    submissionId: string,
+    state: LocalJobState,
+    stateChangedAt: string,
+    status: 'printing' | 'ready',
+  ) {
+    this.database.transaction(() => {
+      this.transition(submissionId, state, stateChangedAt);
+      this.stagePublicStatus(submissionId, status, stateChangedAt);
+    })();
+  }
+
+  tryAcquireExecutionGuard(ownerToken: string, processId: number): boolean {
+    return this.database.transaction(() => {
+      const existing = this.database.prepare(
+        'SELECT ownerToken, processId FROM execution_guard WHERE singleton = 1',
+      ).get() as { ownerToken: string; processId: number } | undefined;
+      if (existing) {
+        let alive = existing.processId === processId;
+        if (!alive) {
+          try {
+            process.kill(existing.processId, 0);
+            alive = true;
+          } catch (cause) {
+            alive = (cause as NodeJS.ErrnoException).code !== 'ESRCH';
+          }
+        }
+        if (alive) return false;
+        this.database.prepare('DELETE FROM execution_guard WHERE singleton = 1 AND ownerToken = ?')
+          .run(existing.ownerToken);
+      }
+      this.database.prepare(
+        'INSERT INTO execution_guard (singleton, ownerToken, processId) VALUES (1, ?, ?)',
+      ).run(ownerToken, processId);
+      return true;
+    })();
+  }
+
+  releaseExecutionGuard(ownerToken: string) {
+    this.database.prepare('DELETE FROM execution_guard WHERE singleton = 1 AND ownerToken = ?').run(ownerToken);
   }
 
   close() {

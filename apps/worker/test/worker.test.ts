@@ -117,6 +117,86 @@ describe('simulated worker', () => {
     store.close();
   });
 
+  it('fences overlapping invocations that recover the same worker lease', async () => {
+    const claim = claimed();
+    const cloud: CloudQueue = {
+      recoverClaim: vi.fn().mockResolvedValue(claim),
+      claimNextSubmission: vi.fn(),
+      updatePublicStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const store = new JobStore(':memory:');
+    let releaseExecution!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseExecution = resolve; });
+    const executor = { execute: vi.fn(async () => blocked) };
+
+    const first = runWorkerOnce({ workerId: 'mac-1', cloud, store, executor });
+    await vi.waitFor(() => expect(executor.execute).toHaveBeenCalledTimes(1));
+    const second = await runWorkerOnce({ workerId: 'mac-1', cloud, store, executor });
+    expect(second).toEqual({ kind: 'busy', submissionId: 'submission-1' });
+    releaseExecution();
+    await expect(first).resolves.toEqual({ kind: 'completed', submissionId: 'submission-1' });
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    store.close();
+  });
+
+  it('does not recreate and execute a missing local journal after cloud printing began', async () => {
+    const claim = claimed();
+    claim.submission.publicStatus = 'printing';
+    const cloud: CloudQueue = {
+      recoverClaim: vi.fn().mockResolvedValue(claim),
+      claimNextSubmission: vi.fn(),
+      updatePublicStatus: vi.fn(),
+    };
+    const store = new JobStore(':memory:');
+    const executor = { execute: vi.fn() };
+    const result = await runWorkerOnce({ workerId: 'mac-1', cloud, store, executor });
+    expect(result).toEqual({ kind: 'needs_reconciliation', submissionId: 'submission-1' });
+    expect(store.getBySubmissionId('submission-1')?.state).toBe('needs_reconciliation');
+    expect(executor.execute).not.toHaveBeenCalled();
+    store.close();
+  });
+
+  it('publishes a recovered ready journal and releases it without re-executing', async () => {
+    const claim = claimed();
+    const cloud: CloudQueue = {
+      recoverClaim: vi.fn().mockResolvedValueOnce(claim).mockResolvedValue(null),
+      claimNextSubmission: vi.fn().mockResolvedValue(null),
+      updatePublicStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const store = new JobStore(':memory:');
+    store.insertClaimed(claim);
+    store.transition('submission-1', 'ready', '2026-11-23T12:00:10.000Z');
+    const executor = { execute: vi.fn() };
+    const result = await runWorkerOnce({ workerId: 'mac-1', cloud, store, executor });
+    expect(result).toEqual({ kind: 'idle' });
+    expect(cloud.updatePublicStatus).toHaveBeenNthCalledWith(
+      1, 'submission-1', 'printing', '2026-11-23T12:00:10.000Z',
+    );
+    expect(cloud.updatePublicStatus).toHaveBeenNthCalledWith(
+      2, 'submission-1', 'ready', '2026-11-23T12:00:10.000Z',
+    );
+    expect(store.listPendingPublicStatuses()).toEqual([]);
+    expect(executor.execute).not.toHaveBeenCalled();
+    store.close();
+  });
+
+  it('waits for cloud recovery instead of pinning a recovered ready job for execution', async () => {
+    const claim = claimed();
+    const cloud: CloudQueue = {
+      recoverClaim: vi.fn().mockResolvedValue(claim),
+      claimNextSubmission: vi.fn(),
+      updatePublicStatus: vi.fn().mockRejectedValue(new Error('offline')),
+    };
+    const store = new JobStore(':memory:');
+    store.insertClaimed(claim);
+    store.transition('submission-1', 'ready', '2026-11-23T12:00:10.000Z');
+    const executor = { execute: vi.fn() };
+    const result = await runWorkerOnce({ workerId: 'mac-1', cloud, store, executor });
+    expect(result).toEqual({ kind: 'waiting_for_cloud', submissionId: 'submission-1' });
+    expect(executor.execute).not.toHaveBeenCalled();
+    store.close();
+  });
+
   it('retains completed local state and queues monotonic cloud updates during an outage', async () => {
     const claim = claimed();
     const updatePublicStatus = vi.fn().mockRejectedValue(new Error('offline'));

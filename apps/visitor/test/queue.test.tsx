@@ -68,6 +68,26 @@ describe('queue page', () => {
     expect(onNavigate).toHaveBeenCalledWith('/edit?requeuedFrom=submission-1');
   });
 
+  it('refreshes into the locked state when the worker wins the leave race', async () => {
+    const visitorApi = api('queued');
+    vi.mocked(visitorApi.leave).mockRejectedValueOnce(new Error('QUEUE_LEAVE_LOCKED'));
+    vi.mocked(visitorApi.getStatus)
+      .mockResolvedValueOnce(status('queued'))
+      .mockResolvedValueOnce(status('next'));
+    render(<QueuePage submissionId="submission-1" statusToken="token" api={visitorApi} />);
+    fireEvent.click(await screen.findByRole('button', { name: /leave queue/i }));
+    expect(await screen.findByRole('heading', { name: /you’re next/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /leave queue/i })).toHaveProperty('disabled', true);
+  });
+
+  it('surfaces a connectivity error when leaving fails', async () => {
+    const visitorApi = api('queued');
+    vi.mocked(visitorApi.leave).mockRejectedValueOnce(new Error('Network unavailable'));
+    render(<QueuePage submissionId="submission-1" statusToken="token" api={visitorApi} />);
+    fireEvent.click(await screen.findByRole('button', { name: /leave queue/i }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Network unavailable');
+  });
+
   it.each([
     ['printing', /your sticker is being made/i],
     ['ready', /ready for pickup/i],
