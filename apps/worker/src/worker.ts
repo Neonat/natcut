@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { CloudQueue } from './cloud-queue.ts';
-import type { JobStore, LocalJobState, LocalPrintJob } from './job-store.ts';
+import { safelyExecutableStates, type JobStore, type LocalJobState, type LocalPrintJob } from './job-store.ts';
 import type { PhysicalExecutor } from './simulated-printer.ts';
 
 export type WorkerResult =
@@ -18,10 +18,6 @@ export type WorkerDependencies = {
   executor: PhysicalExecutor;
   now?: () => string;
 };
-
-const safelyExecutableStates = new Set<LocalJobState>([
-  'claimed', 'rendering', 'validating', 'ready_to_declare',
-]);
 
 class ExecutionFenceError extends Error {
   constructor(readonly outcome: 'waiting_for_cloud' | 'needs_reconciliation') {

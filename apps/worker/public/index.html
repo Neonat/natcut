@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Simulator desk · Sprout</title>
+  <link rel="stylesheet" href="/desk.css">
+  <script type="module" src="/desk.js"></script>
+</head>
+<body>
+  <main>
+    <header><span class="brand">sprout</span><span>Booth rehearsal</span></header>
+    <h1>Simulator desk</h1>
+    <p>Run a simulated ticket through pickup. Refresh to see the latest worker phase.</p>
+    <div class="actions">
+      <button id="claim" disabled>Claim next</button>
+      <button id="start" disabled>Start simulation</button>
+      <button id="refresh">Refresh</button>
+    </div>
+    <p id="message" role="status" aria-live="polite"></p>
+    <section aria-labelledby="queue-title">
+      <h2 id="queue-title">Queue</h2>
+      <div class="table-wrap">
+        <table><thead><tr><th>Ticket</th><th>Visitor status</th><th>Worker phase</th><th>Pickup</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p id="empty" hidden>No active tickets.</p>
+      <nav aria-label="Queue pages">
+        <button id="first" hidden>First page</button>
+        <button id="queued" hidden>Next queued tickets</button>
+        <button id="ready" hidden>Next ready tickets</button>
+      </nav>
+    </section>
+  </main>
+</body>
+</html>

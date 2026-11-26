@@ -4,19 +4,15 @@ import { randomUUID } from 'node:crypto';
 import { DEVFEST_SG_V1 } from '@natcut/domain';
 import type { ClaimedSubmission } from './cloud-queue.ts';
 
-export type LocalJobState =
-  | 'claimed'
-  | 'rendering'
-  | 'validating'
-  | 'ready_to_declare'
-  | 'declaring'
-  | 'uploading_cut'
-  | 'uploading_image'
-  | 'printing'
-  | 'cutting'
-  | 'ready'
-  | 'failed'
-  | 'needs_reconciliation';
+export const localJobStates = [
+  'claimed', 'rendering', 'validating', 'ready_to_declare', 'declaring', 'uploading_cut',
+  'uploading_image', 'printing', 'cutting', 'ready', 'failed', 'needs_reconciliation',
+] as const;
+export type LocalJobState = (typeof localJobStates)[number];
+
+export const safelyExecutableStates: ReadonlySet<LocalJobState> = new Set([
+  'claimed', 'rendering', 'validating', 'ready_to_declare',
+]);
 
 export type UploadPhase = 'none' | 'cut' | 'image' | 'complete';
 
@@ -199,6 +195,11 @@ export class JobStore {
         throw new Error(`Cloud lease for ${claim.submission.id} does not match the local journal`);
       }
       if (claim.submission.publicStatus === 'printing' && existing.state !== 'needs_reconciliation') {
+        if (safelyExecutableStates.has(existing.state)) {
+          this.transition(existing.submissionId, 'needs_reconciliation', claim.claimedAt,
+            'Cloud execution began before the local execution phase was recorded.');
+          return false;
+        }
         const localExecutionToken = this.getOrCreateExecutionToken(existing.submissionId);
         if (!claim.executionToken || claim.executionToken !== localExecutionToken) {
           this.transition(

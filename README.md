@@ -17,7 +17,7 @@ The current vertical slice proves the phone-to-cloud-to-Mac queue using Firebase
 - A read-only protocol check successfully identified model `DHP700`, SKU `DHP700W#EU1`, firmware `1.0.15_0054`, and hardware revision `x05`.
 - At discovery time the printer reported `idle / idle`, no alerts, and no active jobs.
 - NatCut now has a tested read-only protocol core, USB status CLI, localhost API, and operator status page.
-- NatCut also has a mobile editor, dynamic cut-border preview, trusted submission API, Firestore queue, SQLite Mac journal, and deterministic simulated print phases through pickup-ready.
+- NatCut also has a mobile editor, dynamic cut-border preview, trusted submission API, Firestore queue, SQLite Mac journal, and a Mac simulator desk for running tickets through pickup.
 - No print or cut test has been performed yet, and no sticker sheets are currently loaded.
 
 ## Run the queue-first vertical slice
@@ -59,11 +59,15 @@ Open `http://127.0.0.1:4174`. The runner uses only Firebase project `demo-natcut
 - Firestore emulator: `8080`
 - Auth emulator: `9099`
 
-To move one submitted design through the simulator manually:
+Open the [simulator desk](http://127.0.0.1:8090) on the Mac. Choose **Claim next**, then **Start simulation**. Refresh the desk to see the worker phase. Once the ticket is ready, choose **Mark collected** on its row. The visitor can refresh their ticket after each action. The [booth rehearsal runbook](docs/runbooks/booth-rehearsal.md) covers two visitors and worker recovery.
+
+For terminal control, obtain the current desk session and use its capability on each command. Starting a new worker rotates the capability.
 
 ```bash
-curl -X POST http://127.0.0.1:8090/claim
-curl -X POST http://127.0.0.1:8090/start
+desk_url=http://127.0.0.1:8090
+desk_cap=$(curl -fsS "$desk_url/session" | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).capability')
+curl -fsS -X POST -H "X-NatCut-Control: $desk_cap" -H 'Content-Type: application/json' "$desk_url/claim"
+curl -fsS -X POST -H "X-NatCut-Control: $desk_cap" -H 'Content-Type: application/json' "$desk_url/start"
 ```
 
 Tap **Refresh** on the visitor screen between steps. Claiming changes the public state to **You’re next**. The simulator then advances to **Ready for pickup** and the ticket explains that the rehearsal produced no physical sticker.

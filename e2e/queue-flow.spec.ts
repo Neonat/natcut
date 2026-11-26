@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-const controlUrl = 'http://127.0.0.1:8090';
+import { command } from './operator-client.ts';
 
 test('submits an acknowledged design and reaches pickup-ready through the simulator', async ({ page, request }) => {
   await page.goto('/edit?fixture=overlap');
@@ -15,12 +15,12 @@ test('submits an acknowledged design and reaches pickup-ready through the simula
   await expect(page.getByRole('slider')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'In the print queue' })).toBeVisible();
 
-  const claim = await request.post(`${controlUrl}/claim`);
+  const claim = await command(request, 'claim');
   expect(claim.ok()).toBeTruthy();
   await page.getByRole('button', { name: 'Refresh' }).click();
   await expect(page.getByRole('heading', { name: 'You’re next' })).toBeVisible();
 
-  const start = await request.post(`${controlUrl}/start`);
+  const start = await command(request, 'start');
   expect(start.status()).toBe(202);
   await expect.poll(async () => {
     await page.getByRole('button', { name: 'Refresh' }).click();
