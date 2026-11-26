@@ -5,6 +5,7 @@ import {
   IdempotencyConflictError,
   RequeueForbiddenError,
   buildSubmissionServer,
+  createTrustedManifestValidator,
   type CreateSubmissionInput,
   type SubmissionRepository,
 } from '../src/index.ts';
@@ -142,6 +143,39 @@ describe('submission routes', () => {
       },
       now: () => '2026-11-23T12:00:00.000Z',
     });
+  });
+
+  it('accepts packaged sprites and rejects unsupported versions, roles and catalog combinations before writing tickets', async () => {
+    const index = (await import('../../../packages/render/catalog/index.json', { with: { type: 'json' } })).default;
+    const selected = { ...manifest, renderVersion: 'catalog-v1', spriteAssetId: index.sprites[1]!.id };
+    const server = buildSubmissionServer({
+      eventId: 'devfest-sg', statusTokenSecret: 'test-secret-at-least-32-bytes-long', repository,
+      verifyBearerToken: async () => ({ uid: 'visitor' }),
+      validateManifest: createTrustedManifestValidator(),
+    });
+    const post = (recipe: object) => server.inject({
+      method: 'POST', url: '/v1/submissions', headers: { authorization: 'Bearer visitor' },
+      payload: { idempotencyKey: 'submission-' + repository.sequence, manifest: recipe },
+    });
+    try {
+      expect((await post(selected)).statusCode).toBe(201);
+      for (const recipe of [
+        { ...selected, renderVersion: 'unknown' },
+        { ...selected, spriteAssetId: 'branding/logo' },
+        { ...selected, spriteAssetId: 'sprite/unknown' },
+        { ...selected, spriteAssetId: 'sprite/monstera-v1' },
+        { ...selected, theme: 'hugging' },
+        { ...selected, brandingVariant: 'logo-and-species' },
+        { ...selected, cutGroups: [{ id: 'joined', members: ['sprite', 'branding'] }] },
+        { ...manifest, spriteAssetId: 'branding/logo' },
+        { ...manifest, trainerAssetId: 'sprite/monstera-v1', cutGroups: [{ id: 'all', members: ['sprite', 'branding', 'trainer'] }] },
+      ]) {
+        expect((await post(recipe)).statusCode).toBe(422);
+      }
+      expect(repository.sequence).toBe(1);
+    } finally {
+      await server.close();
+    }
   });
 
   it('reports service health without touching the repository', async () => {

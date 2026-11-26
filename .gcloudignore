@@ -41,10 +41,12 @@ packages/render/*
 !packages/render/src/
 !packages/render/src/**
 
-!fixtures/
-fixtures/*
-!fixtures/assets/
-!fixtures/assets/**
+!packages/render/catalog/
+packages/render/catalog/*
+!packages/render/catalog/index.json
+!packages/render/catalog/artwork/
+packages/render/catalog/artwork/*
+!packages/render/catalog/artwork/*.png
 
 !vendor/
 vendor/*

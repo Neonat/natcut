@@ -26,7 +26,8 @@ COPY packages/domain/src packages/domain/src
 COPY packages/render/package.json packages/render/package.json
 COPY packages/render/src packages/render/src
 COPY vendor/pixcut-trace vendor/pixcut-trace
-COPY fixtures/assets fixtures/assets
+COPY packages/render/catalog/index.json packages/render/catalog/index.json
+COPY packages/render/catalog/artwork/*.png packages/render/catalog/artwork/
 
 USER node
 EXPOSE 8080

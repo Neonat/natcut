@@ -6,6 +6,7 @@ import {
   type PrintProfile,
 } from '@natcut/domain';
 import {
+  loadPackagedAssets,
   planComposition,
   renderCutGroupMasks,
   renderServerRaster,
@@ -15,11 +16,12 @@ import {
 export type ValidateManifest = (manifest: CompositionManifest) => Promise<GeometryReport>;
 
 export function createTrustedManifestValidator(
-  assets: AssetCatalog,
+  source: AssetCatalog | typeof loadPackagedAssets = loadPackagedAssets,
   profile: PrintProfile = DEVFEST_SG_V1,
 ): ValidateManifest {
   return async (manifest) => {
     const plan = planComposition(manifest, profile);
+    const assets = typeof source === 'function' ? await source(plan) : source;
     await renderServerRaster(plan, assets);
     const masks = renderCutGroupMasks(plan, assets);
     return (await evaluateCutGeometry(masks, manifest.cutMarginMm, profile)).report;

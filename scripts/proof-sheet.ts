@@ -1,40 +1,27 @@
 import { createHash } from 'node:crypto';
-import { access, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { access, readFile, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 import sharp from 'sharp';
 import {
   CompositionManifestSchema,
   DEVFEST_SG_V1,
   manifestHash,
+  type CompositionManifest,
 } from '@natcut/domain';
 import { evaluateCutGeometry } from '@natcut/cut-geometry';
 import {
-  loadRgbaAsset,
+  loadPackagedAssets,
+  legacyManifest,
   planComposition,
   renderCutGroupMasks,
   renderServerRaster,
-  type AssetCatalog,
 } from '@natcut/render';
 import type { Contour, Point } from '../vendor/pixcut-trace/types.ts';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const profile = DEVFEST_SG_V1;
 const padding = Object.freeze({ left: 8, right: 8, top: 14, bottom: 14 });
-
-const fixtureManifest = CompositionManifestSchema.parse({
-  schemaVersion: 1,
-  spriteAssetId: 'sprite/monstera-v1',
-  trainerAssetId: null,
-  theme: 'default',
-  brandingVariant: 'logo',
-  cutGroups: [
-    { id: 'main', members: ['sprite'] },
-    { id: 'brand', members: ['branding'] },
-  ],
-  cutMarginMm: 1.5,
-  renderVersion: 'fixture-v1',
-});
 
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
@@ -82,7 +69,7 @@ async function destinationExists(destination: string): Promise<boolean> {
   }
 }
 
-export async function generateSheetProof(destination: string): Promise<void> {
+export async function generateSheetProof(destination: string, manifest: CompositionManifest = legacyManifest): Promise<void> {
   const resolved = path.resolve(destination);
   if (await destinationExists(resolved)) throw new Error(`Output directory already exists: ${resolved}`);
   const parent = path.dirname(resolved);
@@ -94,17 +81,13 @@ export async function generateSheetProof(destination: string): Promise<void> {
     ownsDestination = true;
     await writeFile(path.join(resolved, '.incomplete'), 'NatCut proof generation is incomplete.\n', { flag: 'wx' });
     stage = await mkdtemp(path.join(parent, `.${path.basename(resolved)}.tmp-`));
-    const loaded = await Promise.all([
-      loadRgbaAsset(path.join(repoRoot, 'fixtures/assets/sprite-fixture.png'), 'sprite/monstera-v1'),
-      loadRgbaAsset(path.join(repoRoot, 'fixtures/assets/sprout-wordmark.png'), 'branding/logo'),
-    ]);
-    const assets: AssetCatalog = new Map(loaded.map((asset) => [asset.id, asset]));
-    const plan = planComposition(fixtureManifest, profile);
+    const plan = planComposition(CompositionManifestSchema.parse(manifest), profile);
+    const assets = await loadPackagedAssets(plan);
     const raster = await renderServerRaster(plan, assets);
     const masks = renderCutGroupMasks(plan, assets);
-    const geometry = await evaluateCutGeometry(masks, fixtureManifest.cutMarginMm, profile);
+    const geometry = await evaluateCutGeometry(masks, manifest.cutMarginMm, profile);
     if (!geometry.report.valid) {
-      throw new Error(`Fixture geometry is not reviewable: ${geometry.report.issues.map((issue) => issue.code).join(', ')}`);
+      throw new Error(`Design geometry is not reviewable: ${geometry.report.issues.map((issue) => issue.code).join(', ')}`);
     }
 
     const jpeg = await encodeSheet(raster.rgba);
@@ -114,7 +97,7 @@ export async function generateSheetProof(destination: string): Promise<void> {
       registrationAssumption: 'Logical artwork is centered using equal horizontal and vertical padding; physical registration is unverified.',
       profile: { id: profile.id, version: profile.version },
       paddingPx: padding,
-      manifestHash: await manifestHash(fixtureManifest),
+      manifestHash: await manifestHash(manifest),
       logicalRaster: {
         width: raster.width,
         height: raster.height,
@@ -160,15 +143,16 @@ export async function generateSheetProof(destination: string): Promise<void> {
   }
 }
 
-function parseOutputArgument(arguments_: string[]): string {
-  const index = arguments_.indexOf('--out');
-  const value = index >= 0 ? arguments_[index + 1] : undefined;
-  if (!value || value.startsWith('-')) throw new Error('Usage: npm run proof:sheet -- --out <new-directory>');
-  return value;
+async function runCli() {
+  const { values } = parseArgs({ options: { out: { type: 'string' }, manifest: { type: 'string' } } });
+  if (!values.out) throw new Error('Usage: npm run proof:sheet -- --out <new-directory> [--manifest <file>]');
+  const manifest = values.manifest === undefined ? legacyManifest
+    : CompositionManifestSchema.parse(JSON.parse(await readFile(values.manifest, 'utf8')));
+  await generateSheetProof(values.out, manifest);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  generateSheetProof(parseOutputArgument(process.argv.slice(2)))
+  runCli()
     .then(() => console.log('Created offline preview; not print-ready.'))
     .catch((cause) => {
       console.error(cause instanceof Error ? cause.message : cause);

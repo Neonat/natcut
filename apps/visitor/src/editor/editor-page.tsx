@@ -6,25 +6,15 @@ import {
   type CompositionManifest,
   type GeometryReport,
 } from '@natcut/domain';
+import { catalogManifest, legacyManifest } from '@natcut/render/browser';
 import { useEffect, useRef, useState } from 'react';
 import type { SubmissionRequest, SubmissionResponse } from '../api.ts';
 import { CutBorderControl } from './cut-border-control.tsx';
 import { CutPreview } from './cut-preview.tsx';
+import { SpritePicker } from './sprite-picker.tsx';
 import { useCutPreview } from './use-cut-preview.ts';
 
-export const fixtureManifest: CompositionManifest = CompositionManifestSchema.parse({
-  schemaVersion: 1,
-  spriteAssetId: 'sprite/monstera-v1',
-  trainerAssetId: null,
-  theme: 'default',
-  brandingVariant: 'logo',
-  cutGroups: [
-    { id: 'main', members: ['sprite'] },
-    { id: 'brand', members: ['branding'] },
-  ],
-  cutMarginMm: 1.5,
-  renderVersion: 'fixture-v1',
-});
+export const fixtureManifest = legacyManifest;
 
 export const overlapFixtureManifest: CompositionManifest = CompositionManifestSchema.parse({
   ...fixtureManifest,
@@ -51,30 +41,31 @@ export type EditorPageProps = {
 };
 
 export function EditorPage(props: EditorPageProps) {
-  const initialManifest = props.initialManifest ?? fixtureManifest;
+  const initialManifest = props.initialManifest ?? catalogManifest;
   const [manifest, setManifest] = useState(initialManifest);
-  const [custom, setCustom] = useState(false);
+  const [custom, setCustom] = useState(() => ![1, 1.5, 2].includes(initialManifest.cutMarginMm));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const preview = useCutPreview();
-  const report = props.previewReportOverride ?? preview.result?.report ?? null;
+  const current = preview.result?.manifestFingerprint === canonicalManifestJson(manifest) ? preview.result : null;
+  const report = props.previewReportOverride ?? current?.report;
   const idempotencyKey = useRef(requestId());
-  const previewCurrent = props.previewReportOverride !== undefined ||
-    preview.result?.manifestFingerprint === canonicalManifestJson(manifest);
 
-  useEffect(() => {
-    preview.release(manifest);
-    // Initial exact preview; later requests are driven by the border control.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => { preview.release(initialManifest); }, []);
 
-  const updateMargin = (cutMarginMm: number, immediate: boolean) => {
-    const next = CompositionManifestSchema.parse({ ...manifest, cutMarginMm });
-    setManifest(next);
-    idempotencyKey.current = requestId();
+  const update = (next: CompositionManifest, immediate: boolean) => {
+    if (canonicalManifestJson(next) !== canonicalManifestJson(manifest)) {
+      idempotencyKey.current = requestId();
+      setManifest(next);
+      setError(null);
+    }
     props.onPreviewRequest?.(next, immediate);
     if (immediate) preview.release(next);
     else preview.move(next);
+  };
+
+  const updateMargin = (cutMarginMm: number, immediate: boolean) => {
+    update(CompositionManifestSchema.parse({ ...manifest, cutMarginMm }), immediate);
   };
 
   const submit = async () => {
@@ -96,7 +87,10 @@ export function EditorPage(props: EditorPageProps) {
     try {
       const accepted = await props.submitSubmission(request);
       sessionStorage.setItem(`natcut:status:${accepted.submissionId}`, accepted.statusToken);
-      setManifest(initialManifest);
+      if (manifest.renderVersion === 'catalog-v1') {
+        try { sessionStorage.setItem(`natcut:draft:${accepted.submissionId}`, JSON.stringify(manifest)); }
+        catch { /* A full tab store should still open the accepted ticket. */ }
+      }
       const path = `/queue/${accepted.submissionId}#token=${accepted.statusToken}`;
       if (props.onNavigate) props.onNavigate(path);
       else window.location.assign(path);
@@ -111,19 +105,23 @@ export function EditorPage(props: EditorPageProps) {
     <main className="editor-page">
       <header className="brand-bar"><span className="brand-mark">sprout</span><span>Sticker studio</span></header>
       <div className="page-intro">
-        <p className="step-pill">Final look</p>
         <h1>Your sprite sticker</h1>
-        <p>Pick the border, check the cut line, then join the print queue.</p>
       </div>
-      <CutPreview manifest={manifest} contours={preview.result?.contours ?? []} />
-      <CutBorderControl
-        value={manifest.cutMarginMm}
-        custom={custom}
-        onPreset={(value) => { setCustom(false); updateMargin(value, true); }}
-        onCustom={() => setCustom(true)}
-        onCustomChange={(value) => updateMargin(value, false)}
-        onCustomRelease={() => updateMargin(manifest.cutMarginMm, true)}
-      />
+      <fieldset className="studio-layout" disabled={submitting} aria-label="Sticker design">
+        {manifest.renderVersion === 'catalog-v1' && (
+          <SpritePicker selected={manifest.spriteAssetId}
+            onChange={(spriteAssetId) => update({ ...manifest, spriteAssetId }, true)} />
+        )}
+        <CutPreview manifest={manifest} contours={current?.contours ?? []} unavailable={Boolean(current?.error)} />
+        <CutBorderControl
+          value={manifest.cutMarginMm}
+          custom={custom}
+          onPreset={(value) => { setCustom(false); updateMargin(value, true); }}
+          onCustom={() => setCustom(true)}
+          onCustomChange={(value) => updateMargin(value, false)}
+          onCustomRelease={() => updateMargin(manifest.cutMarginMm, true)}
+        />
+      </fieldset>
       {report?.issues.length ? (
         <div className={structuralError ? 'notice error' : 'notice warning'} role="alert">
           <strong>{structuralError ? 'This design cannot print yet' : 'Check the cut border'}</strong>
@@ -132,8 +130,9 @@ export function EditorPage(props: EditorPageProps) {
       ) : null}
       {error ? <div className="notice error" role="alert">{error}</div> : null}
       <div className="sticky-action">
-        <button className="primary-action" type="button" disabled={submitting || structuralError || !report || !previewCurrent} onClick={() => void submit()}>
-          {submitting ? 'Joining queue…' : !report || !previewCurrent ? 'Checking cut…' : report.severity === 'warning' ? 'Print anyway' : 'Join print queue'}
+        <button className="primary-action" type="button" disabled={submitting || structuralError || (!report && !current?.error)}
+          onClick={() => current?.error ? preview.release(manifest) : void submit()}>
+          {submitting ? 'Joining queue…' : current?.error ? 'Retry preview' : !report ? 'Checking cut…' : report.severity === 'warning' ? 'Print anyway' : 'Join print queue'}
         </button>
       </div>
     </main>

@@ -3,7 +3,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
-import { loadRgbaAsset, type AssetCatalog } from '@natcut/render';
+import { loadPackagedAssets } from '@natcut/render';
 import { createFirebaseBearerVerifier } from './auth.ts';
 import { createSubmissionRepository, resolveSubmissionFirestoreSelection } from './repository.ts';
 import { buildSubmissionServer } from './routes.ts';
@@ -44,18 +44,6 @@ export function readCloudRunConfig(environment: RuntimeEnvironment): CloudRunCon
   };
 }
 
-async function loadTrustedAssets(repoRoot: string): Promise<AssetCatalog> {
-  const fixture = (filename: string) => path.join(repoRoot, 'fixtures/assets', filename);
-  const assets = await Promise.all([
-    loadRgbaAsset(fixture('sprite-fixture.png'), 'sprite/monstera-v1'),
-    loadRgbaAsset(fixture('sprite-fixture.png'), 'trainer/friend-v1'),
-    loadRgbaAsset(fixture('sprout-wordmark.png'), 'branding/logo'),
-    loadRgbaAsset(fixture('sprout-wordmark.png'), 'branding/logo-and-sprites'),
-    loadRgbaAsset(fixture('sprout-wordmark.png'), 'branding/logo-and-species'),
-  ]);
-  return new Map(assets.map((asset) => [asset.id, asset]));
-}
-
 export async function createCloudRunSubmissionServer(
   environment: RuntimeEnvironment = process.env,
   repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..'),
@@ -64,7 +52,7 @@ export async function createCloudRunSubmissionServer(
   const admin = getApps().find((candidate) => candidate.name === 'natcut-submission')
     ?? initializeApp({ projectId: config.projectId }, 'natcut-submission');
   const firestore = getFirestore(admin, config.databaseId);
-  const assets = await loadTrustedAssets(repoRoot);
+  const artwork = path.join(repoRoot, 'packages/render/catalog/artwork');
   return {
     config,
     server: buildSubmissionServer({
@@ -72,7 +60,7 @@ export async function createCloudRunSubmissionServer(
       statusTokenSecret: config.statusTokenSecret,
       repository: createSubmissionRepository(firestore),
       verifyBearerToken: createFirebaseBearerVerifier(getAuth(admin)),
-      validateManifest: createTrustedManifestValidator(assets),
+      validateManifest: createTrustedManifestValidator((plan) => loadPackagedAssets(plan, artwork)),
       routePrefix: '/api',
     }),
   };

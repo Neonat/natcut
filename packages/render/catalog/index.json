@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "sprites": [
+    {
+      "id": "sprite/48958c07bcb9f30e440c8e1652284aff9b6298a68c69033fdbf22a913115c209",
+      "name": "Monstera",
+      "pngSha256": "95edfb98885bc6df75799ea892270ff06c1d90b469cf627f7d304286ed2503df",
+      "width": 192,
+      "height": 192
+    },
+    {
+      "id": "sprite/c7e71948f761c05d6361441293e262f6f11ed44de8dee2e3956a39281e91b966",
+      "name": "Prickly pear",
+      "pngSha256": "2ea29d8a4db4cad4becb5739d5bb138ff54e957bc1a56e52f715e38355b78768",
+      "width": 210,
+      "height": 210
+    }
+  ],
+  "archived": []
+}

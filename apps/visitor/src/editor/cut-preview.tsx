@@ -1,5 +1,5 @@
 import { DEVFEST_SG_V1, type CompositionManifest } from '@natcut/domain';
-import { planComposition } from '@natcut/render/browser';
+import { assetPngFilename, planComposition } from '@natcut/render/browser';
 import type { ContourPreview } from './use-cut-preview.ts';
 
 function pathData(points: ContourPreview): string {
@@ -7,16 +7,15 @@ function pathData(points: ContourPreview): string {
   return `M ${points.map((point) => `${point.x} ${point.y}`).join(' L ')} Z`;
 }
 
-function assetUrl(assetId: string): string {
-  return assetId.startsWith('branding/') ? '/sprout-wordmark.png' : '/sprite-fixture.png';
-}
+type PreviewProps = { manifest: CompositionManifest; contours: ContourPreview[]; unavailable?: boolean };
 
-export function CutPreview({ manifest, contours }: { manifest: CompositionManifest; contours: ContourPreview[] }) {
+export function CutPreview({ manifest, contours, unavailable }: PreviewProps) {
   const plan = planComposition(manifest, DEVFEST_SG_V1);
   const dilationPx = (manifest.cutMarginMm * 300) / 25.4;
   return (
     <section className="preview-shell" aria-label="Sticker preview">
       <div className="preview-label"><span>Live preview</span><span>{manifest.cutMarginMm.toFixed(1)} mm border</span></div>
+      {unavailable && <p className="notice error" role="alert">The sprite preview couldn’t load. Retry or choose another sprite.</p>}
       <svg className="sticker-preview" viewBox="0 0 1200 2100" role="img" aria-label="Trusted sprite sticker composition preview">
         <defs>
           <filter id="paper-shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="24" stdDeviation="22" floodOpacity="0.22" /></filter>
@@ -31,12 +30,13 @@ export function CutPreview({ manifest, contours }: { manifest: CompositionManife
         {plan.layers.map((layer) => (
           <g key={layer.id} filter="url(#paper-shadow)">
             <image
-              href={assetUrl(layer.assetId)}
+              href={'/' + assetPngFilename(layer.assetId)}
               x={layer.x}
               y={layer.y}
               width={layer.width}
               height={layer.height}
               preserveAspectRatio="none"
+              imageRendering="pixelated"
               filter="url(#cut-border)"
             />
           </g>

@@ -1,3 +1,5 @@
+import { CompositionManifestSchema } from '@natcut/domain';
+import { assertSupportedRecipe } from '@natcut/render/browser';
 import type { VisitorApi } from './api.ts';
 import { EditorPage, overlapFixtureManifest } from './editor/editor-page.tsx';
 import { QueuePage } from './queue/queue-page.tsx';
@@ -24,6 +26,19 @@ export function VisitorApp({ api, simulation }: { api: VisitorApi; simulation?: 
   );
 }
 
+function requeueDraft(id: string) {
+  try {
+    const saved = sessionStorage.getItem(`natcut:draft:${id}`);
+    if (!saved) return;
+    const manifest = CompositionManifestSchema.parse(JSON.parse(saved));
+    if (manifest.renderVersion !== 'catalog-v1') return;
+    assertSupportedRecipe(manifest);
+    return manifest;
+  } catch {
+    return undefined;
+  }
+}
+
 function VisitorRoute({ api, simulation }: { api: VisitorApi; simulation: boolean }) {
   const queueMatch = /^\/queue\/([^/]+)$/.exec(window.location.pathname);
   if (queueMatch) {
@@ -34,11 +49,12 @@ function VisitorRoute({ api, simulation }: { api: VisitorApi; simulation: boolea
     ? new URLSearchParams(window.location.search).get('fixture')
     : null;
   const requeuedFrom = new URLSearchParams(window.location.search).get('requeuedFrom') ?? undefined;
+  const initial = fixture === 'overlap' ? overlapFixtureManifest : requeuedFrom ? requeueDraft(requeuedFrom) : undefined;
   return (
     <EditorPage
       submitSubmission={(request) => api.submit(request)}
       onNavigate={navigate}
-      {...(fixture === 'overlap' ? { initialManifest: overlapFixtureManifest } : {})}
+      {...(initial ? { initialManifest: initial } : {})}
       {...(requeuedFrom ? { requeuedFrom } : {})}
     />
   );

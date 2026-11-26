@@ -1,9 +1,13 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { GeometryReport } from '@natcut/domain';
+import { catalogManifest } from '@natcut/render/browser';
+import { canonicalManifestJson, type GeometryReport } from '@natcut/domain';
 import { CutPreview, EditorPage, fixtureManifest, overlapFixtureManifest } from '../src/index.ts';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 function warningReport(): GeometryReport {
   return {
@@ -23,6 +27,68 @@ function warningReport(): GeometryReport {
 }
 
 describe('mobile editor', () => {
+  it('changes the artwork, discards old contours and warnings, and recovers from a failed asset load', async () => {
+    let port: EventTarget;
+    const requests: { revision: number; manifest: typeof fixtureManifest }[] = [];
+    vi.stubGlobal('Worker', class extends EventTarget {
+      constructor() { super(); port = this; }
+      postMessage(message: typeof requests[number]) { requests.push(message); }
+    });
+    const respond = (i: number, body: object) => {
+      const { revision, manifest } = requests[i]!;
+      act(() => { port.dispatchEvent(new MessageEvent('message', { data: {
+        revision, manifestFingerprint: canonicalManifestJson(manifest), ...body,
+      } })); });
+    };
+    const { container } = render(<EditorPage submitSubmission={vi.fn()} />);
+    const paths = () => container.querySelectorAll('.sticker-preview path');
+    const image = () => container.querySelector('.sticker-preview image')!.getAttribute('href');
+    const oldImage = image();
+    const warning = { report: warningReport(), contours: [[{ x: 10, y: 10 }, { x: 30, y: 20 }]] };
+    respond(0, warning);
+    expect(paths()).toHaveLength(1);
+    fireEvent.click(screen.getByRole('radio', { name: 'Prickly pear' }));
+    expect(image()).not.toBe(oldImage);
+    expect(paths()).toHaveLength(0);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: /checking cut/i })).toHaveProperty('disabled', true);
+    respond(0, warning);
+    expect(paths()).toHaveLength(0);
+    respond(1, { error: 'Could not load artwork.' });
+    expect(screen.getByRole('alert').textContent).toMatch(/sprite|preview/i);
+    fireEvent.click(screen.getByRole('button', { name: /retry preview/i }));
+    respond(2, { report: { ...warningReport(), severity: 'ok', issues: [] }, contours: [[{ x: 80, y: 90 }]] });
+    expect(paths()[0]?.getAttribute('d')).toContain('80 90');
+    expect(screen.getByRole('button', { name: /join print queue/i })).toHaveProperty('disabled', false);
+  });
+
+  it('rotates the submission key only when the selected design changes', async () => {
+    const submit = vi.fn().mockRejectedValue(new Error('Lost response'));
+    render(<EditorPage submitSubmission={submit} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} />);
+    const clickSubmit = async () => {
+      fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+      await screen.findByRole('alert');
+    };
+    await clickSubmit();
+    fireEvent.click(screen.getByRole('button', { name: /standard/i }));
+    await clickSubmit();
+    fireEvent.click(screen.getByRole('radio', { name: 'Prickly pear' }));
+    await clickSubmit();
+    expect(submit.mock.calls[1]![0].idempotencyKey).toBe(submit.mock.calls[0]![0].idempotencyKey);
+    expect(submit.mock.calls[2]![0].idempotencyKey).not.toBe(submit.mock.calls[0]![0].idempotencyKey);
+    expect(submit.mock.calls[2]![0].manifest.spriteAssetId).not.toBe(submit.mock.calls[0]![0].manifest.spriteAssetId);
+  });
+
+  it('keeps the chosen design fixed while its ticket request is in flight', async () => {
+    render(<EditorPage submitSubmission={() => new Promise(() => {})}
+      previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} />);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    const pear = screen.getByRole('radio', { name: 'Prickly pear' });
+    const wide = screen.getByRole('button', { name: /Wide/ });
+    expect(pear.matches(':disabled')).toBe(true);
+    expect(wide.matches(':disabled')).toBe(true);
+  });
+
   it('uses sprite language and applies the exact cut-border presets', () => {
     render(<EditorPage submitSubmission={vi.fn()} />);
     expect(screen.getByRole('heading', { name: /your sprite sticker/i })).toBeTruthy();
@@ -73,7 +139,7 @@ describe('mobile editor', () => {
 
     await waitFor(() => expect(submitSubmission).toHaveBeenCalledTimes(1));
     expect(submitSubmission).toHaveBeenCalledWith(expect.objectContaining({
-      manifest: fixtureManifest,
+      manifest: catalogManifest,
       warningAcknowledgement: expect.objectContaining({
         geometryVersion: 'natcut-geometry-v1',
         rasterHash: 'a'.repeat(64),

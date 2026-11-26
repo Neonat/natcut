@@ -1,0 +1,98 @@
+import { expect, test } from '@playwright/test';
+import { execFile } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
+
+test.use({ viewport: { width: 375, height: 812 }, isMobile: true, deviceScaleFactor: 1, reducedMotion: 'reduce' });
+
+test('the selected rehearsal sprite survives a queue round trip and reproduces the worker contour offline', async ({ page, request }, info) => {
+  await page.goto('/edit');
+  const first = page.getByRole('radio', { name: 'Monstera' });
+  const second = page.getByRole('radio', { name: 'Prickly pear' });
+  await expect(first).toBeChecked();
+  const submit = page.getByRole('button', { name: 'Join print queue' });
+  await expect(submit).toBeEnabled();
+  const sprite = page.locator('.sticker-preview image').first();
+  const original = await sprite.getAttribute('href');
+  await second.check();
+  await expect(sprite).not.toHaveAttribute('href', original!);
+  await expect(submit).toBeEnabled();
+  const selectedUrl = await sprite.getAttribute('href');
+  const contourPaths = () => page.locator('.sticker-preview path').evaluateAll((paths) =>
+    paths.map((p) => p.getAttribute('d')!.replace(/([ML]) /g, '$1')).join(' '));
+  const contours = await contourPaths();
+  expect(contours.length).toBeGreaterThan(0);
+  await page.screenshot({ path: info.outputPath('mobile-picker.png') });
+  await page.setViewportSize({ width: 1060, height: 820 });
+  await page.screenshot({ path: info.outputPath('desktop-picker.png') });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.getByRole('button', { name: /Wide/ }).click();
+  await expect(submit).toBeEnabled();
+  const wideContours = await contourPaths();
+  expect(wideContours).not.toEqual(contours);
+  await page.screenshot({ path: info.outputPath('mobile-border.png') });
+  const accepted = page.waitForResponse((r) => r.url().endsWith('/v1/submissions') && r.request().method() === 'POST');
+  await submit.click();
+  const response = await accepted;
+  expect(response.status()).toBe(201);
+  const manifest = response.request().postDataJSON().manifest;
+  await expect(page.getByRole('heading', { name: 'In the print queue' })).toBeVisible();
+
+  const submissionId = new URL(page.url()).pathname.split('/').pop();
+  const document = await request.get(`http://127.0.0.1:8080/v1/projects/demo-natcut/databases/(default)/documents/submissions/${submissionId}`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  expect(document.status()).toBe(200);
+  const { fields } = await document.json();
+  expect(fields.manifest.mapValue.fields.spriteAssetId.stringValue).toBe(manifest.spriteAssetId);
+  const prove = async (out: string, design: typeof manifest) => {
+    const file = info.outputPath(out + '.json');
+    await writeFile(file, JSON.stringify(design));
+    await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/proof-sheet.ts', '--manifest', file, '--out', info.outputPath(out)]);
+    return JSON.parse(await readFile(info.outputPath(out, 'evidence.json'), 'utf8'));
+  };
+  const proof = await prove('submitted', manifest);
+  expect(proof.manifestHash).toBe(fields.manifestHash.stringValue);
+  expect(proof.cutMask.sha256).toBe(fields.validation.mapValue.fields.rasterHash.stringValue);
+  const standard = await prove('standard', { ...manifest, cutMarginMm: 1.5 });
+  expect(standard.logicalRaster.sha256).not.toBe('895dcc90da435793a4ff483e4b9a26b0adaf739037cea0945a8af061c5d8f143');
+  expect(standard.cutMask.sha256).not.toBe('1465f6f4822228afd53188f8490373156e9005a673cf06a6f3da849ecf90e84d');
+  const overlay = await readFile(info.outputPath('submitted', 'cut-overlay.svg'), 'utf8');
+  expect([...overlay.matchAll(/<path d="([^"]+)"\/>/g)].map((m) => m[1]).join(' ')).toEqual(wideContours);
+  await page.getByRole('button', { name: 'Leave queue' }).click();
+  await page.getByRole('button', { name: 'Rejoin queue' }).click();
+  await expect(second).toBeChecked();
+  await expect(sprite).toHaveAttribute('href', selectedUrl!);
+  await expect(page.getByRole('button', { name: /Wide/ })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('fetches only the planned artwork for geometry and can retry a failed image decode', async ({ page, context }) => {
+  let failPear = true;
+  const fetches: string[] = [];
+  await context.route(/\/[a-f0-9]{64}\.png$/, async (route) => {
+    if (route.request().resourceType() === 'fetch') {
+      const url = new URL(route.request().url()).pathname;
+      fetches.push(url);
+      if (failPear && url === pearUrl) return route.fulfill({ contentType: 'image/png', body: 'broken PNG' });
+    }
+    await route.continue();
+  });
+  let pearUrl = '';
+  await page.goto('/edit');
+  const pear = page.getByRole('radio', { name: 'Prickly pear' });
+  pearUrl = (await pear.locator('..').locator('img').getAttribute('src'))!;
+  const submit = page.getByRole('button', { name: 'Join print queue' });
+  await expect(submit).toBeEnabled();
+  expect(fetches).toHaveLength(2);
+  expect(fetches).not.toContain(pearUrl);
+  await page.getByRole('button', { name: /Tight/ }).click();
+  await expect(submit).toBeEnabled();
+  expect(fetches).toHaveLength(2);
+  await pear.check();
+  await expect(page.getByRole('alert')).toContainText(/preview/i);
+  await expect(submit).toHaveCount(0);
+  failPear = false;
+  await page.getByRole('button', { name: /Retry preview/i }).click();
+  await expect(submit).toBeEnabled();
+  expect(fetches.filter((url) => url === pearUrl)).toHaveLength(2);
+});

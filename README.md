@@ -100,12 +100,35 @@ NATCUT_E2E_LAN=1 npm run test:e2e -- e2e/lan-rehearsal.spec.ts
 
 Scan the QR on a real phone to verify the network between devices.
 
+### Import a named sprite roster
+
+Monstera and Prickly pear are the two rehearsal fixtures. To supply event artwork, put a JSON roster beside the source PNGs in a local folder outside the repository. Each row names one sprite and its PNG. A scientific name is optional.
+
+```json
+[
+  { "name": "Monstera", "scientificName": "Monstera deliciosa", "file": "monstera.png" },
+  { "name": "Prickly pear", "file": "prickly-pear.png" }
+]
+```
+
+```bash
+npm run sprites:import -- --input /path/to/approved-art/roster.json
+```
+
+Each batch supplies the complete picker roster. The importer fits each image on a transparent square up to 760 pixels across and publishes the catalog in `packages/render/catalog`. Use `--out <directory>` to inspect a separate catalog. Commit the generated index and PNGs together. Changed names or artwork receive new IDs. Earlier IDs retain their artwork for accepted tickets and offline proof.
+
 ### Generate an offline sheet proof
 
 Create a review packet from the current fixture without connecting to Firebase or the printer:
 
 ```bash
 npm run proof:sheet -- --out /tmp/natcut-sheet-proof
+```
+
+To reproduce an accepted design, save the ticket’s `manifest` object in a local JSON file and run the command with `--manifest`.
+
+```bash
+npm run proof:sheet -- --manifest /path/to/manifest.json --out /tmp/natcut-selected-proof
 ```
 
 The new directory contains `sheet.jpg`, `cut-overlay.svg`, and `evidence.json`. The JPEG is the padded 1216 × 2128 review raster; the SVG places the traced contour over those same coordinates; the evidence file records distinct hashes for the manifest, logical color raster, expanded cut mask, JPEG, and contours. The command reserves the path without replacement and uses a `.incomplete` sentinel while moving the fully built packet into place. Treat the packet as complete only when all three files exist and the sentinel does not; an interrupted run can leave an empty reserved directory. The resulting packet is a normal movable directory.
