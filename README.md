@@ -70,6 +70,18 @@ Tap **Refresh** on the visitor phone between steps. Claiming changes the public 
 
 Stopping and restarting `npm run dev` resets the in-memory Firebase emulators and creates a fresh temporary SQLite journal. No production Firebase project is contacted.
 
+### Generate an offline sheet proof
+
+Create a review packet from the current fixture without connecting to Firebase or the printer:
+
+```bash
+npm run proof:sheet -- --out /tmp/natcut-sheet-proof
+```
+
+The new directory contains `sheet.jpg`, `cut-overlay.svg`, and `evidence.json`. The JPEG is the padded 1216 × 2128 review raster; the SVG places the traced contour over those same coordinates; the evidence file records distinct hashes for the manifest, logical color raster, expanded cut mask, JPEG, and contours. The command reserves the path without replacement and uses a `.incomplete` sentinel while moving the fully built packet into place. Treat any directory containing that sentinel as failed; a successful command removes it last. The resulting packet is a normal movable directory.
+
+This packet is explicitly an **offline preview, not print-ready**. Centered padding is an unverified registration assumption. It contains no PLT, knife pressure, USB call, network call, or printer instruction.
+
 ## Build the isolated cloud preview
 
 NatCut's public preview uses its own Firebase Hosting target (`natcut`), Cloud Run service (`natcut-submission`), and named Firestore database (`natcut`) inside `sprout-dev-66f08`. Existing Sprout Hosting and databases are not deployment targets.
