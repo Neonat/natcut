@@ -1,10 +1,14 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildDevConfig } from '../scripts/dev-config.mjs';
 
 const lan = process.env.NATCUT_E2E_LAN === '1';
 const config = buildDevConfig({ lan });
 const alias = 'natcut-rehearsal.test';
 const origin = lan ? config.visitorOrigin : `http://${alias}:4174`;
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test.use({
   launchOptions: lan ? {} : {
@@ -62,4 +66,15 @@ test('LAN listeners are reachable only as intended', async ({ request }) => {
   for (const port of [8080, 8090]) {
     await expect(request.get(`http://${config.address}:${port}/`, { timeout: 2_000 })).rejects.toThrow();
   }
+});
+
+test('LAN visitor cannot read Firebase debug logs from the workspace', async ({ request }) => {
+  test.skip(!lan, 'Requires the opt-in LAN runner and its Firebase debug log.');
+  const debugLog = `${config.visitorOrigin}/@fs/${repoRoot.replace(/^\//, '')}/firebase-debug.log`;
+  const response = await request.get(debugLog);
+  expect(await response.text()).not.toContain('must-not-appear-in-firebase-debug-log');
+  expect(response.status()).toBe(403);
+  expect(await readFile(path.join(repoRoot, 'firebase-debug.log'), 'utf8')).not.toContain(
+    'must-not-appear-in-firebase-debug-log',
+  );
 });

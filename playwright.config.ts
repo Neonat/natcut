@@ -19,7 +19,9 @@ export default defineConfig({
   webServer: {
     command: lan ? 'node scripts/dev.mjs --lan' : 'node scripts/dev.mjs',
     url: visitorOrigin,
-    env: lan ? {} : { __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: 'natcut-rehearsal.test' },
+    env: lan
+      ? { NATCUT_TEST_SECRET_SENTINEL: 'must-not-appear-in-firebase-debug-log' }
+      : { __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: 'natcut-rehearsal.test' },
     reuseExistingServer: false,
     timeout: 120_000,
     gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },

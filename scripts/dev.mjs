@@ -14,6 +14,20 @@ async function start() {
   const javaHome = process.env.JAVA_HOME ?? '/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home';
   const firebase = fileURLToPath(import.meta.resolve('firebase-tools/lib/bin/firebase.js'));
   const serve = lan ? 'node scripts/dev-serve.mjs --lan' : 'node scripts/dev-serve.mjs';
+  const childEnv = {
+    PATH: `${javaHome}/bin:${process.env.PATH ?? ''}`,
+    HOME: process.env.HOME ?? '',
+    TMPDIR: process.env.TMPDIR ?? '/tmp',
+    JAVA_HOME: javaHome,
+    NODE_ENV: 'development',
+    NO_UPDATE_NOTIFIER: '1',
+    FIREBASE_CLI_DISABLE_TELEMETRY: '1',
+    ...config.runtimeEnv,
+    ...(lan ? { NATCUT_LAN_IP: config.address } : {}),
+    ...(!lan && process.env.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS === 'natcut-rehearsal.test'
+      ? { __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: 'natcut-rehearsal.test' }
+      : {}),
+  };
   const emulators = spawn(process.execPath, [
     firebase, 'emulators:exec',
     '--config', config.firebaseConfig,
@@ -24,14 +38,7 @@ async function start() {
     cwd: fileURLToPath(new URL('..', import.meta.url)),
     stdio: 'inherit',
     detached: process.platform !== 'win32',
-    env: {
-      ...process.env,
-      ...config.runtimeEnv,
-      ...(lan ? { NATCUT_LAN_IP: config.address } : {}),
-      JAVA_HOME: javaHome,
-      PATH: `${javaHome}/bin:${process.env.PATH ?? ''}`,
-      NODE_ENV: 'development',
-    },
+    env: childEnv,
   });
 
   let stopped = false;

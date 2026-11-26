@@ -56,9 +56,34 @@ async function serve() {
     await authConfig.body?.cancel();
 
     const [visitor] = config.listeners;
+    const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+    const visitorRoot = path.join(repoRoot, 'apps/visitor');
     vite = await createServer({
-      root: fileURLToPath(new URL('../apps/visitor/', import.meta.url)),
-      server: { ...visitor, strictPort: true },
+      root: visitorRoot,
+      server: {
+        ...visitor,
+        strictPort: true,
+        fs: {
+          strict: true,
+          allow: [
+            visitorRoot,
+            path.join(repoRoot, 'packages/domain'),
+            path.join(repoRoot, 'packages/render'),
+            path.join(repoRoot, 'packages/cut-geometry'),
+            path.join(repoRoot, 'vendor/pixcut-trace'),
+            path.join(repoRoot, 'node_modules'),
+          ],
+          deny: [
+            '**/.env*',
+            '**/.git/**',
+            '**/.npmrc',
+            '**/.yarnrc.yml',
+            '**/*.{crt,pem,key,p12,pfx,cer,der}',
+            '**/*-debug.log',
+            '**/firebase-debug.log',
+          ],
+        },
+      },
     });
     await vite.listen();
     const visitorPage = await requireResponse(config.visitorOrigin);
