@@ -66,9 +66,35 @@ curl -X POST http://127.0.0.1:8090/claim
 curl -X POST http://127.0.0.1:8090/start
 ```
 
-Tap **Refresh** on the visitor phone between steps. Claiming changes the public state to **You’re next**; the simulator then advances through internal phases and finishes at **Ready for pickup**. These endpoints operate only on the simulated worker and SQLite journal.
+Tap **Refresh** on the visitor screen between steps. Claiming changes the public state to **You’re next**. The simulator then advances to **Ready for pickup** and the ticket explains that the rehearsal produced no physical sticker.
 
-Stopping and restarting `npm run dev` resets the in-memory Firebase emulators and creates a fresh temporary SQLite journal. No production Firebase project is contacted.
+Stopping either development command resets the in-memory Firebase emulators and the temporary SQLite journal. Both commands use only the `demo-natcut` Firebase project.
+
+### Rehearse from a phone on private Wi-Fi
+
+Connect the phone and the Mac to the same trusted Wi-Fi network, then run:
+
+```bash
+npm run dev:lan
+```
+
+Scan the terminal QR after the stack is ready, or type the printed visitor URL into the phone browser. The command picks the lowest available private IPv4 address. To select a different address assigned to this Mac, set it explicitly before launching:
+
+```bash
+NATCUT_LAN_IP=192.168.1.25 npm run dev:lan
+```
+
+Use only the bundled fixture art and anonymous emulator sign-in. Keep photos, personal details, and real account credentials out of the rehearsal. The visitor, submission API, and Auth emulator accept connections from the local network. Firestore and the simulated worker controls stay on `127.0.0.1`. Use the same `curl` commands from the Mac to advance a ticket.
+
+If the phone cannot load the URL, check whether the network blocks connections between devices. Guest and conference Wi-Fi may have peer isolation enabled. Check the macOS firewall prompt for Node and allow inbound connections on the trusted rehearsal network. If the Mac changes IP addresses, stop the stack and rerun `npm run dev:lan` to get a new QR. Stop the stack after the rehearsal.
+
+To exercise the private IPv4 browser flow and verify listener reachability from the Mac, run:
+
+```bash
+NATCUT_E2E_LAN=1 npm run test:e2e -- e2e/lan-rehearsal.spec.ts
+```
+
+Scan the QR on a real phone to verify the network between devices.
 
 ### Generate an offline sheet proof
 

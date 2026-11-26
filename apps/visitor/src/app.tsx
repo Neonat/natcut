@@ -15,11 +15,20 @@ function tokenFor(submissionId: string): string {
   return sessionStorage.getItem(`natcut:status:${submissionId}`) ?? '';
 }
 
-export function VisitorApp({ api }: { api: VisitorApi }) {
+export function VisitorApp({ api, simulation }: { api: VisitorApi; simulation?: boolean }) {
+  return (
+    <>
+      {simulation ? <p className="simulation-notice">Simulation rehearsal · Fixture artwork only</p> : null}
+      <VisitorRoute api={api} simulation={simulation ?? false} />
+    </>
+  );
+}
+
+function VisitorRoute({ api, simulation }: { api: VisitorApi; simulation: boolean }) {
   const queueMatch = /^\/queue\/([^/]+)$/.exec(window.location.pathname);
   if (queueMatch) {
     const submissionId = decodeURIComponent(queueMatch[1]!);
-    return <QueuePage submissionId={submissionId} statusToken={tokenFor(submissionId)} api={api} onNavigate={navigate} />;
+    return <QueuePage submissionId={submissionId} statusToken={tokenFor(submissionId)} api={api} onNavigate={navigate} simulation={simulation} />;
   }
   const fixture = import.meta.env.DEV
     ? new URLSearchParams(window.location.search).get('fixture')

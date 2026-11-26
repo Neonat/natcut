@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { QueuePage, type PublicQueueStatus, type VisitorApi } from '../src/index.ts';
+import { QueuePage, VisitorApp, type PublicQueueStatus, type VisitorApi } from '../src/index.ts';
 
 afterEach(cleanup);
 
@@ -22,6 +22,20 @@ function api(publicStatus: PublicQueueStatus['publicStatus'] = 'queued'): Visito
     leave: vi.fn().mockResolvedValue({ submissionId: 'submission-1', publicStatus: 'cancelled' }),
   } as unknown as VisitorApi;
 }
+
+describe('visitor simulation', () => {
+  it('labels the rehearsal editor before visitors submit', () => {
+    render(<VisitorApp api={api()} simulation />);
+    expect(screen.getByText(/simulation rehearsal/i)).toBeTruthy();
+  });
+
+  it('explains that a ready simulation ticket has no physical sticker', async () => {
+    render(<QueuePage submissionId="submission-1" statusToken="token" api={api('ready')} simulation />);
+    expect(await screen.findByRole('heading', { name: 'Ready for pickup' })).toBeTruthy();
+    expect(screen.getByText(/no physical sticker was made/i)).toBeTruthy();
+    expect(screen.queryByText(/show this screen at the sprout booth/i)).toBeNull();
+  });
+});
 
 describe('queue page', () => {
   it('refreshes explicitly and uses the same refresh for a pull-down gesture', async () => {

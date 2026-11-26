@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CompositionManifestSchema,
   DEVFEST_SG_V1,
@@ -10,7 +10,9 @@ import {
   canTransitionPublicStatus,
   canVisitorLeave,
   canonicalManifestJson,
+  geometryIssuesHash,
   manifestHash,
+  sha256Hex,
 } from '../src/index.ts';
 
 const validManifest = {
@@ -135,7 +137,46 @@ describe('public state machine', () => {
   });
 });
 
+describe('SHA-256', () => {
+  it.each(['native', 'insecure HTTP'])('hashes only the requested byte view in %s', async (context) => {
+    if (context === 'insecure HTTP') vi.stubGlobal('crypto', {});
+    try {
+      const bytes = new TextEncoder().encode('_abc_').subarray(1, 4);
+      await expect(sha256Hex(bytes)).resolves.toBe(
+        'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('canonical manifest hashing', () => {
+  it.each(['native', 'insecure HTTP'])('preserves the canonical manifest hash in %s', async (context) => {
+    if (context === 'insecure HTTP') vi.stubGlobal('crypto', {});
+    try {
+      await expect(manifestHash(validManifest)).resolves.toBe(
+        '82d655bd0983b14975add3264ad91060df411271ac42521198be4296f4352619',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['native', 'insecure HTTP'])('preserves the canonical warning hash in %s', async (context) => {
+    if (context === 'insecure HTTP') vi.stubGlobal('crypto', {});
+    try {
+      await expect(geometryIssuesHash([{
+        code: 'CUT_CONTOURS_OVERLAP',
+        severity: 'warning',
+        message: 'Two cut groups overlap.',
+        cutGroupIds: ['main', 'brand'],
+      }])).resolves.toBe('0d84cefa58b78e1b9397a62a7ca6d636a654fe227835555043fc9eaad553835d');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('canonicalizes object key order', async () => {
     const reordered = {
       renderVersion: validManifest.renderVersion,

@@ -1,5 +1,6 @@
 import {
   GEOMETRY_LIMITS,
+  sha256Hex,
   type GeometryIssue,
   type GeometryReport,
   type PrintProfile,
@@ -38,15 +39,6 @@ export function classifyTraceComplexity(contourCount: number, pointCount: number
     });
   }
   return issues;
-}
-
-function toHex(bytes: ArrayBuffer): string {
-  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-async function hashMask(mask: BinaryMask): Promise<string> {
-  const bytes = Uint8Array.from(mask.data);
-  return toHex(await globalThis.crypto.subtle.digest('SHA-256', bytes.buffer));
 }
 
 function emptyIssue(groupId: string): GeometryIssue {
@@ -145,7 +137,7 @@ export async function evaluateCutGeometry(
   const severity = hasError ? 'error' : issues.length > 0 ? 'warning' : 'ok';
   const finiteGaps = collisions.map((collision) => collision.clearanceMm).filter(Number.isFinite);
   const minimumContourGapMm = finiteGaps.length > 0 ? Math.min(...finiteGaps) : null;
-  const rasterHash = await hashMask(combined);
+  const rasterHash = await sha256Hex(combined.data);
 
   return {
     contours: trace.contours,

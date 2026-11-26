@@ -30,4 +30,6 @@ test('submits an acknowledged design and reaches pickup-ready through the simula
     await page.getByRole('button', { name: 'Refresh' }).click();
     return page.getByRole('heading').first().textContent();
   }, { timeout: 20_000 }).toContain('Ready for pickup');
+  await expect(page.getByText(/simulation rehearsal/i)).toBeVisible();
+  await expect(page.getByText(/no physical sticker was made/i)).toBeVisible();
 });

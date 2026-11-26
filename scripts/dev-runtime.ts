@@ -22,6 +22,7 @@ import {
   resolveWorkerFirestoreSelection,
   SimulatedPrinter,
 } from '../apps/worker/src/index.ts';
+import { readSubmissionListener } from './dev-config.mjs';
 import { loadRgbaAsset, type AssetCatalog } from '../packages/render/src/index.ts';
 
 if (process.env.NATCUT_PROJECT_ID !== 'demo-natcut') {
@@ -40,6 +41,9 @@ if (submissionSelection.projectId !== workerSelection.projectId || submissionSel
 }
 const projectId = submissionSelection.projectId;
 if (process.env.FIREBASE_AUTH_EMULATOR_HOST !== '127.0.0.1:9099') throw new Error('Auth emulator must use 127.0.0.1:9099');
+
+const { host: submissionHost, corsOrigin } = readSubmissionListener(process.env);
+const allowedOrigin = new RegExp(`^${RegExp.escape(corsOrigin)}$`);
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const privateKey = String(generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }));
@@ -63,9 +67,9 @@ const submission = buildSubmissionServer({
   repository: createSubmissionRepository(firestore),
   verifyBearerToken: createFirebaseBearerVerifier(getAuth(admin)),
   validateManifest: createTrustedManifestValidator(assets),
-  corsOrigin: 'http://127.0.0.1:4174',
+  corsOrigin: allowedOrigin,
 });
-await submission.listen({ host: '127.0.0.1', port: 8088 });
+await submission.listen({ host: submissionHost, port: 8088 });
 
 const cloud = createFirestoreCloudQueue(firestore);
 const store = new JobStore(process.env.NATCUT_SQLITE_PATH ?? ':memory:');
@@ -117,7 +121,11 @@ const control = createServer(async (request, response) => {
     return send(response, 500, { error: cause instanceof Error ? cause.message : String(cause) });
   }
 });
-await new Promise<void>((resolve) => control.listen(8090, '127.0.0.1', resolve));
+await new Promise<void>((resolve, reject) => {
+  control.once('error', reject);
+  control.listen(8090, '127.0.0.1', resolve);
+});
+process.send?.('natcut-runtime-ready');
 
 async function shutdown() {
   control.close();
