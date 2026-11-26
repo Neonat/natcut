@@ -61,11 +61,9 @@ export async function prepareNextWorkerJob(
   await flushPublicStatusOutbox(deps.store, deps.cloud);
   let claim = await deps.cloud.recoverClaim(deps.workerId);
   if (claim) {
-    const safeToResume = deps.store.ensureClaimed(claim);
+    const availability = deps.store.ensureClaimed(claim);
+    if (availability !== 'available') return { kind: availability, submissionId: claim.submission.id };
     const recovered = deps.store.getBySubmissionId(claim.submission.id)!;
-    if (!safeToResume) {
-      return { kind: 'needs_reconciliation', submissionId: recovered.submissionId };
-    }
     if (recovered.state === 'ready') {
       if (claim.submission.publicStatus === 'next') {
         deps.store.stagePublicStatus(recovered.submissionId, 'printing', recovered.stateChangedAt);
@@ -85,11 +83,9 @@ export async function prepareNextWorkerJob(
 
   claim ??= await deps.cloud.claimNextSubmission(deps.workerId);
   if (!claim) return { kind: 'idle' };
-  const safeToResume = deps.store.ensureClaimed(claim);
+  const availability = deps.store.ensureClaimed(claim);
+  if (availability !== 'available') return { kind: availability, submissionId: claim.submission.id };
   const job = deps.store.getBySubmissionId(claim.submission.id)!;
-  if (!safeToResume) {
-    return { kind: 'needs_reconciliation', submissionId: job.submissionId };
-  }
   if (!safelyExecutableStates.has(job.state)) {
     return { kind: 'needs_reconciliation', submissionId: job.submissionId };
   }

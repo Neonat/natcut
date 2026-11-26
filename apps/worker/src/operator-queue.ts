@@ -1,5 +1,5 @@
 import type { Firestore, Transaction } from 'firebase-admin/firestore';
-import { localJobStates, type JobStore, type LocalJobState } from './job-store.ts';
+import { localJobStates, safelyExecutableStates, type JobStore, type LocalJobState } from './job-store.ts';
 
 type DeskStatus = 'queued' | 'next' | 'printing' | 'ready';
 export type QueueCursors = { queued: number; ready: number };
@@ -9,6 +9,7 @@ export type OperatorQueueRow = {
   publicStatus: DeskStatus;
   localState: LocalJobState | null;
   notice: string | null;
+  onHold: boolean;
 };
 
 function notice(state: LocalJobState | null, hasWarning: boolean) {
@@ -31,11 +32,15 @@ export function createOperatorQueue(firestore: Firestore, eventId: string, store
     const rows: OperatorQueueRow[] = snapshot.docs.slice(0, pageSize).map((doc) => {
       const queueNumber = doc.get('queueNumber');
       if (!Number.isSafeInteger(queueNumber) || queueNumber < 1) throw Error('Invalid queue number');
+      const executionStopped = status === 'printing' && !store.hasLiveExecutionGuard();
       const state = store.getBySubmissionId(doc.id)?.state;
       const localState = state && localJobStates.includes(state) ? state : null;
+      const orphan = executionStopped && (localState === null || safelyExecutableStates.has(localState));
+      const reviewState = orphan ? 'needs_reconciliation' : localState;
       return {
         submissionId: doc.id, queueNumber, publicStatus: status,
-        localState, notice: notice(localState, doc.get('validation.severity') === 'warning'),
+        localState, onHold: reviewState === 'needs_reconciliation' || reviewState === 'failed',
+        notice: notice(reviewState, doc.get('validation.severity') === 'warning'),
       };
     });
     return { rows, next: snapshot.size > pageSize ? rows[pageSize - 1]!.queueNumber : null };

@@ -3,12 +3,17 @@ import { request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { JobStore, SimulatedPrinter, type CloudQueue } from '../src/index.ts';
+import type { OperatorQueue } from '../src/operator-queue.ts';
+import { submission } from './fixtures/submission.ts';
 import { createOperatorServer } from '../src/operator-server.ts';
 
 const disposers: Array<() => void> = [];
 afterEach(() => { for (const dispose of disposers.splice(0)) dispose(); });
 
-async function desk(recoverClaim: CloudQueue['recoverClaim'] = async () => null) {
+async function desk(
+  recoverClaim: CloudQueue['recoverClaim'] = async () => null,
+  list: OperatorQueue['list'] = async () => { throw Error('unexpected queue access'); },
+) {
   const store = new JobStore(':memory:');
   const server = createOperatorServer({
     workerId: 'test', store, executor: new SimulatedPrinter(),
@@ -18,7 +23,7 @@ async function desk(recoverClaim: CloudQueue['recoverClaim'] = async () => null)
       updatePublicStatus: async () => { throw Error('unexpected status publication'); },
     },
   }, {
-    list: async () => { throw Error('unexpected queue access'); },
+    list,
     collect: async () => { throw Error('unexpected pickup'); },
   });
   server.listen(0, '127.0.0.1');
@@ -88,6 +93,36 @@ describe('loopback control boundary', () => {
       await claim;
     }
     expect((await send('/claim', 'POST', headers)).status).toBe(404);
+  });
+
+  it('omits the Start target when a slow queue read shows an earlier ticket as Next', async () => {
+    const delayed = Promise.withResolvers<void>();
+    const reading = Promise.withResolvers<void>();
+    const ticket = { ...submission('second', 2), publicStatus: 'next' as const };
+    const { send, headers } = await desk(
+      async () => ({ submission: ticket, workerId: 'test', claimedAt: ticket.updatedAt }),
+      async () => {
+        reading.resolve();
+        await delayed.promise;
+        return {
+          rows: [
+            { submissionId: 'first', queueNumber: 1, publicStatus: 'next', localState: 'claimed', notice: null, onHold: false },
+            { submissionId: 'second', queueNumber: 2, publicStatus: 'queued', localState: null, notice: null, onHold: false },
+          ],
+          next: { queued: null, ready: null },
+        };
+      },
+    );
+    const refresh = send('/queue');
+    await reading.promise;
+    try {
+      expect((await send('/claim', 'POST', headers)).status).toBe(200);
+    } finally {
+      delayed.resolve();
+    }
+    const snapshot = JSON.parse((await refresh).body);
+    expect(snapshot.rows[0].submissionId).toBe('first');
+    expect(snapshot.claimedSubmissionId).toBeNull();
   });
 
   it('returns a fixed failure message and allows another claim after a preparation exception', async () => {

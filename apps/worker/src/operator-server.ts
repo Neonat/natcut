@@ -61,7 +61,12 @@ export function createOperatorServer(deps: WorkerDependencies, queue: OperatorQu
         const ready = cursor(url.searchParams, 'readyAfter');
         if (queued === null || ready === null) return send(response, 400, { error: 'INVALID_CURSOR' });
         const page = await queue.list({ queued, ready });
-        return send(response, 200, { ...page, claimedSubmissionId: currentSubmissionId, busy: claiming || executing });
+        const visibleClaim = page.rows.find((row) =>
+          row.submissionId === currentSubmissionId && row.publicStatus === 'next' && !row.onHold);
+        return send(response, 200, {
+          ...page, claimedSubmissionId: visibleClaim?.submissionId ?? null,
+          busy: claiming || executing || (currentSubmissionId !== null && !visibleClaim),
+        });
       }
       const pickup = /^\/collect\/([A-Za-z0-9_-]{1,128})$/.exec(url.pathname);
       if (request.method === 'POST' && pickup) {
@@ -77,6 +82,7 @@ export function createOperatorServer(deps: WorkerDependencies, queue: OperatorQu
         try {
           const prepared = await prepareNextWorkerJob(deps);
           if (prepared.kind === 'idle') return send(response, 404, { error: 'QUEUE_EMPTY' });
+          if (prepared.kind === 'busy') return send(response, 409, { error: 'SIMULATOR_BUSY' });
           if (prepared.kind === 'waiting_for_cloud') return send(response, 503, { error: 'STATUS_SYNC_PENDING' });
           if (prepared.kind !== 'prepared') {
             return send(response, 409, { error: 'JOB_NEEDS_RECONCILIATION', submissionId: prepared.submissionId });

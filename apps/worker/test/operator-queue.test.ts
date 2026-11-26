@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { PublicStatus } from '@natcut/domain';
 import type { Firestore } from 'firebase-admin/firestore';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createFirestoreCloudQueue, runWorkerOnce, SimulatedPrinter } from '../src/index.ts';
 import { JobStore } from '../src/job-store.ts';
 import { startSimulatorDesk } from '../src/simulator-desk.ts';
 import { operatorEmulator } from './fixtures/operator-emulator.ts';
@@ -13,13 +17,17 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
   let firestore: Firestore;
   let store: JobStore;
   let server: Awaited<ReturnType<typeof startSimulatorDesk>>;
+  let directory: string;
+  let journal: string;
   let origin: string;
   let headers: Record<string, string>;
   let eventId: string;
   beforeAll(() => { firestore = operatorEmulator(); });
   beforeEach(async () => {
     eventId = randomUUID();
-    store = new JobStore(':memory:');
+    directory = await mkdtemp(path.join(tmpdir(), 'natcut-operator-'));
+    journal = path.join(directory, 'jobs.sqlite');
+    store = new JobStore(journal);
     server = await startSimulatorDesk({ firestore, eventId, store, port: 0, delayMs: 0 });
     origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
     const { capability } = await (await fetch(origin + '/session')).json();
@@ -28,6 +36,7 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
   afterEach(async () => {
     await new Promise<void>((done) => server.close(() => done()));
     store.close();
+    await rm(directory, { recursive: true, force: true });
   });
   afterAll(async () => { await firestore.terminate(); });
 
@@ -62,7 +71,7 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     const heldRow = page.rows.find((row: {queueNumber: number}) => row.queueNumber === 31);
     expect(heldRow).toEqual({
       submissionId: held.id, queueNumber: 31, publicStatus: 'printing', localState: 'needs_reconciliation',
-      notice: expect.stringMatching(/interrupted|reconciliation/i),
+      onHold: true, notice: expect.stringMatching(/interrupted|reconciliation/i),
     });
     expect(JSON.stringify(page)).not.toMatch(/ownerUid|idempotency|token|hash|private|lastError|jpegPath/i);
     const next = await (await fetch(origin + '/queue?queuedAfter=25&readyAfter=64')).json();
@@ -112,6 +121,41 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     expect(store.list().map((row) => row.submissionId)).toEqual([next.id]);
   });
 
+  it('leaves a live executor busy while its committed execution fence response is pending', async () => {
+    const ticket = await seed(1, 'queued');
+    const committed = Promise.withResolvers<void>();
+    const acknowledge = Promise.withResolvers<void>();
+    const cloud = createFirestoreCloudQueue(firestore, undefined, eventId);
+    const owner = new JobStore(journal);
+    const worker = runWorkerOnce({
+      workerId: 'dev-mac', store: owner, executor: new SimulatedPrinter(),
+      cloud: {
+        ...cloud,
+        async beginExecution(...args) {
+          const result = await cloud.beginExecution(...args);
+          committed.resolve();
+          await acknowledge.promise;
+          return result;
+        },
+      },
+    });
+    try {
+      await committed.promise;
+      const concurrent = await runWorkerOnce({ workerId: 'dev-mac', store, cloud, executor: new SimulatedPrinter() });
+      expect(concurrent).toEqual({ kind: 'busy', submissionId: ticket.id });
+      const claim = await post('/claim');
+      expect(await claim.json()).toMatchObject({ error: 'SIMULATOR_BUSY' });
+      const page = await (await fetch(origin + '/queue')).json();
+      expect(page.rows[0]).toMatchObject({ publicStatus: 'printing', localState: 'ready_to_declare', onHold: false });
+      expect(store.getBySubmissionId(ticket.id)?.state).toBe('ready_to_declare');
+    } finally {
+      acknowledge.resolve();
+      await worker;
+      owner.close();
+    }
+    expect(store.getBySubmissionId(ticket.id)?.state).toBe('ready');
+  });
+
   it('holds a recovered claim when the cloud execution fence advanced before the local phase was saved', async () => {
     const ticket = await seed(1, 'next');
     store.insertClaimed({ submission: ticket, workerId: 'dev-mac', claimedAt: ticket.updatedAt });
@@ -121,6 +165,11 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
       publicStatus: 'printing', executionLease: { workerId: 'dev-mac', token, startedAt: ticket.updatedAt },
     });
     await firestore.doc('workerSlots/' + eventId).set({ submissionId: ticket.id, workerId: 'dev-mac', claimedAt: ticket.updatedAt });
+    const snapshot = await (await fetch(origin + '/queue')).json();
+    expect(snapshot.rows[0]).toMatchObject({
+      localState: 'ready_to_declare', onHold: true, notice: expect.stringMatching(/reconciliation/i),
+    });
+    expect(store.getBySubmissionId(ticket.id)?.state).toBe('ready_to_declare');
     expect((await post('/claim')).status).toBe(409);
     expect(store.getBySubmissionId(ticket.id)?.state).toBe('needs_reconciliation');
     expect((await post('/start')).status).toBe(409);

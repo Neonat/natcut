@@ -32,7 +32,7 @@ async function run(task) {
 }
 
 function updateButtons() {
-  const held = snapshot?.rows.some((row) => ['needs_reconciliation', 'failed'].includes(row.localState));
+  const held = snapshot?.rows.some((row) => row.onHold);
   byId('refresh').disabled = pending;
   byId('claim').disabled = pending || !snapshot || snapshot.busy || held || Boolean(snapshot.claimedSubmissionId);
   byId('start').disabled = pending || !snapshot?.claimedSubmissionId || snapshot.busy || held;
@@ -61,7 +61,7 @@ async function refresh() {
   for (const ticket of data.rows) {
     const tr = body.insertRow();
     cell(tr, '#' + ticket.queueNumber);
-    cell(tr, labels[ticket.publicStatus]);
+    cell(tr, ticket.onHold ? 'On hold' : labels[ticket.publicStatus]);
     const phase = cell(tr, ticket.localState?.replaceAll('_', ' ') ?? '—');
     if (ticket.notice) phase.append(Object.assign(document.createElement('small'), { textContent: ticket.notice }));
     const action = cell(tr, '');
