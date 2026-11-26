@@ -1,0 +1,33 @@
+FROM node:24.12.0-bookworm-slim AS dependencies
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY scripts/check-node.mjs scripts/check-node.mjs
+COPY apps/submission/package.json apps/submission/package.json
+COPY apps/visitor/package.json apps/visitor/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY packages/cut-geometry/package.json packages/cut-geometry/package.json
+COPY packages/domain/package.json packages/domain/package.json
+COPY packages/render/package.json packages/render/package.json
+RUN npm ci --omit=dev --workspace @natcut/submission --include-workspace-root=false
+
+FROM node:24.12.0-bookworm-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+
+COPY --from=dependencies /app/node_modules ./node_modules
+COPY package.json package-lock.json ./
+COPY apps/submission/package.json apps/submission/package.json
+COPY apps/submission/src apps/submission/src
+COPY packages/cut-geometry/package.json packages/cut-geometry/package.json
+COPY packages/cut-geometry/src packages/cut-geometry/src
+COPY packages/domain/package.json packages/domain/package.json
+COPY packages/domain/src packages/domain/src
+COPY packages/render/package.json packages/render/package.json
+COPY packages/render/src packages/render/src
+COPY vendor/pixcut-trace vendor/pixcut-trace
+COPY fixtures/assets fixtures/assets
+
+USER node
+EXPOSE 8080
+CMD ["node", "apps/submission/src/cloud-run.ts"]

@@ -10,6 +10,36 @@ import type { Firestore } from 'firebase-admin/firestore';
 
 const StoredSubmissionSchema = SubmissionSchema.strip();
 
+type RuntimeEnvironment = Record<string, string | undefined>;
+
+export type FirestoreSelection = {
+  projectId: 'demo-natcut' | 'sprout-dev-66f08';
+  databaseId: 'natcut' | undefined;
+};
+
+export function resolveSubmissionFirestoreSelection(environment: RuntimeEnvironment): FirestoreSelection {
+  const projectId = environment.NATCUT_PROJECT_ID;
+  if (projectId === 'demo-natcut') {
+    if (environment.NATCUT_DATABASE_ID !== undefined) {
+      throw new Error('Local development must not set NATCUT_DATABASE_ID; the emulator uses its default database.');
+    }
+    if (environment.FIRESTORE_EMULATOR_HOST !== '127.0.0.1:8080') {
+      throw new Error('Local development requires FIRESTORE_EMULATOR_HOST=127.0.0.1:8080.');
+    }
+    return { projectId, databaseId: undefined };
+  }
+  if (projectId !== 'sprout-dev-66f08') {
+    throw new Error('Production requires NATCUT_PROJECT_ID=sprout-dev-66f08.');
+  }
+  if (environment.NATCUT_DATABASE_ID !== 'natcut') {
+    throw new Error('Production requires NATCUT_DATABASE_ID=natcut.');
+  }
+  if (environment.FIRESTORE_EMULATOR_HOST !== undefined) {
+    throw new Error('Production must not use FIRESTORE_EMULATOR_HOST.');
+  }
+  return { projectId, databaseId: 'natcut' };
+}
+
 export type CreateSubmissionInput = {
   ownerUid: string;
   eventId: string;

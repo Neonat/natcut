@@ -43,6 +43,7 @@ export type SubmissionServerDependencies = {
   validateManifest: ValidateManifest;
   now?: () => string;
   corsOrigin?: boolean | string | RegExp;
+  routePrefix?: '' | `/${string}`;
 };
 
 function hashToken(token: string): string {
@@ -60,8 +61,13 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
   const app = Fastify({ logger: false });
   if (deps.corsOrigin !== undefined) void app.register(cors, { origin: deps.corsOrigin });
   const now = deps.now ?? (() => new Date().toISOString());
+  const routePrefix = deps.routePrefix?.replace(/\/$/, '') ?? '';
+  const route = (path: string) => `${routePrefix}${path}`;
 
-  app.post('/v1/submissions', async (request, reply) => {
+  app.get('/health', async () => ({ ok: true }));
+  if (routePrefix) app.get(route('/health'), async () => ({ ok: true }));
+
+  app.post(route('/v1/submissions'), async (request, reply) => {
     const token = bearerTokenFromHeader(request.headers.authorization);
     if (!token) return reply.code(401).send({ error: 'AUTH_REQUIRED' });
 
@@ -140,7 +146,8 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
     }
   });
 
-  app.get<{ Params: { id: string } }>('/v1/submissions/:id/status', async (request, reply) => {
+  app.get<{ Params: { id: string } }>(route('/v1/submissions/:id/status'), async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store');
     const token = request.headers['x-natcut-status-token'];
     if (typeof token !== 'string' || token.length === 0) return reply.code(401).send({ error: 'STATUS_TOKEN_REQUIRED' });
     const submission = await deps.repository.getPublicStatus(request.params.id, hashToken(token));
@@ -155,7 +162,7 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
     };
   });
 
-  app.post<{ Params: { id: string } }>('/v1/submissions/:id/leave', async (request, reply) => {
+  app.post<{ Params: { id: string } }>(route('/v1/submissions/:id/leave'), async (request, reply) => {
     const token = request.headers['x-natcut-status-token'];
     if (typeof token !== 'string' || token.length === 0) return reply.code(401).send({ error: 'STATUS_TOKEN_REQUIRED' });
     const result = await deps.repository.leave(request.params.id, hashToken(token), now());

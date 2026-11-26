@@ -11,6 +11,8 @@ if (requested !== 'submission' && requested !== 'worker') {
   const command = [
     'firebase',
     'emulators:exec',
+    '--config',
+    'firebase.emulators.json',
     '--project',
     'demo-natcut',
     '--only',

@@ -5,7 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { cert, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
-import { createFirebaseBearerVerifier, buildSubmissionServer, createSubmissionRepository, createTrustedManifestValidator } from '../apps/submission/src/index.ts';
+import {
+  createFirebaseBearerVerifier,
+  buildSubmissionServer,
+  createSubmissionRepository,
+  createTrustedManifestValidator,
+  resolveSubmissionFirestoreSelection,
+} from '../apps/submission/src/index.ts';
 import {
   createFirestoreCloudQueue,
   flushPublicStatusOutbox,
@@ -13,13 +19,26 @@ import {
   prepareNextWorkerJob,
   recoverInterruptedJobs,
   runLocalJob,
+  resolveWorkerFirestoreSelection,
   SimulatedPrinter,
 } from '../apps/worker/src/index.ts';
 import { loadRgbaAsset, type AssetCatalog } from '../packages/render/src/index.ts';
 
-const projectId = process.env.NATCUT_PROJECT_ID;
-if (projectId !== 'demo-natcut') throw new Error('Local runtime requires NATCUT_PROJECT_ID=demo-natcut');
-if (process.env.FIRESTORE_EMULATOR_HOST !== '127.0.0.1:8080') throw new Error('Firestore emulator must use 127.0.0.1:8080');
+if (process.env.NATCUT_PROJECT_ID !== 'demo-natcut') {
+  throw new Error('Local runtime requires NATCUT_PROJECT_ID=demo-natcut.');
+}
+if (process.env.NATCUT_DATABASE_ID !== undefined) {
+  throw new Error('Local runtime must not set NATCUT_DATABASE_ID.');
+}
+if (process.env.FIRESTORE_EMULATOR_HOST !== '127.0.0.1:8080') {
+  throw new Error('Local runtime requires FIRESTORE_EMULATOR_HOST=127.0.0.1:8080.');
+}
+const submissionSelection = resolveSubmissionFirestoreSelection(process.env);
+const workerSelection = resolveWorkerFirestoreSelection(process.env);
+if (submissionSelection.projectId !== workerSelection.projectId || submissionSelection.databaseId !== workerSelection.databaseId) {
+  throw new Error('Submission and worker Firestore selections must match.');
+}
+const projectId = submissionSelection.projectId;
 if (process.env.FIREBASE_AUTH_EMULATOR_HOST !== '127.0.0.1:9099') throw new Error('Auth emulator must use 127.0.0.1:9099');
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

@@ -1,0 +1,11 @@
+{
+  "targets": {
+    "sprout-dev-66f08": {
+      "hosting": {
+        "natcut": [
+          "natcut"
+        ]
+      }
+    }
+  }
+}

@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "start:cloud": "node src/cloud-run.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
