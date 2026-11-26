@@ -108,7 +108,7 @@ Create a review packet from the current fixture without connecting to Firebase o
 npm run proof:sheet -- --out /tmp/natcut-sheet-proof
 ```
 
-The new directory contains `sheet.jpg`, `cut-overlay.svg`, and `evidence.json`. The JPEG is the padded 1216 × 2128 review raster; the SVG places the traced contour over those same coordinates; the evidence file records distinct hashes for the manifest, logical color raster, expanded cut mask, JPEG, and contours. The command reserves the path without replacement and uses a `.incomplete` sentinel while moving the fully built packet into place. Treat any directory containing that sentinel as failed; a successful command removes it last. The resulting packet is a normal movable directory.
+The new directory contains `sheet.jpg`, `cut-overlay.svg`, and `evidence.json`. The JPEG is the padded 1216 × 2128 review raster; the SVG places the traced contour over those same coordinates; the evidence file records distinct hashes for the manifest, logical color raster, expanded cut mask, JPEG, and contours. The command reserves the path without replacement and uses a `.incomplete` sentinel while moving the fully built packet into place. Treat the packet as complete only when all three files exist and the sentinel does not; an interrupted run can leave an empty reserved directory. The resulting packet is a normal movable directory.
 
 This packet is explicitly an **offline preview, not print-ready**. Centered padding is an unverified registration assumption. It contains no PLT, knife pressure, USB call, network call, or printer instruction.
 
