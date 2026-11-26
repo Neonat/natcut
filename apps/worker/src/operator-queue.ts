@@ -1,5 +1,5 @@
 import type { Firestore, Transaction } from 'firebase-admin/firestore';
-import { localJobStates, safelyExecutableStates, type JobStore, type LocalJobState } from './job-store.ts';
+import { localJobStates, type JobStore, type LocalJobState } from './job-store.ts';
 
 type DeskStatus = 'queued' | 'next' | 'printing' | 'ready';
 export type QueueCursors = { queued: number; ready: number };
@@ -12,9 +12,10 @@ export type OperatorQueueRow = {
   onHold: boolean;
 };
 
-function notice(state: LocalJobState | null, hasWarning: boolean) {
+function notice(state: LocalJobState | null, status: DeskStatus, hasWarning: boolean) {
   if (state === 'failed') return 'Simulation failed. This ticket is on hold.';
   if (state === 'needs_reconciliation') return 'Execution needs reconciliation. This ticket is on hold.';
+  if (state === 'ready' && status === 'printing') return 'Simulation complete. Ready status is waiting to publish.';
   return hasWarning ? 'Design has a geometry warning.' : null;
 }
 
@@ -35,12 +36,12 @@ export function createOperatorQueue(firestore: Firestore, eventId: string, store
       const executionStopped = status === 'printing' && !store.hasLiveExecutionGuard();
       const state = store.getBySubmissionId(doc.id)?.state;
       const localState = state && localJobStates.includes(state) ? state : null;
-      const orphan = executionStopped && (localState === null || safelyExecutableStates.has(localState));
+      const orphan = executionStopped && localState !== 'ready' && localState !== 'failed';
       const reviewState = orphan ? 'needs_reconciliation' : localState;
       return {
         submissionId: doc.id, queueNumber, publicStatus: status,
         localState, onHold: reviewState === 'needs_reconciliation' || reviewState === 'failed',
-        notice: notice(reviewState, doc.get('validation.severity') === 'warning'),
+        notice: notice(reviewState, status, doc.get('validation.severity') === 'warning'),
       };
     });
     return { rows, next: snapshot.size > pageSize ? rows[pageSize - 1]!.queueNumber : null };

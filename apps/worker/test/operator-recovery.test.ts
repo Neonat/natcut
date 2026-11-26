@@ -2,9 +2,12 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
+import { JobStore } from '../src/job-store.ts';
+import { startSimulatorDesk } from '../src/simulator-desk.ts';
 import { operatorEmulator } from './fixtures/operator-emulator.ts';
 import { submission } from './fixtures/submission.ts';
 
@@ -23,6 +26,10 @@ it.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('recovers only a pre-execution c
   const ticket = { ...submission(eventId + '-1', 1), eventId };
   const next = { ...submission(eventId + '-2', 2), eventId };
   let worker: ChildProcess | undefined;
+  const observerStore = new JobStore(journal);
+  const observer = await startSimulatorDesk({ firestore, eventId, store: observerStore, port: 0 });
+  const observerUrl = 'http://127.0.0.1:' + (observer.address() as AddressInfo).port;
+  const observedRow = async () => (await (await fetch(observerUrl + '/queue')).json()).rows[0];
 
   async function start() {
     worker = fork(new URL('./fixtures/desk-process.ts', import.meta.url), [journal, eventId], {
@@ -57,7 +64,12 @@ it.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('recovers only a pre-execution c
     expect(overlapping.map((response) => response.status)).toEqual([409, 409]);
     await expect.poll(async () => (await second.rows())[0].localState, { interval: 30, timeout: 8000 })
       .toMatch(/^(declaring|uploading_cut|uploading_image|printing|cutting)$/);
+    expect((await observedRow()).onHold).toBe(false);
     await interrupt(worker!);
+    expect(await observedRow()).toMatchObject({
+      publicStatus: 'printing', localState: expect.stringMatching(/^(declaring|uploading_cut|uploading_image|printing|cutting)$/),
+      onHold: true, notice: expect.stringMatching(/reconciliation/i),
+    });
     const original = (await ref.get()).data();
     expect(original?.publicStatus).toBe('printing');
     const recovered = await start();
@@ -72,6 +84,8 @@ it.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('recovers only a pre-execution c
     expect((await firestore.doc('workerSlots/' + eventId).get()).data()?.submissionId).toBe(ticket.id);
   } finally {
     if (worker) await interrupt(worker);
+    await new Promise<void>((done) => observer.close(() => done()));
+    observerStore.close();
     await firestore.terminate();
     await rm(directory, { recursive: true, force: true });
   }

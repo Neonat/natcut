@@ -7,7 +7,7 @@ import type { PublicStatus } from '@natcut/domain';
 import type { Firestore } from 'firebase-admin/firestore';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createFirestoreCloudQueue, runWorkerOnce, SimulatedPrinter } from '../src/index.ts';
-import { JobStore } from '../src/job-store.ts';
+import { JobStore, type LocalJobState } from '../src/job-store.ts';
 import { startSimulatorDesk } from '../src/simulator-desk.ts';
 import { operatorEmulator } from './fixtures/operator-emulator.ts';
 import { submission } from './fixtures/submission.ts';
@@ -173,6 +173,23 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     expect((await post('/claim')).status).toBe(409);
     expect(store.getBySubmissionId(ticket.id)?.state).toBe('needs_reconciliation');
     expect((await post('/start')).status).toBe(409);
+  });
+
+  it('classifies every execution phase in a stopped journal while preserving completed and failed outcomes', async () => {
+    const ticket = await seed(1, 'printing');
+    store.insertClaimed({ submission: ticket, workerId: 'dev-mac', claimedAt: ticket.updatedAt });
+    const outcomes: Array<[LocalJobState, boolean, RegExp]> = [
+      ['declaring', true, /reconciliation/i], ['uploading_cut', true, /reconciliation/i],
+      ['uploading_image', true, /reconciliation/i], ['printing', true, /reconciliation/i],
+      ['cutting', true, /reconciliation/i], ['ready', false, /publish/i], ['failed', true, /failed/i],
+    ];
+    for (const [state, onHold, reason] of outcomes) {
+      store.transition(ticket.id, state, ticket.updatedAt);
+      const page = await (await fetch(origin + '/queue')).json();
+      expect(page.rows[0]).toMatchObject({
+        localState: state, onHold, notice: expect.stringMatching(reason),
+      });
+    }
   });
 
   it('rejects pickup before readiness, missing tickets, and tickets from another event', async () => {
