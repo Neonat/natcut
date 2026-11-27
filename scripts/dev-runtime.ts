@@ -6,6 +6,7 @@ import {
   createFirebaseBearerVerifier,
   buildSubmissionServer,
   createSubmissionRepository,
+  createSurveyRepository,
   createTrustedManifestValidator,
   resolveSubmissionFirestoreSelection,
 } from '../apps/submission/src/index.ts';
@@ -46,6 +47,7 @@ const submission = buildSubmissionServer({
   eventId: 'devfest-sg',
   statusTokenSecret: 'local-demo-status-token-secret-32-bytes-minimum',
   repository: createSubmissionRepository(firestore),
+  surveyRepository: createSurveyRepository(firestore),
   verifyBearerToken: createFirebaseBearerVerifier(getAuth(admin)),
   validateManifest: createTrustedManifestValidator(),
   corsOrigin: allowedOrigin,

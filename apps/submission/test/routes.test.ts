@@ -4,10 +4,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   IdempotencyConflictError,
   RequeueForbiddenError,
+  SurveyUnavailableError,
   buildSubmissionServer,
   createTrustedManifestValidator,
   type CreateSubmissionInput,
   type SubmissionRepository,
+  type SubmitSurveyResult,
+  type SurveyInput,
+  type SurveyRepository,
 } from '../src/index.ts';
 
 const manifest = {
@@ -121,16 +125,49 @@ class MemoryRepository implements SubmissionRepository {
   }
 }
 
+class MemorySurveyRepository implements SurveyRepository {
+  readonly records = new Map<string, SubmitSurveyResult>();
+  constructor(private readonly submissions: MemoryRepository) {}
+
+  async submit(input: SurveyInput): Promise<SubmitSurveyResult> {
+    const key = `${input.eventId}:${input.ownerUid}`;
+    const existing = this.records.get(key);
+    if (existing) return { ...existing, created: false };
+    const submission = this.submissions.records.get(input.stickerSubmissionId);
+    if (!submission || submission.ownerUid !== input.ownerUid || submission.eventId !== input.eventId || submission.publicStatus !== 'collected') {
+      throw new SurveyUnavailableError();
+    }
+    const surveyId = `survey-${this.records.size + 1}`;
+    const result: SubmitSurveyResult = {
+      surveyId,
+      created: true,
+      survey: {
+        email: input.marketingEmail?.trim().toLowerCase() ?? null,
+        eventId: input.eventId,
+        stickerSubmissionId: input.stickerSubmissionId,
+        cuteRating: input.cuteRating,
+        selfieStoragePath: null,
+        submittedAt: input.submittedAt,
+      },
+    };
+    this.records.set(key, result);
+    return result;
+  }
+}
+
 describe('submission routes', () => {
   let repository: MemoryRepository;
+  let surveyRepository: MemorySurveyRepository;
   let app: ReturnType<typeof buildSubmissionServer>;
 
   beforeEach(() => {
     repository = new MemoryRepository();
+    surveyRepository = new MemorySurveyRepository(repository);
     app = buildSubmissionServer({
       eventId: 'devfest-sg',
       statusTokenSecret: 'test-secret-at-least-32-bytes-long',
       repository,
+      surveyRepository,
       verifyBearerToken: async (token) => {
         if (token === 'alice-token') return { uid: 'alice' };
         if (token === 'bob-token') return { uid: 'bob' };
@@ -150,6 +187,7 @@ describe('submission routes', () => {
     const selected = { ...manifest, renderVersion: 'catalog-v1', spriteAssetId: index.sprites[0]!.id };
     const server = buildSubmissionServer({
       eventId: 'devfest-sg', statusTokenSecret: 'test-secret-at-least-32-bytes-long', repository,
+      surveyRepository,
       verifyBearerToken: async () => ({ uid: 'visitor' }),
       validateManifest: createTrustedManifestValidator(),
     });
@@ -190,6 +228,7 @@ describe('submission routes', () => {
       eventId: 'devfest-sg',
       statusTokenSecret: 'test-secret-at-least-32-bytes-long',
       repository,
+      surveyRepository,
       verifyBearerToken: async () => ({ uid: 'alice' }),
       validateManifest: async () => report('ok'),
       routePrefix: '/api',
@@ -212,6 +251,68 @@ describe('submission routes', () => {
       payload: body,
     });
   }
+
+  async function submitSurvey(body: Record<string, unknown>, token = 'alice-token') {
+    return app.inject({
+      method: 'POST',
+      url: '/v1/surveys',
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      payload: body,
+    });
+  }
+
+  async function collectedSubmission() {
+    const accepted = (await submit()).json();
+    repository.setStatus(accepted.submissionId, 'collected');
+    return accepted.submissionId as string;
+  }
+
+  it('requires valid authentication for surveys', async () => {
+    const payload = { stickerSubmissionId: 'submission-1', cuteRating: 5, marketingOptIn: false };
+    expect((await submitSurvey(payload, '')).statusCode).toBe(401);
+    expect((await submitSurvey(payload, 'invalid')).statusCode).toBe(401);
+  });
+
+  it.each([
+    { stickerSubmissionId: 'submission-1', cuteRating: 0, marketingOptIn: false },
+    { stickerSubmissionId: 'submission-1', cuteRating: 6, marketingOptIn: false },
+    { stickerSubmissionId: 'submission-1', cuteRating: 5, marketingOptIn: false, email: 'retained@example.com' },
+    { stickerSubmissionId: 'submission-1', cuteRating: 5, marketingOptIn: true },
+    { stickerSubmissionId: 'submission-1', cuteRating: 5, marketingOptIn: true, email: 'not-an-email' },
+    { stickerSubmissionId: 'submission-1', cuteRating: 5, marketingOptIn: false, extra: true },
+  ])('rejects an invalid or contradictory survey: %j', async (payload) => {
+    expect((await submitSurvey(payload)).statusCode).toBe(400);
+  });
+
+  it('does not reveal whether an uncollected or another visitor ticket exists', async () => {
+    const queued = (await submit()).json().submissionId as string;
+    expect((await submitSurvey({ stickerSubmissionId: queued, cuteRating: 5, marketingOptIn: false })).json()).toEqual({ error: 'SURVEY_NOT_AVAILABLE' });
+    repository.setStatus(queued, 'collected');
+    expect((await submitSurvey({ stickerSubmissionId: queued, cuteRating: 5, marketingOptIn: false }, 'bob-token')).json()).toEqual({ error: 'SURVEY_NOT_AVAILABLE' });
+  });
+
+  it('stores opt-out without email and normalizes an explicit opt-in', async () => {
+    const first = await collectedSubmission();
+    const optOut = await submitSurvey({ stickerSubmissionId: first, cuteRating: 4, marketingOptIn: false });
+    expect(optOut.statusCode).toBe(201);
+    expect([...surveyRepository.records.values()][0]!.survey.email).toBeNull();
+
+    const second = (await submit({ manifest, idempotencyKey: 'request-2' }, 'bob-token')).json().submissionId as string;
+    repository.setStatus(second, 'collected');
+    const optIn = await submitSurvey({ stickerSubmissionId: second, cuteRating: 5, marketingOptIn: true, email: ' Person@Example.COM ' }, 'bob-token');
+    expect(optIn.statusCode).toBe(201);
+    expect([...surveyRepository.records.values()][1]!.survey.email).toBe('person@example.com');
+  });
+
+  it('returns the existing immutable survey when the client retries', async () => {
+    const stickerSubmissionId = await collectedSubmission();
+    const payload = { stickerSubmissionId, cuteRating: 3, marketingOptIn: false };
+    const first = await submitSurvey(payload);
+    const retry = await submitSurvey({ ...payload, cuteRating: 1 });
+    expect(first.statusCode).toBe(201);
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toEqual({ surveyId: first.json().surveyId, created: false });
+  });
 
   it('rejects missing and invalid authentication', async () => {
     expect((await submit({ manifest, idempotencyKey: 'one' }, '')).statusCode).toBe(401);

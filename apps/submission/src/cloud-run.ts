@@ -6,6 +6,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { loadPackagedAssets } from '@natcut/render';
 import { createFirebaseBearerVerifier } from './auth.ts';
 import { createSubmissionRepository, resolveSubmissionFirestoreSelection } from './repository.ts';
+import { createSurveyRepository } from './survey-repository.ts';
 import { buildSubmissionServer } from './routes.ts';
 import { createTrustedManifestValidator } from './validation.ts';
 
@@ -59,6 +60,7 @@ export async function createCloudRunSubmissionServer(
       eventId: 'devfest-sg',
       statusTokenSecret: config.statusTokenSecret,
       repository: createSubmissionRepository(firestore),
+      surveyRepository: createSurveyRepository(firestore),
       verifyBearerToken: createFirebaseBearerVerifier(getAuth(admin)),
       validateManifest: createTrustedManifestValidator((plan) => loadPackagedAssets(plan, artwork)),
       routePrefix: '/api',
