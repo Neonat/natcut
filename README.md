@@ -190,15 +190,16 @@ npm run deploy:hosting
 
 Do not run bare `firebase deploy` in this project. The cloud provisioning and recovery commands are recorded in [`docs/runbooks/cloud-preview.md`](docs/runbooks/cloud-preview.md).
 
-**Stop every legacy cloud worker before deploying the version 2 submission API.** Keep the cloud simulator stopped after activation. Queue consumption can resume with a worker that verifies stored artifacts. Follow the deployment gates in the [cloud preview runbook](docs/runbooks/cloud-preview.md).
+**Stop every legacy cloud worker before deploying the version 2 submission API.** This simulator verifies the canonical manifest, profile, exact storage generation and logical color and cut-mask bytes before starting any phase. It journals the receipt and payload together in SQLite and rehashes the stored bytes at execution. A missing or inconsistent artifact holds the queue head. A temporary storage failure retries the same claim.
 
-The following booth Mac command is for the legacy API and legacy queue only.
+Keep production queue consumption stopped pending an authorized bucket and IAM smoke, token-fenced completion, and reconciliation. The booth Mac simulator configuration for a future rollout follows the [cloud preview runbook](docs/runbooks/cloud-preview.md).
 
 ```bash
 gcloud auth application-default login \
   --impersonate-service-account=natcut-worker@sprout-dev-66f08.iam.gserviceaccount.com
 NATCUT_PROJECT_ID=sprout-dev-66f08 \
 NATCUT_DATABASE_ID=natcut \
+NATCUT_ARTIFACT_BUCKET=sprout-dev-66f08-natcut-artifacts \
 NATCUT_SQLITE_PATH="$PWD/.local/natcut-worker.sqlite" \
 NATCUT_WORKER_ID=devfest-macbook \
 npm run worker:cloud:sim

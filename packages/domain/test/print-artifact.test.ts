@@ -21,7 +21,8 @@ beforeAll(async () => { bundle = await encodeLogicalSourceBundle(source); });
 it('accepts only a V1 descriptor and an exact positive decimal generation', () => {
   const receipt = { descriptor: bundle.descriptor, generation: '9007199254740993' };
   expect(ArtifactReceiptSchema.parse(receipt)).toEqual(receipt);
-  for (const generation of [0, 1, '', '0', '01', '-1', '1.0', ' 1', '1e2']) {
+  expect(ArtifactReceiptSchema.parse({ ...receipt, generation: '9223372036854775807' }).generation).toBe('9223372036854775807');
+  for (const generation of [0, 1, '', '0', '01', '-1', '1.0', ' 1', '1e2', '9223372036854775808', '1'.repeat(100)]) {
     expect(ArtifactReceiptSchema.safeParse({ ...receipt, generation }).success).toBe(false);
   }
   expect(ArtifactReceiptSchema.safeParse({ ...receipt, objectPath: 'foreign' }).success).toBe(false);

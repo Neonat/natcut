@@ -2,7 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { submission } from './fixtures/submission.ts';
+import { submission, verifiedClaim } from './fixtures/submission.ts';
 import { JobStore, createFirestoreCloudQueue } from '../src/index.ts';
 
 const enabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
@@ -40,29 +40,42 @@ emulatorDescribe('cloud claim race', () => {
     expect((await firestore.doc('workerSlots/devfest-sg').get()).data()?.submissionId).toBe(winners[0]!.submission.id);
     expect((await cloud.recoverClaim(winners[0]!.workerId))?.submission.id).toBe(winners[0]!.submission.id);
 
+    const verified = await verifiedClaim(winners[0]!);
+    const evidence = { receipt: verified.artifact.receipt, manifestHash: verified.submission.manifestHash,
+      validation: verified.submission.validation };
+    const head = firestore.doc('submissions/submission-race');
+    await head.update({ 'artifact.generation': '2' });
+    expect(await cloud.beginExecution(verified.submission.id, verified.workerId, 'changed-generation',
+      '2026-11-23T12:00:02.000Z', evidence)).toBe('fenced');
+    expect((await head.get()).get('publicStatus')).toBe('next');
+    await head.update({ 'artifact.generation': evidence.receipt.generation });
+
     expect(await cloud.beginExecution(
       winners[0]!.submission.id,
       winners[0]!.workerId,
       'journal-a',
       '2026-11-23T12:00:02.000Z',
+      evidence,
     )).toBe('acquired');
     expect(await cloud.beginExecution(
       winners[0]!.submission.id,
       winners[0]!.workerId,
       'journal-b',
       '2026-11-23T12:00:03.000Z',
+      evidence,
     )).toBe('fenced');
     expect(await cloud.beginExecution(
       winners[0]!.submission.id,
       winners[0]!.workerId,
       'journal-a',
       '2026-11-23T12:00:04.000Z',
+      evidence,
     )).toBe('fenced');
     expect((await cloud.recoverClaim(winners[0]!.workerId))?.executionToken).toBe('journal-a');
 
     const store = new JobStore(':memory:');
-    store.insertClaimed(winners[0]!);
-    expect(() => store.insertClaimed(winners[0]!)).toThrow(/unique/i);
+    store.insertClaimed(verified);
+    expect(() => store.insertClaimed(verified)).toThrow(/unique/i);
     expect(store.list()).toHaveLength(1);
     store.close();
 

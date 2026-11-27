@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@natcut/artifacts": "*",
     "@natcut/domain": "*",
     "better-sqlite3": "^13.2.0",
     "firebase-admin": "14.5.1"

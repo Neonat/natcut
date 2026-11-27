@@ -42,7 +42,8 @@ export const LogicalSourceBundleDescriptorSchema = metadata.safeExtend({
 
 export type LogicalSourceBundleDescriptor = z.infer<typeof LogicalSourceBundleDescriptorSchema>;
 export type LogicalSourceBundle = { descriptor: LogicalSourceBundleDescriptor; bytes: Uint8Array };
-export const ArtifactGenerationSchema = z.string().regex(/^[1-9][0-9]*$/);
+export const ArtifactGenerationSchema = z.string().regex(/^[1-9][0-9]{0,18}$/)
+  .pipe(z.string().refine(value => BigInt(value) <= 9223372036854775807n, 'Generation exceeds positive int64 range.'));
 export const ArtifactReceiptSchema = z.strictObject({
   descriptor: LogicalSourceBundleDescriptorSchema,
   generation: ArtifactGenerationSchema,

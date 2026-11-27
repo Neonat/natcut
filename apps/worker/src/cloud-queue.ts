@@ -1,7 +1,22 @@
-import { SubmissionSchema, canTransitionPublicStatus, type PublicStatus, type Submission } from '@natcut/domain';
+import { isDeepStrictEqual } from 'node:util';
+import { SubmissionSchema, canTransitionPublicStatus, manifestHash, type ArtifactReceipt, type PublicStatus, type Submission } from '@natcut/domain';
 import type { Firestore } from 'firebase-admin/firestore';
 
 const StoredSubmissionSchema = SubmissionSchema.strip();
+
+export class InvalidClaimError extends Error {
+  readonly submissionId: string;
+  constructor(submissionId: string) {
+    super('Worker slot references a missing or invalid submission.');
+    this.submissionId = submissionId;
+  }
+}
+
+function readClaimRecord(id: string, data: FirebaseFirestore.DocumentData | undefined, eventId: string) {
+  const { workerLease: _claim, executionLease: _execution, ...record } = data ?? {};
+  const parsed = SubmissionSchema.safeParse(record);
+  return parsed.success && parsed.data.id === id && parsed.data.eventId === eventId ? parsed.data : null;
+}
 
 type RuntimeEnvironment = Record<string, string | undefined>;
 
@@ -40,7 +55,10 @@ export type ClaimedSubmission = {
   executionToken?: string | null;
 };
 
+export type ExecutionEvidence = Pick<Submission, 'manifestHash' | 'validation'> & { receipt: ArtifactReceipt };
+
 export interface CloudQueue {
+  isReadyAcknowledged(submissionId: string): Promise<boolean>;
   recoverClaim(workerId: string): Promise<ClaimedSubmission | null>;
   claimNextSubmission(workerId: string): Promise<ClaimedSubmission | null>;
   beginExecution(
@@ -48,6 +66,7 @@ export interface CloudQueue {
     workerId: string,
     executionToken: string,
     updatedAt: string,
+    evidence: ExecutionEvidence,
   ): Promise<'acquired' | 'fenced'>;
   updatePublicStatus(submissionId: string, status: PublicStatus, updatedAt: string): Promise<void>;
 }
@@ -60,18 +79,30 @@ export function createFirestoreCloudQueue(
   const submissions = firestore.collection('submissions');
   const slot = firestore.collection('workerSlots').doc(eventId);
   return {
+    async isReadyAcknowledged(submissionId) {
+      return firestore.runTransaction(async transaction => {
+        const [ticket, active] = await Promise.all([transaction.get(submissions.doc(submissionId)), transaction.get(slot)]);
+        const status = ticket.get('publicStatus');
+        const activeId = active.get('submissionId');
+        return ticket.get('id') === submissionId && ticket.get('eventId') === eventId &&
+          (status === 'ready' || status === 'collected') &&
+          (!active.exists || (typeof activeId === 'string' && activeId.length > 0 && activeId !== submissionId));
+      }, { readOnly: true });
+    },
+
     async recoverClaim(workerId) {
       return firestore.runTransaction(async (transaction) => {
         const slotSnapshot = await transaction.get(slot);
         if (!slotSnapshot.exists || slotSnapshot.data()?.workerId !== workerId) return null;
         const submissionSnapshot = await transaction.get(submissions.doc(String(slotSnapshot.data()?.submissionId)));
-        if (!submissionSnapshot.exists) throw new Error('Worker slot references a missing submission');
-        const submission = StoredSubmissionSchema.parse(submissionSnapshot.data());
+        const submission = readClaimRecord(submissionSnapshot.id, submissionSnapshot.data(), eventId);
+        if (!submission) throw new InvalidClaimError(submissionSnapshot.id);
         return {
           submission,
           workerId,
           claimedAt: String(slotSnapshot.data()?.claimedAt),
-          executionToken: typeof submissionSnapshot.data()?.executionLease?.token === 'string'
+          executionToken: submissionSnapshot.data()?.executionLease?.workerId === workerId &&
+            typeof submissionSnapshot.data()?.executionLease?.token === 'string'
             ? submissionSnapshot.data()!.executionLease.token
             : null,
         };
@@ -79,7 +110,7 @@ export function createFirestoreCloudQueue(
     },
 
     async claimNextSubmission(workerId) {
-      return firestore.runTransaction(async (transaction) => {
+      const claimed = await firestore.runTransaction(async (transaction) => {
         const slotSnapshot = await transaction.get(slot);
         if (slotSnapshot.exists) return null;
         const queued = await transaction.get(
@@ -91,40 +122,44 @@ export function createFirestoreCloudQueue(
         );
         const document = queued.docs[0];
         if (!document) return null;
-        const submission = StoredSubmissionSchema.parse(document.data());
         const claimedAt = now();
         transaction.update(document.ref, {
           publicStatus: 'next',
           updatedAt: claimedAt,
           workerLease: { workerId, claimedAt },
         });
-        transaction.create(slot, { submissionId: submission.id, workerId, claimedAt });
-        return {
-          submission: { ...submission, publicStatus: 'next', updatedAt: claimedAt },
-          workerId,
-          claimedAt,
-          executionToken: null,
-        };
+        transaction.create(slot, { submissionId: document.id, workerId, claimedAt });
+        return { id: document.id, data: document.data(), claimedAt };
       });
+      if (!claimed) return null;
+      // Decode after committing the slot so an invalid head remains held across workers and restarts.
+      const submission = readClaimRecord(claimed.id, claimed.data, eventId);
+      if (!submission) throw new InvalidClaimError(claimed.id);
+      return {
+        submission: { ...submission, publicStatus: 'next', updatedAt: claimed.claimedAt },
+        claimedAt: claimed.claimedAt, workerId, executionToken: null,
+      };
     },
 
-    async beginExecution(submissionId, workerId, executionToken, updatedAt) {
+    async beginExecution(submissionId, workerId, executionToken, updatedAt, evidence) {
       const ref = submissions.doc(submissionId);
       return firestore.runTransaction(async (transaction) => {
         const [snapshot, slotSnapshot] = await Promise.all([
           transaction.get(ref),
           transaction.get(slot),
         ]);
-        if (!snapshot.exists) throw new Error(`Missing cloud submission ${submissionId}`);
-        const submission = StoredSubmissionSchema.parse(snapshot.data());
         const slotData = slotSnapshot.data();
         if (
           !slotSnapshot.exists ||
           slotData?.submissionId !== submissionId ||
           slotData?.workerId !== workerId
         ) return 'fenced';
-        if (submission.publicStatus === 'printing') return 'fenced';
-        if (submission.publicStatus !== 'next') return 'fenced';
+        const submission = readClaimRecord(submissionId, snapshot.data(), eventId);
+        if (!submission || submission.publicStatus !== 'next' || submission.recordVersion !== 2 ||
+            !isDeepStrictEqual(submission.artifact, evidence.receipt) || !isDeepStrictEqual(submission.validation, evidence.validation) ||
+            submission.manifestHash !== evidence.manifestHash || await manifestHash(submission.manifest) !== evidence.manifestHash) {
+          return 'fenced';
+        }
         transaction.update(ref, {
           publicStatus: 'printing',
           updatedAt,

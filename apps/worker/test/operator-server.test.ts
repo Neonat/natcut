@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { JobStore, SimulatedPrinter, type CloudQueue } from '../src/index.ts';
 import type { OperatorQueue } from '../src/operator-queue.ts';
-import { submission } from './fixtures/submission.ts';
+import { artifactReader, submission } from './fixtures/submission.ts';
 import { createOperatorServer } from '../src/operator-server.ts';
 
 const disposers: Array<() => void> = [];
@@ -16,9 +16,9 @@ async function desk(
 ) {
   const store = new JobStore(':memory:');
   const server = createOperatorServer({
-    workerId: 'test', store, executor: new SimulatedPrinter(),
+    workerId: 'test', store, artifactReader, executor: new SimulatedPrinter(),
     cloud: {
-      recoverClaim, claimNextSubmission: async () => null,
+      isReadyAcknowledged: async () => false, recoverClaim, claimNextSubmission: async () => null,
       beginExecution: async () => { throw Error('unexpected execution'); },
       updatePublicStatus: async () => { throw Error('unexpected status publication'); },
     },

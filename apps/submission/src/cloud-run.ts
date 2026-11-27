@@ -4,7 +4,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
-import { createGcsArtifactPublisher } from '@natcut/artifacts';
+import { createGcsArtifactPublisher, NATCUT_ARTIFACT_BUCKET } from '@natcut/artifacts';
 import { loadPackagedAssets } from '@natcut/render';
 import { createFirebaseBearerVerifier } from './auth.ts';
 import { createSubmissionRepository, resolveSubmissionFirestoreSelection } from './repository.ts';
@@ -13,7 +13,7 @@ import { buildSubmissionServer } from './routes.ts';
 import { createTrustedArtifactPreparer } from './validation.ts';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
-export const NATCUT_ARTIFACT_BUCKET = 'sprout-dev-66f08-natcut-artifacts';
+export { NATCUT_ARTIFACT_BUCKET };
 
 export type CloudRunConfig = {
   projectId: 'sprout-dev-66f08';

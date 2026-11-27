@@ -118,9 +118,9 @@ rg 'demo-natcut|127\.0\.0\.1:(8088|9099)|NATCUT_STATUS_TOKEN_SECRET' apps/visito
 
 No matches is the expected result.
 
-## Run the Mac simulator with the legacy API only
+## Configure the V2 Mac simulator for an authorized rollout
 
-The booth Mac impersonates the dedicated worker service account. This creates a local ADC file under the user's gcloud configuration, never in Git:
+Keep production consumption stopped until the authorized storage smoke, token-fenced completion and reconciliation rollout. The dedicated worker service account needs `storage.objects.get` on the isolated artifact bucket. The booth Mac uses local ADC impersonation.
 
 ```bash
 gcloud auth application-default login \
@@ -128,12 +128,15 @@ gcloud auth application-default login \
 
 NATCUT_PROJECT_ID=sprout-dev-66f08 \
 NATCUT_DATABASE_ID=natcut \
+NATCUT_ARTIFACT_BUCKET=sprout-dev-66f08-natcut-artifacts \
 NATCUT_SQLITE_PATH="$PWD/.local/natcut-worker.sqlite" \
 NATCUT_WORKER_ID=devfest-macbook \
 npm run worker:cloud:sim
 ```
 
-The simulator imports no USB bridge and cannot start a physical printer job. Stop it with `Ctrl-C`. Keep `.local/natcut-worker.sqlite` between restarts; deleting it while a submission is in `next` or `printing` forces operator reconciliation.
+The worker runs the simulator only. It verifies new and recovered V2 claims against the exact pinned object and persists verified bytes in the journal. Storage authentication, network and deadline failures leave the same claim waiting. Legacy claims, unknown versions and missing or corrupt evidence hold the queue head for reconciliation. Stop with `Ctrl-C` and retain `.local/natcut-worker.sqlite` across restarts.
+
+Restart with the same worker ID. Publishing a pending ready update requires the matching cloud printing claim, verified journal and execution token. If the update committed before its response was lost, the worker confirms that the ticket is already ready or collected and that its slot was released, then clears that local intent. An unresolved intent for a different worker or a completed journal whose cloud ticket is still next requires reconciliation before the queue can advance.
 
 ## Smoke checks
 
@@ -142,7 +145,7 @@ curl -fsS https://natcut.web.app/api/health
 curl -sS -o /dev/null -w '%{http_code}\n' https://natcut.web.app/edit
 ```
 
-Expected results are `{"ok":true}` and `200`. For the artifact-bearing API, use an authorized test submission to verify the stored generation and ticket receipt while queue consumption is stopped. The legacy simulator flow applies only to the legacy API and queue.
+Expected results are `{"ok":true}` and `200`. For the artifact-bearing API, use an authorized test submission to verify the stored generation and ticket receipt while queue consumption is stopped.
 
 ## Cost guardrail
 

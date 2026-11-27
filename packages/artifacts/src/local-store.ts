@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { link, lstat, mkdir, open, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { decodeLogicalSourceBundle, verifyLogicalSourceBundleDescriptor, type LogicalSourceBundle } from '@natcut/domain';
+import { decodeLogicalSourceBundle, verifyLogicalSourceBundleDescriptor, type ArtifactReceipt, type LogicalSourceBundle } from '@natcut/domain';
 import type { ArtifactPublisher } from './publisher.ts';
+import { ArtifactIntegrityError, parseArtifactReceipt, verifyArtifactBytes, type ArtifactReader } from './reader.ts';
 
-export class LocalArtifactStore implements ArtifactPublisher {
+export class LocalArtifactStore implements ArtifactPublisher, ArtifactReader {
   private readonly root: string;
 
   /** `directory` must live below a stable parent controlled by the process owner. */
@@ -68,23 +69,44 @@ export class LocalArtifactStore implements ArtifactPublisher {
   async readVerified(descriptorInput: unknown, signal?: AbortSignal): Promise<Uint8Array> {
     signal?.throwIfAborted();
     const descriptor = await verifyLogicalSourceBundleDescriptor(descriptorInput);
+    return (await this.readLocalGeneration({ descriptor, generation: '1' }, signal)).bytes;
+  }
+
+  async read(receiptInput: ArtifactReceipt, { signal }: { signal?: AbortSignal } = {}) {
+    signal?.throwIfAborted();
+    const receipt = parseArtifactReceipt(receiptInput);
+    if (receipt.generation !== '1') throw new ArtifactIntegrityError('Missing local artifact generation.');
+    try {
+      return await this.readLocalGeneration(receipt, signal);
+    } catch (error) {
+      if (['ENOENT', 'ELOOP', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        throw new ArtifactIntegrityError('Missing or invalid local artifact object.', { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  private async readLocalGeneration(receipt: ArtifactReceipt, signal?: AbortSignal) {
+    const { descriptor } = receipt;
     await this.ensurePrivateRoot(false);
     const file = await open(join(this.root, descriptor.bundleSha256),
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const stat = await file.stat();
-      if (!stat.isFile() || stat.size !== descriptor.byteLength) throw new Error('Artifact type or byte length mismatch.');
+      if (!stat.isFile() || stat.size !== descriptor.byteLength) throw new ArtifactIntegrityError('Artifact type or byte length mismatch.');
       const bytes = new Uint8Array(descriptor.byteLength);
       let offset = 0;
       while (offset < bytes.length) {
         signal?.throwIfAborted();
         const { bytesRead } = await file.read(bytes, offset, bytes.length - offset, offset);
-        if (bytesRead === 0) throw new Error('Artifact truncated while reading.');
+        if (bytesRead === 0) throw new ArtifactIntegrityError('Artifact truncated while reading.');
         offset += bytesRead;
       }
       const tail = await file.read(new Uint8Array(1), 0, 1, offset);
-      if (tail.bytesRead !== 0) throw new Error('Artifact grew while reading.');
-      return (await decodeLogicalSourceBundle(bytes, descriptor)).bytes;
+      if (tail.bytesRead !== 0) throw new ArtifactIntegrityError('Artifact grew while reading.');
+      const verified = await verifyArtifactBytes(bytes, receipt);
+      signal?.throwIfAborted();
+      return verified;
     } finally {
       await file.close();
     }

@@ -1,3 +1,4 @@
+import { LocalArtifactStore } from '@natcut/artifacts';
 import { fork, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
@@ -9,7 +10,7 @@ import { expect, it } from 'vitest';
 import { JobStore } from '../src/job-store.ts';
 import { startSimulatorDesk } from '../src/simulator-desk.ts';
 import { operatorEmulator } from './fixtures/operator-emulator.ts';
-import { submission } from './fixtures/submission.ts';
+import { bundle, submission } from './fixtures/submission.ts';
 
 async function interrupt(worker: ChildProcess) {
   if (worker.exitCode !== null || worker.signalCode !== null) return;
@@ -27,7 +28,9 @@ it.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('recovers only a pre-execution c
   const next = { ...submission(eventId + '-2', 2), eventId };
   let worker: ChildProcess | undefined;
   const observerStore = new JobStore(journal);
-  const observer = await startSimulatorDesk({ firestore, eventId, store: observerStore, port: 0 });
+  const artifacts = new LocalArtifactStore(path.join(directory, 'artifacts'));
+  await artifacts.publish(bundle);
+  const observer = await startSimulatorDesk({ artifactReader: artifacts, firestore, eventId, store: observerStore, port: 0 });
   const observerUrl = 'http://127.0.0.1:' + (observer.address() as AddressInfo).port;
   const observedRow = async () => (await (await fetch(observerUrl + '/queue')).json()).rows[0];
 

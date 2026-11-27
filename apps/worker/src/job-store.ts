@@ -1,8 +1,7 @@
 import Database from 'better-sqlite3';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { DEVFEST_SG_V1 } from '@natcut/domain';
-import type { ClaimedSubmission } from './cloud-queue.ts';
+import type { VerifiedClaim } from './artifact-verification.ts';
 
 export const localJobStates = [
   'claimed', 'rendering', 'validating', 'ready_to_declare', 'declaring', 'uploading_cut',
@@ -22,6 +21,12 @@ export type LocalPrintJob = {
   queueNumber: number;
   manifestHash: string;
   rasterHash: string;
+  artifactReceiptJson: string | null;
+  artifactBytes: Uint8Array | null;
+  artifactVerifiedAt: string | null;
+  colorSha256: string | null;
+  cutMaskSha256: string | null;
+  bundleSha256: string | null;
   printProfileSnapshotJson: string;
   geometryReportJson: string;
   jpegPath: string;
@@ -50,6 +55,7 @@ export type PendingPublicStatus = {
 
 const columns = [
   'id', 'submissionId', 'queueNumber', 'manifestHash', 'rasterHash',
+  'artifactReceiptJson', 'artifactBytes', 'artifactVerifiedAt', 'colorSha256', 'cutMaskSha256', 'bundleSha256',
   'printProfileSnapshotJson', 'geometryReportJson', 'jpegPath', 'jpegSha256', 'jpegBytes',
   'pltPath', 'pltSha256', 'pltBytes', 'state', 'printerJobId', 'uploadPhase',
   'lastPrinterState', 'lastPrinterSubState', 'lastAlertsJson', 'acceptedAt', 'stateChangedAt', 'lastError',
@@ -96,6 +102,13 @@ export class JobStore {
   }
 
   initialize() {
+    this.database.transaction(() => this.migrate()).immediate();
+  }
+
+  private migrate() {
+    const version = this.database.pragma('user_version', { simple: true });
+    if (version === 1) return;
+    if (version !== 0) throw new Error('Unsupported worker journal version.');
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS local_print_jobs (
         id TEXT PRIMARY KEY,
@@ -138,6 +151,14 @@ export class JobStore {
         submissionId TEXT PRIMARY KEY,
         executionToken TEXT NOT NULL
       );
+      ALTER TABLE local_print_jobs ADD COLUMN artifactReceiptJson TEXT;
+      ALTER TABLE local_print_jobs ADD COLUMN artifactBytes BLOB;
+      ALTER TABLE local_print_jobs ADD COLUMN artifactVerifiedAt TEXT;
+      ALTER TABLE local_print_jobs ADD COLUMN colorSha256 TEXT;
+      ALTER TABLE local_print_jobs ADD COLUMN cutMaskSha256 TEXT;
+      ALTER TABLE local_print_jobs ADD COLUMN bundleSha256 TEXT;
+      CREATE TABLE artifact_holds (submissionId TEXT PRIMARY KEY, heldAt TEXT NOT NULL, reason TEXT NOT NULL);
+      PRAGMA user_version = 1;
     `);
     const guardColumns = this.database.pragma('table_info(execution_guard)') as Array<{ name: string }>;
     if (!guardColumns.some((column) => column.name === 'processIdentity')) {
@@ -145,21 +166,28 @@ export class JobStore {
     }
   }
 
-  insert(job: LocalPrintJob) {
+  private insert(job: LocalPrintJob) {
     const names = columns.join(', ');
     const values = columns.map((column) => `@${column}`).join(', ');
     this.database.prepare(`INSERT INTO local_print_jobs (${names}) VALUES (${values})`).run(job);
   }
 
-  insertClaimed(claim: ClaimedSubmission) {
-    const { submission } = claim;
+  insertClaimed(claim: VerifiedClaim) {
+    const { submission, artifact } = claim;
+    const { descriptor } = artifact.receipt;
     this.insert({
       id: `local-${submission.id}`,
       submissionId: submission.id,
       queueNumber: submission.queueNumber,
       manifestHash: submission.manifestHash,
       rasterHash: submission.validation.rasterHash,
-      printProfileSnapshotJson: JSON.stringify(DEVFEST_SG_V1),
+      artifactReceiptJson: JSON.stringify(artifact.receipt),
+      artifactBytes: artifact.bytes,
+      artifactVerifiedAt: claim.verifiedAt,
+      colorSha256: descriptor.colorSha256,
+      cutMaskSha256: descriptor.maskSha256,
+      bundleSha256: descriptor.bundleSha256,
+      printProfileSnapshotJson: JSON.stringify(descriptor.profile),
       geometryReportJson: JSON.stringify(submission.validation),
       jpegPath: '', jpegSha256: '', jpegBytes: 0,
       pltPath: '', pltSha256: '', pltBytes: 0,
@@ -175,10 +203,24 @@ export class JobStore {
     });
   }
 
-  ensureClaimed(claim: ClaimedSubmission): 'available' | 'busy' | 'needs_reconciliation' {
+  hasArtifactHold(submissionId: string): boolean {
+    return Boolean(this.database.prepare('SELECT 1 FROM artifact_holds WHERE submissionId = ?').get(submissionId));
+  }
+
+  holdArtifact(submissionId: string, heldAt: string, reason: string): 'busy' | 'needs_reconciliation' {
+    return this.database.transaction(() => {
+      if (this.hasLiveExecutionGuard()) return 'busy';
+      this.database.prepare('INSERT OR IGNORE INTO artifact_holds VALUES (?, ?, ?)').run(submissionId, heldAt, reason);
+      if (this.getState(submissionId)) this.transition(submissionId, 'needs_reconciliation', heldAt, reason);
+      return 'needs_reconciliation';
+    }).immediate();
+  }
+
+  ensureClaimed(claim: VerifiedClaim): 'available' | 'busy' | 'needs_reconciliation' {
     return this.database.transaction(() => {
       // Observe ownership and classify the journal in the same SQLite transaction.
       if (this.hasLiveExecutionGuard()) return 'busy';
+      if (this.hasArtifactHold(claim.submission.id)) return 'needs_reconciliation';
       const existing = this.getBySubmissionId(claim.submission.id);
       if (!existing) {
         this.insertClaimed(claim);
@@ -193,16 +235,23 @@ export class JobStore {
         }
         return 'available';
       }
-      if (existing.manifestHash !== claim.submission.manifestHash || existing.queueNumber !== claim.submission.queueNumber) {
-        throw new Error(`Cloud lease for ${claim.submission.id} does not match the local journal`);
+      const { receipt, bytes } = claim.artifact;
+      if (existing.manifestHash !== claim.submission.manifestHash || existing.queueNumber !== claim.submission.queueNumber ||
+          existing.artifactReceiptJson !== JSON.stringify(receipt) || !existing.artifactVerifiedAt ||
+          !Buffer.isBuffer(existing.artifactBytes) || !existing.artifactBytes.equals(bytes) ||
+          existing.colorSha256 !== receipt.descriptor.colorSha256 || existing.cutMaskSha256 !== receipt.descriptor.maskSha256 ||
+          existing.bundleSha256 !== receipt.descriptor.bundleSha256 || existing.printProfileSnapshotJson !== JSON.stringify(receipt.descriptor.profile) ||
+          existing.geometryReportJson !== JSON.stringify(claim.submission.validation) || existing.rasterHash !== claim.submission.validation.rasterHash) {
+        this.transition(existing.submissionId, 'needs_reconciliation', claim.verifiedAt, 'Cloud evidence differs from the local journal.');
+        return 'needs_reconciliation';
+      }
+      if (safelyExecutableStates.has(existing.state) && claim.submission.publicStatus !== 'next') {
+        this.transition(existing.submissionId, 'needs_reconciliation', claim.verifiedAt,
+          'Cloud status is inconsistent with the local pre-execution phase.');
+        return 'needs_reconciliation';
       }
       if (claim.submission.publicStatus === 'printing' && existing.state !== 'needs_reconciliation') {
-        if (safelyExecutableStates.has(existing.state)) {
-          this.transition(existing.submissionId, 'needs_reconciliation', claim.claimedAt,
-            'Cloud execution began before the local execution phase was recorded.');
-          return 'needs_reconciliation';
-        }
-        const localExecutionToken = this.getOrCreateExecutionToken(existing.submissionId);
+        const localExecutionToken = this.getExecutionToken(existing.submissionId);
         if (!claim.executionToken || claim.executionToken !== localExecutionToken) {
           this.transition(
             existing.submissionId,
@@ -212,6 +261,10 @@ export class JobStore {
           );
           return 'needs_reconciliation';
         }
+      } else if (existing.state === 'ready') {
+        this.transition(existing.submissionId, 'needs_reconciliation', claim.verifiedAt,
+          'Completed journal has no matching cloud printing fence.');
+        return 'needs_reconciliation';
       }
       return 'available';
     }).immediate();
@@ -245,6 +298,14 @@ export class JobStore {
     return (this.database.prepare('SELECT * FROM local_print_jobs WHERE submissionId = ?').get(submissionId) as LocalPrintJob | undefined) ?? null;
   }
 
+  getState(submissionId: string): LocalJobState | undefined {
+    return this.database.prepare('SELECT state FROM local_print_jobs WHERE submissionId = ?').pluck().get(submissionId) as LocalJobState | undefined;
+  }
+
+  listStates(): Pick<LocalPrintJob, 'submissionId' | 'state'>[] {
+    return this.database.prepare('SELECT submissionId, state FROM local_print_jobs ORDER BY queueNumber, acceptedAt').all() as Pick<LocalPrintJob, 'submissionId' | 'state'>[];
+  }
+
   list(): LocalPrintJob[] {
     return this.database.prepare('SELECT * FROM local_print_jobs ORDER BY queueNumber, acceptedAt').all() as LocalPrintJob[];
   }
@@ -261,8 +322,9 @@ export class JobStore {
     return this.database.prepare('SELECT * FROM public_status_outbox ORDER BY id').all() as PendingPublicStatus[];
   }
 
-  clearPendingPublicStatus(id: number) {
-    this.database.prepare('DELETE FROM public_status_outbox WHERE id = ?').run(id);
+  clearPendingPublicStatus(pending: PendingPublicStatus) {
+    this.database.prepare(`DELETE FROM public_status_outbox
+      WHERE id = @id AND submissionId = @submissionId AND status = @status AND updatedAt = @updatedAt`).run(pending);
   }
 
   transitionAndStagePublicStatus(
@@ -302,12 +364,14 @@ export class JobStore {
     this.database.prepare('DELETE FROM execution_guard WHERE singleton = 1 AND ownerToken = ?').run(ownerToken);
   }
 
+  private getExecutionToken(submissionId: string): string | undefined {
+    return this.database.prepare('SELECT executionToken FROM job_execution_identity WHERE submissionId = ?').pluck().get(submissionId) as string | undefined;
+  }
+
   getOrCreateExecutionToken(submissionId: string): string {
     return this.database.transaction(() => {
-      const existing = this.database.prepare(
-        'SELECT executionToken FROM job_execution_identity WHERE submissionId = ?',
-      ).get(submissionId) as { executionToken: string } | undefined;
-      if (existing) return existing.executionToken;
+      const existing = this.getExecutionToken(submissionId);
+      if (existing) return existing;
       const executionToken = randomUUID();
       this.database.prepare(
         'INSERT INTO job_execution_identity (submissionId, executionToken) VALUES (?, ?)',

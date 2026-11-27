@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { ArtifactGenerationSchema, artifactObjectPath, decodeLogicalSourceBundle } from '@natcut/domain';
+import { ArtifactGenerationSchema, artifactObjectPath, decodeLogicalSourceBundle, type ArtifactReceipt } from '@natcut/domain';
 import type { ArtifactPublisher } from './publisher.ts';
+import { ArtifactIntegrityError, parseArtifactReceipt, verifyArtifactBytes, type ArtifactReader } from './reader.ts';
+
+export const NATCUT_ARTIFACT_BUCKET = 'sprout-dev-66f08-natcut-artifacts';
 
 interface GcsBucket {
   name: string;
@@ -45,14 +48,14 @@ async function request(bucket: GcsBucket, url: URL, init: RequestInit, publicati
 }
 
 async function consume(response: Response, limit: number, visit: (bytes: Uint8Array, offset: number) => void) {
-  if (!response.body) throw new Error('Missing GCS response body.');
+  if (!response.body) throw new ArtifactIntegrityError('Missing GCS response body.');
   const reader = response.body.getReader();
   let offset = 0;
   try {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return offset;
-      if (value.byteLength > limit - offset) throw new Error('GCS response exceeds expected byte length.');
+      if (value.byteLength > limit - offset) throw new ArtifactIntegrityError('GCS response exceeds expected byte length.');
       visit(value, offset);
       offset += value.byteLength;
     }
@@ -67,22 +70,63 @@ async function readGeneration(response: Response): Promise<string> {
   return ArtifactGenerationSchema.parse(JSON.parse(json.toString('utf8', 0, length))?.generation);
 }
 
-async function verifyPinned(response: Response, expected: Buffer) {
+function bucketPath(bucket: GcsBucket) {
+  return 'storage/v1/b/' + encodeURIComponent(bucket.name) + '/o';
+}
+
+function objectUrl(bucket: GcsBucket, name: string) {
+  return new URL('/' + bucketPath(bucket) + '/' + encodeURIComponent(name), bucket.storage.apiEndpoint);
+}
+
+async function readPinned(
+  bucket: GcsBucket, receipt: ArtifactReceipt, signal: AbortSignal, send: typeof fetch,
+  visit: (chunk: Uint8Array, offset: number) => void,
+) {
+  const { generation, descriptor } = receipt;
+  const { byteLength } = descriptor;
+  const object = objectUrl(bucket, artifactObjectPath(descriptor.bundleSha256));
+  object.search = new URLSearchParams({ alt: 'media', generation }).toString();
+  let response: Response;
+  try {
+    response = await request(bucket, object, { headers: {
+      Range: 'bytes=0-' + byteLength, 'Accept-Encoding': 'gzip', 'Cache-Control': 'no-store',
+    } }, signal, send);
+  } catch (error) {
+    if (error instanceof StorageHttpError && [404, 410, 416].includes(error.status)) {
+      throw new ArtifactIntegrityError(error.message, { cause: error });
+    }
+    throw error;
+  }
   const range = response.headers.get('content-range');
-  const complete = response.status === 200 ||
-    (response.status === 206 && range === `bytes 0-${expected.length - 1}/${expected.length}`);
+  const complete = (response.status === 200 && range === null) ||
+    (response.status === 206 && range === `bytes 0-${byteLength - 1}/${byteLength}`);
   const encoded = ['content-encoding', 'x-goog-stored-content-encoding'].some((key) => {
     const value = response.headers.get(key);
     return value !== null && value !== 'identity';
   });
-  if (!complete || encoded) {
+  const lengthHeader = response.headers.get('content-length');
+  const observedGeneration = response.headers.get('x-goog-generation');
+  if (!complete || encoded || (lengthHeader !== null && lengthHeader !== String(byteLength)) ||
+      (observedGeneration !== null && observedGeneration !== generation)) {
     await response.body?.cancel();
-    throw new Error('Unexpected pinned object response, encoding or length.');
+    throw new ArtifactIntegrityError('Unexpected pinned object response, generation, encoding or length.');
   }
-  const length = await consume(response, expected.length, (chunk, offset) => {
-    if (!expected.subarray(offset, offset + chunk.length).equals(chunk)) throw new Error('Pinned object bytes differ from verified bundle.');
-  });
-  if (length !== expected.length) throw new Error('Pinned object byte length mismatch.');
+  const length = await consume(response, byteLength, visit);
+  if (length !== byteLength) throw new ArtifactIntegrityError('Pinned object byte length mismatch.');
+}
+
+export function createGcsArtifactReader(bucket: GcsBucket, send: typeof fetch = fetch): ArtifactReader {
+  return {
+    async read(input, { signal = AbortSignal.timeout(requestTimeoutMs) } = {}) {
+      signal.throwIfAborted();
+      const receipt = parseArtifactReceipt(input);
+      const bytes = new Uint8Array(receipt.descriptor.byteLength);
+      await readPinned(bucket, receipt, signal, send, (chunk, offset) => bytes.set(chunk, offset));
+      const verified = await verifyArtifactBytes(bytes, receipt);
+      signal.throwIfAborted();
+      return verified;
+    },
+  };
 }
 
 export function createGcsArtifactPublisher(bucket: GcsBucket, send: typeof fetch = fetch): ArtifactPublisher {
@@ -93,10 +137,8 @@ export function createGcsArtifactPublisher(bucket: GcsBucket, send: typeof fetch
       signal.throwIfAborted();
       const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       const name = artifactObjectPath(descriptor.bundleSha256);
-      const bucketPath = 'storage/v1/b/' + encodeURIComponent(bucket.name) + '/o';
-      const upload = new URL('/upload/' + bucketPath, bucket.storage.apiEndpoint);
+      const upload = new URL('/upload/' + bucketPath(bucket), bucket.storage.apiEndpoint);
       upload.search = new URLSearchParams({ uploadType: 'multipart', ifGenerationMatch: '0', name, fields: 'generation' }).toString();
-      const object = new URL('/' + bucketPath + '/' + encodeURIComponent(name), bucket.storage.apiEndpoint);
 
       // GCS verifies md5Hash before it installs a multipart upload. A damaged
       // upload therefore cannot occupy this create-only content address.
@@ -112,16 +154,16 @@ export function createGcsArtifactPublisher(bucket: GcsBucket, send: typeof fetch
       } catch (error) {
         signal.throwIfAborted();
         if (error instanceof StorageHttpError && ![408, 412, 429].includes(error.status) && error.status < 500) throw error;
-        const lookup = new URL(object);
+        const lookup = objectUrl(bucket, name);
         lookup.search = 'fields=generation';
         result = await request(bucket, lookup, {}, signal, send);
       }
       const generation = await readGeneration(result);
-      object.search = new URLSearchParams({ alt: 'media', generation }).toString();
-      const verified = await request(bucket, object, { headers: {
-        Range: 'bytes=0-' + data.length, 'Accept-Encoding': 'gzip', 'Cache-Control': 'no-store',
-      } }, signal, send);
-      await verifyPinned(verified, data);
+      await readPinned(bucket, { descriptor, generation }, signal, send, (chunk, offset) => {
+        if (!data.subarray(offset, offset + chunk.length).equals(chunk)) {
+          throw new ArtifactIntegrityError('Pinned object bytes differ from verified bundle.');
+        }
+      });
       signal.throwIfAborted();
       return { generation, descriptor };
     },

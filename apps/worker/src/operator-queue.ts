@@ -5,7 +5,7 @@ type DeskStatus = 'queued' | 'next' | 'printing' | 'ready';
 export type QueueCursors = { queued: number; ready: number };
 export type OperatorQueueRow = {
   submissionId: string;
-  queueNumber: number;
+  queueNumber: number | null;
   publicStatus: DeskStatus;
   localState: LocalJobState | null;
   notice: string | null;
@@ -24,27 +24,31 @@ export function createOperatorQueue(firestore: Firestore, eventId: string, store
   const pageSize = 25;
 
   async function page(transaction: Transaction, status: DeskStatus, after: number) {
-    let query = submissions.where('eventId', '==', eventId).where('publicStatus', '==', status)
-      .orderBy('queueNumber').select('queueNumber', 'validation.severity');
-    if (after) query = query.startAfter(after);
     // The exclusive worker slot permits at most one Next or Printing ticket in this event.
     const paginated = status === 'queued' || status === 'ready';
+    let query = submissions.where('eventId', '==', eventId).where('publicStatus', '==', status)
+      .select('queueNumber', 'validation.severity');
+    // Ordering excludes documents without this field, including malformed active claims.
+    if (paginated) query = query.orderBy('queueNumber');
+    if (after) query = query.startAfter(after);
     const snapshot = await transaction.get(query.limit(paginated ? pageSize + 1 : 1));
     const rows: OperatorQueueRow[] = snapshot.docs.slice(0, pageSize).map((doc) => {
-      const queueNumber = doc.get('queueNumber');
-      if (!Number.isSafeInteger(queueNumber) || queueNumber < 1) throw Error('Invalid queue number');
+      const value = doc.get('queueNumber');
+      const queueNumber = Number.isSafeInteger(value) && value > 0 ? value as number : null;
       const executionStopped = status === 'printing' && !store.hasLiveExecutionGuard();
-      const state = store.getBySubmissionId(doc.id)?.state;
+      const state = store.hasArtifactHold(doc.id) ? 'needs_reconciliation' : store.getState(doc.id);
       const localState = state && localJobStates.includes(state) ? state : null;
       const orphan = executionStopped && localState !== 'ready' && localState !== 'failed';
-      const reviewState = orphan ? 'needs_reconciliation' : localState;
+      const reviewState = orphan || queueNumber === null ? 'needs_reconciliation' : localState;
       return {
         submissionId: doc.id, queueNumber, publicStatus: status,
         localState, onHold: reviewState === 'needs_reconciliation' || reviewState === 'failed',
-        notice: notice(reviewState, status, doc.get('validation.severity') === 'warning'),
+        notice: queueNumber === null ? 'Queue number unavailable. This ticket is on hold.' :
+          notice(reviewState, status, doc.get('validation.severity') === 'warning'),
       };
     });
-    return { rows, next: snapshot.size > pageSize ? rows[pageSize - 1]!.queueNumber : null };
+    const canContinue = snapshot.size > pageSize && rows.every(row => row.queueNumber !== null);
+    return { rows, next: canContinue ? rows[pageSize - 1]!.queueNumber : null };
   }
 
   return {
@@ -55,7 +59,7 @@ export function createOperatorQueue(firestore: Firestore, eventId: string, store
           page(transaction, 'printing', 0), page(transaction, 'ready', cursors.ready),
         ]);
         return {
-          rows: [...queued.rows, ...next.rows, ...printing.rows, ...ready.rows].sort((a, b) => a.queueNumber - b.queueNumber),
+          rows: [...queued.rows, ...next.rows, ...printing.rows, ...ready.rows].sort((a, b) => (a.queueNumber ?? 0) - (b.queueNumber ?? 0)),
           next: { queued: queued.next, ready: ready.next },
         };
       }, { readOnly: true });

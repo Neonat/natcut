@@ -60,13 +60,18 @@ The private bucket selection is fixed to `NATCUT_ARTIFACT_BUCKET=sprout-dev-66f0
 
 The local emulator runtime uses its private local create-only store, whose sole generation is `1`. Production bucket ownership, storage IAM, end-to-end GCS behavior and readiness remain unverified. Stop all old workers before deploying an artifact-bearing submission API. Queue consumption requires a separately verified worker rollout.
 
+## Worker artifact verification
+
+The simulator validates each new or recovered V2 submission and recomputes its canonical manifest hash. Its read-only storage adapter requests the receipt's exact generation at the digest-derived path. The cloud request has a 15-second deadline and the worker verification attempt has a 30-second deadline. The worker retains the cloud slot during a retryable storage failure. Missing, inconsistent, unsupported or legacy evidence leaves the head held for reconciliation.
+
+The worker journals the receipt, logical bytes, component and bundle hashes, verification time and immutable profile snapshot in one SQLite insert. Migration preserves historical rows and leaves their new evidence columns null. Recovery compares the journal to freshly verified cloud evidence. Immediately before simulation the worker rehashes the local payload against the prepared receipt under its execution guard. The cloud begin transaction compares the receipt, validation and canonical manifest identity again before marking the ticket printing.
+
 ## Later tranches
 
 1. Verify the production bucket, IAM and pinned upload/read behavior during an authorized storage smoke.
-2. Add worker verification before the execution fence. Unknown, corrupt, missing, or legacy active artifacts hold the queue head visibly.
-3. Narrow begin/finish cloud writes around event, slot, claim, and execution token. Migrate SQLite additively without reinterpreting historic hash columns.
-4. Run one clearly labelled simulator scheduler with a loopback operator desk. Add a simulation-only terminal reconciliation decision only after finish-versus-close and crash recovery tests pass.
-5. After explicit authorization, provision IAM and indexes, verify production readiness, and deploy. Physical artifact generation and USB execution remain separate.
+2. Narrow begin/finish cloud writes around event, slot, claim, and execution token.
+3. Run one clearly labelled simulator scheduler with a loopback operator desk. Add a simulation-only terminal reconciliation decision only after finish-versus-close and crash recovery tests pass.
+4. After explicit authorization, provision IAM and indexes, verify production readiness, and deploy. Physical artifact generation and USB execution remain separate.
 
 ## Safety and rollout invariants
 

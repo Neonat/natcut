@@ -60,12 +60,12 @@ async function refresh() {
   body.replaceChildren();
   for (const ticket of data.rows) {
     const tr = body.insertRow();
-    cell(tr, '#' + ticket.queueNumber);
+    cell(tr, ticket.queueNumber === null ? 'Unavailable' : '#' + ticket.queueNumber);
     cell(tr, ticket.onHold ? 'On hold' : labels[ticket.publicStatus]);
     const phase = cell(tr, ticket.localState?.replaceAll('_', ' ') ?? '—');
     if (ticket.notice) phase.append(Object.assign(document.createElement('small'), { textContent: ticket.notice }));
     const action = cell(tr, '');
-    if (ticket.publicStatus === 'ready') {
+    if (ticket.publicStatus === 'ready' && !ticket.onHold) {
       const button = Object.assign(document.createElement('button'), { textContent: 'Mark collected' });
       button.onclick = () => run(() => command('/collect/' + encodeURIComponent(ticket.submissionId), 'Ticket #' + ticket.queueNumber + ' collected.'));
       action.append(button);

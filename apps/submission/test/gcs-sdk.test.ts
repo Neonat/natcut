@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:http';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getStorage } from 'firebase-admin/storage';
-import { createGcsArtifactPublisher } from '@natcut/artifacts';
+import { createGcsArtifactPublisher, createGcsArtifactReader } from '@natcut/artifacts';
 import { expect, it, vi } from 'vitest';
 import { artifact, bundle } from './fixtures/artifact.ts';
 
@@ -71,13 +71,15 @@ it('sends the verified multipart upload, create precondition and lossless genera
   }
 });
 
-it.each(['upload', 'metadata', 'media'])('closes a stalled %s socket on cancellation', async (phase) => {
+it.each(['upload', 'metadata', 'media', 'worker media headers', 'worker media body'])('closes a stalled %s socket on cancellation', async (phase) => {
   const entered = Promise.withResolvers<void>();
+  const receivedHeaders = Promise.withResolvers<void>();
   const closed = Promise.withResolvers<void>();
   const server = createServer((request, response) => {
     const step = request.method === 'POST' ? 'upload' : request.url?.includes('alt=media') ? 'media' : 'metadata';
     request.resume();
-    if (step === phase) {
+    if (step === phase || phase.startsWith('worker media')) {
+      if (phase === 'worker media body') response.write(Buffer.alloc(8));
       request.socket.once('close', () => closed.resolve());
       entered.resolve();
       return; // Intentionally leave the connection open, including response headers.
@@ -95,9 +97,16 @@ it.each(['upload', 'metadata', 'media'])('closes a stalled %s socket on cancella
     const bucket = getStorage(admin).bucket('test-artifacts');
     vi.spyOn(bucket.storage.authClient, 'getRequestHeaders').mockResolvedValue(new Headers({ Authorization: 'Bearer local' }));
     const controller = new AbortController();
-    const completion = createGcsArtifactPublisher(bucket).publish(bundle, { signal: controller.signal });
+    const completion = phase.startsWith('worker media')
+      ? createGcsArtifactReader(bucket, async (...args) => {
+        const response = await fetch(...args);
+        receivedHeaders.resolve();
+        return response;
+      }).read(artifact, { signal: controller.signal })
+      : createGcsArtifactPublisher(bucket).publish(bundle, { signal: controller.signal });
     const result = completion.then(() => 'accepted', () => 'aborted');
     await entered.promise;
+    if (phase === 'worker media body') await receivedHeaders.promise;
     controller.abort();
     expect(await Promise.race([Promise.all([result, closed.promise]), delay(600, 'still open')])).toEqual(['aborted', undefined]);
   } finally {

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { NATCUT_ARTIFACT_BUCKET } from '@natcut/artifacts';
 import { resolveWorkerFirestoreSelection } from './cloud-queue.ts';
 import type { WorkerResult } from './worker.ts';
 
@@ -7,6 +8,7 @@ type RuntimeEnvironment = Record<string, string | undefined>;
 export type CloudWorkerConfig = {
   projectId: 'sprout-dev-66f08';
   databaseId: 'natcut';
+  artifactBucket: typeof NATCUT_ARTIFACT_BUCKET;
   sqlitePath: string;
   workerId: string;
   pollIntervalMs: number;
@@ -26,6 +28,12 @@ export function readCloudWorkerConfig(environment: RuntimeEnvironment): CloudWor
   if (selection.projectId !== 'sprout-dev-66f08' || selection.databaseId !== 'natcut') {
     throw new Error('Production requires NATCUT_PROJECT_ID=sprout-dev-66f08 and NATCUT_DATABASE_ID=natcut.');
   }
+  if (environment.NATCUT_ARTIFACT_BUCKET !== NATCUT_ARTIFACT_BUCKET) {
+    throw new Error('Worker requires NATCUT_ARTIFACT_BUCKET=' + NATCUT_ARTIFACT_BUCKET);
+  }
+  for (const name of ['STORAGE_EMULATOR_HOST', 'FIREBASE_STORAGE_EMULATOR_HOST']) {
+    if (environment[name] !== undefined) throw new Error('Production must not use ' + name);
+  }
   const sqlitePath = environment.NATCUT_SQLITE_PATH;
   if (!sqlitePath || !path.isAbsolute(sqlitePath) || sqlitePath === ':memory:' || sqlitePath.includes('::memory:')) {
     throw new Error('NATCUT_SQLITE_PATH must be a durable absolute path, not an in-memory or relative database.');
@@ -37,6 +45,7 @@ export function readCloudWorkerConfig(environment: RuntimeEnvironment): CloudWor
   return {
     projectId: selection.projectId,
     databaseId: selection.databaseId,
+    artifactBucket: NATCUT_ARTIFACT_BUCKET,
     sqlitePath,
     workerId,
     pollIntervalMs: boundedInteger(environment.NATCUT_POLL_INTERVAL_MS, 2_000, 500, 30_000, 'NATCUT_POLL_INTERVAL_MS'),

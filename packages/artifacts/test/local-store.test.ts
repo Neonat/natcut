@@ -23,6 +23,14 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
+it('reads only the immutable local generation and returns decode-verified bytes', async () => {
+  const receipt = await store.publish(bundle);
+  const verified = await store.read(receipt);
+  expect(createHash('sha256').update(verified.bytes).digest('hex')).toBe(receipt.descriptor.bundleSha256);
+  expect(verified.receipt).toEqual(receipt);
+  await expect(store.read({ ...receipt, generation: '2' })).rejects.toThrow(/generation/i);
+});
+
 it('creates a verified object once and reuses its original inode', async () => {
   const { bytes, descriptor } = bundle;
   expect(await store.putIfAbsent(bytes, descriptor)).toBe('created');

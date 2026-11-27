@@ -1,6 +1,6 @@
 import { DEVFEST_SG_V1, encodeLogicalSourceBundle, type LogicalSourceBundle } from '@natcut/domain';
 import { beforeAll, expect, it, vi } from 'vitest';
-import { createGcsArtifactPublisher } from '../src/index.ts';
+import { ArtifactIntegrityError, createGcsArtifactPublisher, createGcsArtifactReader } from '../src/index.ts';
 
 let bundle: LogicalSourceBundle;
 beforeAll(async () => {
@@ -15,15 +15,75 @@ const generation = '9007199254740993';
 function storage() {
   const send = vi.fn<typeof fetch>();
   const getRequestHeaders = vi.fn(async () => new Headers({ Authorization: 'Bearer fixture' }));
-  const publisher = createGcsArtifactPublisher({ name: 'artifacts', storage: {
+  const bucket = { name: 'artifacts', storage: {
     apiEndpoint: 'https://example.invalid', authClient: { getRequestHeaders },
-  } }, send);
-  return { send, getRequestHeaders, publisher };
+  } };
+  return { send, getRequestHeaders, publisher: createGcsArtifactPublisher(bucket, send), reader: createGcsArtifactReader(bucket, send) };
 }
 
 function bytesResponse(bytes: Uint8Array = bundle.bytes, headers?: HeadersInit) {
   return new Response(new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } }), headers ? { headers } : {});
 }
+
+it('reads a single authenticated generation at the derived path and verifies both components', async () => {
+  const { reader, send } = storage();
+  send.mockResolvedValueOnce(bytesResponse());
+  const receipt = { descriptor: bundle.descriptor, generation };
+  const verified = await reader.read(receipt);
+  expect(verified.receipt).toEqual(receipt);
+  expect(Buffer.from(verified.bytes).equals(bundle.bytes)).toBe(true);
+  expect(send).toHaveBeenCalledTimes(1);
+  const [url, init] = send.mock.calls[0]!;
+  expect(String(url)).toBe('https://example.invalid/storage/v1/b/artifacts/o/logical%2Fv1%2F' +
+    bundle.descriptor.bundleSha256 + '?alt=media&generation=' + generation);
+  expect(init?.method ?? 'GET').toBe('GET');
+  expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture');
+  expect(new Headers(init?.headers).get('range')).toBe('bytes=0-' + bundle.bytes.length);
+});
+
+it.each(['missing', 'encoding', 'stored encoding', 'length header', 'extra', 'short', 'range', 'status', 'generation', 'color', 'mask', 'bundle', 'nonbinary'] as const)(
+  'rejects %s pinned evidence without a metadata lookup or fallback', async (variant) => {
+    const { reader, send } = storage();
+    const descriptor = { ...bundle.descriptor };
+    const headers = new Headers();
+    let bytes = bundle.bytes;
+    let status = 200;
+    if (variant === 'missing') status = 404;
+    if (variant === 'encoding') headers.set('content-encoding', 'gzip');
+    if (variant === 'stored encoding') headers.set('x-goog-stored-content-encoding', 'br');
+    if (variant === 'length header') headers.set('content-length', '17');
+    if (variant === 'generation') headers.set('x-goog-generation', '3');
+    if (variant === 'range') { status = 206; headers.set('content-range', 'bytes 0-32/33'); }
+    if (variant === 'status') status = 201;
+    if (variant === 'short') bytes = bytes.subarray(1);
+    if (variant === 'extra') bytes = new Uint8Array(bytes.length + 1);
+    if (variant === 'color') descriptor.colorSha256 = '1'.repeat(64);
+    if (variant === 'mask') descriptor.maskSha256 = '2'.repeat(64);
+    if (variant === 'bundle') descriptor.bundleSha256 = '3'.repeat(64);
+    if (variant === 'nonbinary') { bytes = bytes.slice(); bytes[descriptor.colorByteLength] = 1; }
+    send.mockResolvedValueOnce(new Response(bytesResponse(bytes).body, { headers, status }));
+    await expect(reader.read({ descriptor, generation })).rejects.toBeInstanceOf(ArtifactIntegrityError);
+    expect(send).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each([401, 403, 429, 503])('classifies HTTP %i as retryable and makes one request', async status => {
+  const { reader, send } = storage();
+  send.mockResolvedValueOnce(new Response(null, { status }));
+  const error = await reader.read({ descriptor: bundle.descriptor, generation }).catch(cause => cause);
+  expect(error).toBeInstanceOf(Error);
+  expect(error).not.toBeInstanceOf(ArtifactIntegrityError);
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
+it('rejects unregistered profiles and non-decimal generations before fetching', async () => {
+  const { reader, send } = storage();
+  const descriptor = bundle.descriptor;
+  await expect(reader.read({ descriptor, generation: 'latest' })).rejects.toBeInstanceOf(ArtifactIntegrityError);
+  await expect(reader.read({ descriptor: { ...descriptor, profile: { ...descriptor.profile, version: 72 } }, generation }))
+    .rejects.toBeInstanceOf(ArtifactIntegrityError);
+  expect(send).not.toHaveBeenCalled();
+});
 
 it('creates at the derived path, supplies credentials and pins the exact returned generation', async () => {
   const { publisher, send } = storage();

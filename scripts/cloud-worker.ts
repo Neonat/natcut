@@ -2,6 +2,8 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { deleteApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
+import { createGcsArtifactReader } from '@natcut/artifacts';
 import {
   createFirestoreCloudQueue,
   JobStore,
@@ -19,6 +21,7 @@ const admin = getApps().find((candidate) => candidate.name === 'natcut-cloud-wor
   ?? initializeApp({ projectId: config.projectId }, 'natcut-cloud-worker');
 const firestore = getFirestore(admin, config.databaseId);
 const cloud = createFirestoreCloudQueue(firestore);
+const artifactReader = createGcsArtifactReader(getStorage(admin).bucket(config.artifactBucket));
 const store = new JobStore(config.sqlitePath);
 const executor = new SimulatedPrinter({ delayMs: config.simulationPhaseDelayMs });
 const controller = new AbortController();
@@ -43,7 +46,7 @@ try {
   await runWorkerPollingLoop({
     signal: controller.signal,
     intervalMs: config.pollIntervalMs,
-    runOnce: () => runWorkerOnce({ workerId: config.workerId, cloud, store, executor }),
+    runOnce: () => runWorkerOnce({ workerId: config.workerId, cloud, store, executor, artifactReader, signal: controller.signal }),
     onResult: (result) => {
       console.log(JSON.stringify({ event: 'worker_result', ...result }));
       if (result.kind === 'failed' || result.kind === 'needs_reconciliation') controller.abort();
