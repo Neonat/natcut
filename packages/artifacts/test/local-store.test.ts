@@ -33,6 +33,11 @@ it('creates a verified object once and reuses its original inode', async () => {
   expect(createHash('sha256').update(verified).digest('hex')).toBe(descriptor.bundleSha256);
 });
 
+it('rejects an aborted local publication before creating files', async () => {
+  await expect(store.publish(bundle, { signal: AbortSignal.abort() })).rejects.toThrow();
+  expect(await readdir(root)).toEqual([]);
+});
+
 it('detects equally sized corrupt objects without replacing them', async () => {
   const corrupt = bundle.bytes.slice();
   corrupt[0] = 2;

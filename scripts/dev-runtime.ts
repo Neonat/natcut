@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
+import { LocalArtifactStore } from '@natcut/artifacts';
 import { cert, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -7,7 +8,7 @@ import {
   buildSubmissionServer,
   createSubmissionRepository,
   createSurveyRepository,
-  createTrustedManifestValidator,
+  createTrustedArtifactPreparer,
   resolveSubmissionFirestoreSelection,
 } from '../apps/submission/src/index.ts';
 import {
@@ -49,7 +50,8 @@ const submission = buildSubmissionServer({
   repository: createSubmissionRepository(firestore),
   surveyRepository: createSurveyRepository(firestore),
   verifyBearerToken: createFirebaseBearerVerifier(getAuth(admin)),
-  validateManifest: createTrustedManifestValidator(),
+  prepareArtifact: createTrustedArtifactPreparer(),
+  publisher: new LocalArtifactStore('.local/artifacts'),
   corsOrigin: allowedOrigin,
 });
 await submission.listen({ host: submissionHost, port: 8088 });

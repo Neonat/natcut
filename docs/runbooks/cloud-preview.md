@@ -56,6 +56,10 @@ The NatCut site result must include app ID `1:485412794128:web:ef3ea0d8607992e27
 
 ## Build and deploy the API
 
+**Stop all old workers before deploying the artifact-bearing API.** An older worker can consume a version 2 submission without verifying its artifact. Keep production queue consumption stopped until a verification-capable worker has passed its rollout checks.
+
+The new revision requires `NATCUT_ARTIFACT_BUCKET=sprout-dev-66f08-natcut-artifacts`. This is the only permitted bucket name. Bucket provisioning and ownership, production storage IAM and readiness remain unverified. Before deployment, an authorized operator must verify private access, create and read permissions for the submission service account on this bucket, and a successful create-only upload and exact-generation readback. The publisher needs `storage.objects.create` and `storage.objects.get`. A failed publication returns HTTP 503 and the visitor can retry with the same key.
+
 Authenticate the deployment CLI with the project owner account. Do not create or download a service-account key.
 
 ```bash
@@ -81,7 +85,7 @@ gcloud run deploy natcut-submission \
   --region=asia-southeast1 \
   --image=asia-southeast1-docker.pkg.dev/sprout-dev-66f08/natcut/natcut-submission:cloud-preview \
   --service-account=natcut-submission@sprout-dev-66f08.iam.gserviceaccount.com \
-  --set-env-vars=NATCUT_PROJECT_ID=sprout-dev-66f08,NATCUT_DATABASE_ID=natcut \
+  --set-env-vars=NATCUT_PROJECT_ID=sprout-dev-66f08,NATCUT_DATABASE_ID=natcut,NATCUT_ARTIFACT_BUCKET=sprout-dev-66f08-natcut-artifacts \
   --set-secrets=NATCUT_STATUS_TOKEN_SECRET=natcut-status-token:latest \
   --min=0 --max=3 --concurrency=10 --cpu=1 --memory=1Gi --timeout=60s \
   --allow-unauthenticated
@@ -114,7 +118,7 @@ rg 'demo-natcut|127\.0\.0\.1:(8088|9099)|NATCUT_STATUS_TOKEN_SECRET' apps/visito
 
 No matches is the expected result.
 
-## Run the Mac simulator
+## Run the Mac simulator with the legacy API only
 
 The booth Mac impersonates the dedicated worker service account. This creates a local ADC file under the user's gcloud configuration, never in Git:
 
@@ -138,7 +142,7 @@ curl -fsS https://natcut.web.app/api/health
 curl -sS -o /dev/null -w '%{http_code}\n' https://natcut.web.app/edit
 ```
 
-Expected results are `{"ok":true}` and `200`. Then submit through the visitor UI, start the Mac simulator, and refresh the queue page until it reaches **Ready for pickup**.
+Expected results are `{"ok":true}` and `200`. For the artifact-bearing API, use an authorized test submission to verify the stored generation and ticket receipt while queue consumption is stopped. The legacy simulator flow applies only to the legacy API and queue.
 
 ## Cost guardrail
 

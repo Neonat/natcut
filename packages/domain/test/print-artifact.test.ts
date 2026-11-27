@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { beforeAll, expect, it } from 'vitest';
 import {
   DEVFEST_SG_V1, decodeLogicalSourceBundle, encodeLogicalSourceBundle,
-  LogicalSourceBundleDescriptorSchema, type LogicalSourceBundle,
+  ArtifactReceiptSchema, artifactObjectPath, LogicalSourceBundleDescriptorSchema, type LogicalSourceBundle,
 } from '../src/index.ts';
 
 const width = DEVFEST_SG_V1.sheetWidthPx;
@@ -17,6 +17,20 @@ const digest = (bytes: Uint8Array | Uint8ClampedArray) => createHash('sha256').u
 let bundle: LogicalSourceBundle;
 
 beforeAll(async () => { bundle = await encodeLogicalSourceBundle(source); });
+
+it('accepts only a V1 descriptor and an exact positive decimal generation', () => {
+  const receipt = { descriptor: bundle.descriptor, generation: '9007199254740993' };
+  expect(ArtifactReceiptSchema.parse(receipt)).toEqual(receipt);
+  for (const generation of [0, 1, '', '0', '01', '-1', '1.0', ' 1', '1e2']) {
+    expect(ArtifactReceiptSchema.safeParse({ ...receipt, generation }).success).toBe(false);
+  }
+  expect(ArtifactReceiptSchema.safeParse({ ...receipt, objectPath: 'foreign' }).success).toBe(false);
+  expect(ArtifactReceiptSchema.safeParse({
+    ...receipt, descriptor: { ...receipt.descriptor, profileSha256: '0'.repeat(64) },
+  }).success).toBe(false);
+  expect(artifactObjectPath(bundle.descriptor.bundleSha256)).toBe('logical/v1/' + bundle.descriptor.bundleSha256);
+  expect(() => artifactObjectPath('../other')).toThrow();
+});
 
 it('encodes RGBA8 followed by binary mask bytes and verifies the complete descriptor', async () => {
   const expected = Buffer.concat([rgba, mask].map((span) => Buffer.from(span)));

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GeometryReportSchema } from './geometry.ts';
 import { CompositionManifestSchema } from './manifest.ts';
+import { ArtifactReceiptSchema } from './print-artifact.ts';
 import { PublicStatusSchema } from './state-machine.ts';
 
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -17,6 +18,8 @@ export const PrintSpecSchema = z
 export const SubmissionSchema = z
   .object({
     id: z.string().trim().min(1),
+    recordVersion: z.literal(2).optional(),
+    artifact: ArtifactReceiptSchema.optional(),
     ownerUid: z.string().trim().min(1),
     eventId: z.string().trim().min(1),
     idempotencyKey: z.string().trim().min(1),
@@ -33,7 +36,16 @@ export const SubmissionSchema = z
     requeuedFrom: z.string().trim().min(1).nullable(),
     updatedAt: timestampSchema,
   })
-  .strict();
+  .strict().refine(({ recordVersion, artifact, validation, manifest, printSpec }) => {
+    if (recordVersion === undefined) return artifact === undefined;
+    if (!artifact) return false;
+    const { descriptor } = artifact;
+    return descriptor.maskSha256 === validation.rasterHash &&
+      descriptor.geometryVersion === validation.geometryVersion &&
+      descriptor.renderVersion === manifest.renderVersion &&
+      descriptor.profile.id === printSpec.profileId && descriptor.profile.version === printSpec.profileVersion &&
+      manifest.cutMarginMm === printSpec.cutMarginMm;
+  }, { message: 'Stored artifact must match the record version, validation and print specification.' });
 
 export type PrintSpec = z.infer<typeof PrintSpecSchema>;
 export type Submission = z.infer<typeof SubmissionSchema>;

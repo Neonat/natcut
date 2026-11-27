@@ -1,11 +1,14 @@
 import { createHash, createHmac } from 'node:crypto';
 import {
   CompositionManifestSchema,
-  DEVFEST_SG_V1,
   canVisitorLeave,
   geometryIssuesHash,
   manifestHash,
+  type CompositionManifest,
+  type LogicalSourceBundle,
+  type Submission,
 } from '@natcut/domain';
+import type { ArtifactPublisher } from '@natcut/artifacts';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { z } from 'zod';
@@ -16,7 +19,7 @@ import {
   type SubmissionRepository,
 } from './repository.ts';
 import { SurveyUnavailableError, type SurveyRepository } from './survey-repository.ts';
-import type { ValidateManifest } from './validation.ts';
+import type { PreparedTrustedArtifact } from './validation.ts';
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const CuteRatingSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]);
@@ -34,7 +37,7 @@ const CreateBodySchema = z
       })
       .strict()
       .optional(),
-    requeuedFrom: z.string().trim().min(1).max(256).nullable().optional(),
+    requeuedFrom: FirestoreDocumentIdSchema.nullable().optional(),
   })
   .strict();
 
@@ -58,7 +61,8 @@ export type SubmissionServerDependencies = {
   repository: SubmissionRepository;
   surveyRepository: SurveyRepository;
   verifyBearerToken: VerifyBearerToken;
-  validateManifest: ValidateManifest;
+  prepareArtifact: (manifest: CompositionManifest) => Promise<Pick<PreparedTrustedArtifact, 'report' | 'bundle'>>;
+  publisher: ArtifactPublisher;
   now?: () => string;
   corsOrigin?: boolean | string | RegExp;
   routePrefix?: '' | `/${string}`;
@@ -66,6 +70,25 @@ export type SubmissionServerDependencies = {
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+const storageDeadlineMs = 30_000;
+async function publishWithDeadline(publisher: ArtifactPublisher, bundle: LogicalSourceBundle) {
+  const deadline = Promise.withResolvers<never>();
+  const controller = new AbortController();
+  const expiresAt = performance.now() + storageDeadlineMs;
+  const timeoutError = new Error('Artifact publication deadline exceeded');
+  const timer = setTimeout(() => {
+    controller.abort(timeoutError);
+    deadline.reject(timeoutError);
+  }, storageDeadlineMs);
+  try {
+    const receipt = await Promise.race([publisher.publish(bundle, { signal: controller.signal }), deadline.promise]);
+    if (performance.now() >= expiresAt) throw timeoutError;
+    return receipt;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function statusToken(secret: string, ownerUid: string, eventId: string, idempotencyKey: string): string {
@@ -99,64 +122,60 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
     const parsed = CreateBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'INVALID_SUBMISSION', details: parsed.error.issues });
 
-    let validation;
+    const { manifest, idempotencyKey, warningAcknowledgement } = parsed.data;
+    const lookup = {
+      ownerUid: visitor.uid, eventId: deps.eventId, idempotencyKey,
+      manifestHash: await manifestHash(manifest), requeuedFrom: parsed.data.requeuedFrom ?? null,
+    };
+    const publicStatusToken = statusToken(deps.statusTokenSecret, visitor.uid, deps.eventId, idempotencyKey);
+    const sendAccepted = (submission: Submission, created: boolean) => reply.code(created ? 201 : 200).send({
+      submissionId: submission.id, queueNumber: submission.queueNumber, jobsAhead: submission.jobsAhead,
+      publicStatus: submission.publicStatus, statusToken: publicStatusToken,
+    });
     try {
-      validation = await deps.validateManifest(parsed.data.manifest);
-    } catch {
-      return reply.code(422).send({ error: 'UNTRACEABLE_ARTWORK' });
-    }
-    if (!validation.valid || validation.severity === 'error') {
-      return reply.code(422).send({ error: 'INVALID_GEOMETRY', validation });
-    }
+      const existing = await deps.repository.findAccepted(lookup);
+      if (existing) return sendAccepted(existing, false);
 
-    const acceptedAt = now();
-    const canonicalHash = await manifestHash(parsed.data.manifest);
-    const trustedIssuesHash = await geometryIssuesHash(validation.issues);
-    if (validation.severity === 'warning') {
-      const acknowledgement = parsed.data.warningAcknowledgement;
-      if (
-        !acknowledgement ||
-        acknowledgement.geometryVersion !== validation.geometryVersion ||
-        acknowledgement.rasterHash !== validation.rasterHash ||
-        acknowledgement.manifestHash !== canonicalHash ||
-        acknowledgement.issuesHash !== trustedIssuesHash
-      ) {
-        return reply.code(409).send({ error: 'WARNING_ACKNOWLEDGEMENT_REQUIRED', validation });
+      let prepared;
+      try {
+        prepared = await deps.prepareArtifact(manifest);
+      } catch {
+        return reply.code(422).send({ error: 'UNTRACEABLE_ARTWORK' });
       }
-      validation = { ...validation, acknowledgedByVisitor: true, acknowledgedAt: acceptedAt };
-    }
-
-    const publicStatusToken = statusToken(
-      deps.statusTokenSecret,
-      visitor.uid,
-      deps.eventId,
-      parsed.data.idempotencyKey,
-    );
-    try {
+      let validation = prepared.report;
+      if (!validation.valid || validation.severity === 'error') {
+        return reply.code(422).send({ error: 'INVALID_GEOMETRY', validation });
+      }
+      const acceptedAt = now();
+      if (validation.severity === 'warning') {
+        if (!warningAcknowledgement ||
+          warningAcknowledgement.geometryVersion !== validation.geometryVersion ||
+          warningAcknowledgement.rasterHash !== validation.rasterHash ||
+          warningAcknowledgement.manifestHash !== lookup.manifestHash ||
+          warningAcknowledgement.issuesHash !== await geometryIssuesHash(validation.issues)) {
+          return reply.code(409).send({ error: 'WARNING_ACKNOWLEDGEMENT_REQUIRED', validation });
+        }
+        validation = { ...validation, acknowledgedByVisitor: true, acknowledgedAt: acceptedAt };
+      }
+      let artifact;
+      try {
+        artifact = await publishWithDeadline(deps.publisher, prepared.bundle);
+      } catch {
+        return reply.code(503).send({ error: 'ARTIFACT_STORAGE_UNAVAILABLE' });
+      }
+      const profile = prepared.bundle.descriptor.profile;
       const result = await deps.repository.create({
-        ownerUid: visitor.uid,
-        eventId: deps.eventId,
-        idempotencyKey: parsed.data.idempotencyKey,
-        manifest: parsed.data.manifest,
-        manifestHash: canonicalHash,
+        ...lookup, manifest, artifact,
         printSpec: {
-          profileId: DEVFEST_SG_V1.id,
-          profileVersion: DEVFEST_SG_V1.version,
-          cutMarginMm: parsed.data.manifest.cutMarginMm,
+          profileId: profile.id,
+          profileVersion: profile.version,
+          cutMarginMm: manifest.cutMarginMm,
         },
         validation,
         publicStatusTokenHash: hashToken(publicStatusToken),
         acceptedAt,
-        requeuedFrom: parsed.data.requeuedFrom ?? null,
       });
-      const { submission } = result;
-      return reply.code(result.created ? 201 : 200).send({
-        submissionId: submission.id,
-        queueNumber: submission.queueNumber,
-        jobsAhead: submission.jobsAhead,
-        publicStatus: submission.publicStatus,
-        statusToken: publicStatusToken,
-      });
+      return sendAccepted(result.submission, result.created);
     } catch (error) {
       if (error instanceof IdempotencyConflictError) return reply.code(409).send({ error: 'IDEMPOTENCY_CONFLICT' });
       if (error instanceof RequeueForbiddenError) return reply.code(403).send({ error: 'REQUEUE_FORBIDDEN' });

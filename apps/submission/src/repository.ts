@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
 import {
+  PublicStatusSchema,
   SubmissionSchema,
+  type ArtifactReceipt,
   type CompositionManifest,
   type GeometryReport,
   type PrintSpec,
   type Submission,
 } from '@natcut/domain';
-import type { Firestore } from 'firebase-admin/firestore';
+import type { Firestore, QuerySnapshot, Transaction } from 'firebase-admin/firestore';
 
 const StoredSubmissionSchema = SubmissionSchema.strip();
 
@@ -40,17 +42,21 @@ export function resolveSubmissionFirestoreSelection(environment: RuntimeEnvironm
   return { projectId, databaseId: 'natcut' };
 }
 
-export type CreateSubmissionInput = {
+export type SubmissionLookup = {
   ownerUid: string;
   eventId: string;
   idempotencyKey: string;
-  manifest: CompositionManifest;
   manifestHash: string;
+  requeuedFrom: string | null;
+};
+
+export type CreateSubmissionInput = SubmissionLookup & {
+  manifest: CompositionManifest;
+  artifact: ArtifactReceipt;
   printSpec: PrintSpec;
   validation: GeometryReport;
   publicStatusTokenHash: string;
   acceptedAt: string;
-  requeuedFrom: string | null;
 };
 
 export class IdempotencyConflictError extends Error {
@@ -68,6 +74,7 @@ export class RequeueForbiddenError extends Error {
 export type LeaveResult = 'cancelled' | 'locked' | 'not-found';
 
 export interface SubmissionRepository {
+  findAccepted(input: SubmissionLookup): Promise<Submission | null>;
   create(input: CreateSubmissionInput): Promise<{ submission: Submission; created: boolean }>;
   getPublicStatus(id: string, tokenHash: string): Promise<Submission | null>;
   leave(id: string, tokenHash: string, now: string): Promise<LeaveResult>;
@@ -77,8 +84,9 @@ function idempotencyDocumentId(ownerUid: string, eventId: string, key: string): 
   return createHash('sha256').update(`${ownerUid}\0${eventId}\0${key}`).digest('hex');
 }
 
-function isUnfinished(status: Submission['publicStatus']): boolean {
-  return ['joining', 'queued', 'next', 'printing'].includes(status);
+function countUnfinished(snapshot: QuerySnapshot): number {
+  return snapshot.docs.filter((document) =>
+    ['joining', 'queued', 'next', 'printing'].includes(PublicStatusSchema.parse(document.get('publicStatus')))).length;
 }
 
 export function createSubmissionRepository(firestore: Firestore): SubmissionRepository {
@@ -86,43 +94,55 @@ export function createSubmissionRepository(firestore: Firestore): SubmissionRepo
   const idempotency = firestore.collection('submissionIdempotency');
   const counters = firestore.collection('queueCounters');
 
+  const bindingRef = (input: SubmissionLookup) =>
+    idempotency.doc(idempotencyDocumentId(input.ownerUid, input.eventId, input.idempotencyKey));
+
+  async function checkRequest(transaction: Transaction, input: SubmissionLookup) {
+    const binding = (await transaction.get(bindingRef(input))).data();
+    if (!binding) {
+      if (input.requeuedFrom) {
+        const priorSnapshot = await transaction.get(submissions.doc(input.requeuedFrom));
+        const prior = priorSnapshot.exists ? StoredSubmissionSchema.parse(priorSnapshot.data()) : null;
+        if (!prior || prior.ownerUid !== input.ownerUid || prior.eventId !== input.eventId || prior.publicStatus !== 'cancelled') {
+          throw new RequeueForbiddenError();
+        }
+      }
+      return null;
+    }
+    if (binding.manifestHash !== input.manifestHash || binding.requeuedFrom !== input.requeuedFrom) {
+      throw new IdempotencyConflictError();
+    }
+    const existing = await transaction.get(submissions.doc(binding.submissionId));
+    if (!existing.exists) throw new Error('Idempotency binding references a missing submission');
+    const submission = StoredSubmissionSchema.parse(existing.data());
+    if (submission.id !== existing.id || submission.ownerUid !== input.ownerUid || submission.eventId !== input.eventId ||
+      submission.idempotencyKey !== input.idempotencyKey || submission.manifestHash !== input.manifestHash ||
+      submission.requeuedFrom !== input.requeuedFrom) throw new Error('Idempotency binding references a different submission');
+    return submission;
+  }
+
   return {
+    findAccepted(input) {
+      return firestore.runTransaction((transaction) => checkRequest(transaction, input), { readOnly: true });
+    },
+
     async create(input) {
-      const idempotencyRef = idempotency.doc(
-        idempotencyDocumentId(input.ownerUid, input.eventId, input.idempotencyKey),
-      );
       const submissionRef = submissions.doc();
       const counterRef = counters.doc(input.eventId);
 
       return firestore.runTransaction(async (transaction) => {
-        const idempotencySnapshot = await transaction.get(idempotencyRef);
-        if (idempotencySnapshot.exists) {
-          const binding = idempotencySnapshot.data()!;
-          if (binding.manifestHash !== input.manifestHash || binding.requeuedFrom !== input.requeuedFrom) {
-            throw new IdempotencyConflictError();
-          }
-          const existingSnapshot = await transaction.get(submissions.doc(String(binding.submissionId)));
-          if (!existingSnapshot.exists) throw new Error('Idempotency binding references a missing submission');
-          return { submission: StoredSubmissionSchema.parse(existingSnapshot.data()), created: false };
-        }
+        const existing = await checkRequest(transaction, input);
+        if (existing) return { submission: existing, created: false };
 
         const counterSnapshot = await transaction.get(counterRef);
         const nextQueueNumber = Number(counterSnapshot.data()?.lastQueueNumber ?? 0) + 1;
 
-        if (input.requeuedFrom) {
-          const priorSnapshot = await transaction.get(submissions.doc(input.requeuedFrom));
-          const prior = priorSnapshot.exists ? StoredSubmissionSchema.parse(priorSnapshot.data()) : null;
-          if (!prior || prior.ownerUid !== input.ownerUid || prior.publicStatus !== 'cancelled') {
-            throw new RequeueForbiddenError();
-          }
-        }
-
-        const eventSnapshot = await transaction.get(submissions.where('eventId', '==', input.eventId));
-        const jobsAhead = eventSnapshot.docs
-          .map((document) => StoredSubmissionSchema.parse(document.data()))
-          .filter((submission) => isUnfinished(submission.publicStatus)).length;
+        const eventSnapshot = await transaction.get(submissions.where('eventId', '==', input.eventId).select('publicStatus'));
+        const jobsAhead = countUnfinished(eventSnapshot);
 
         const submission = SubmissionSchema.parse({
+          recordVersion: 2,
+          artifact: input.artifact,
           id: submissionRef.id,
           ownerUid: input.ownerUid,
           eventId: input.eventId,
@@ -143,7 +163,7 @@ export function createSubmissionRepository(firestore: Firestore): SubmissionRepo
 
         transaction.set(counterRef, { lastQueueNumber: nextQueueNumber });
         transaction.create(submissionRef, submission);
-        transaction.create(idempotencyRef, {
+        transaction.create(bindingRef(input), {
           submissionId: submission.id,
           manifestHash: submission.manifestHash,
           requeuedFrom: submission.requeuedFrom,
@@ -160,11 +180,9 @@ export function createSubmissionRepository(firestore: Firestore): SubmissionRepo
       const aheadSnapshot = await submissions
         .where('eventId', '==', submission.eventId)
         .where('queueNumber', '<', submission.queueNumber)
+        .select('publicStatus')
         .get();
-      const jobsAhead = aheadSnapshot.docs
-        .map((document) => StoredSubmissionSchema.parse(document.data()))
-        .filter((candidate) => isUnfinished(candidate.publicStatus)).length;
-      return { ...submission, jobsAhead };
+      return { ...submission, jobsAhead: countUnfinished(aheadSnapshot) };
     },
 
     async leave(id, tokenHash, now) {

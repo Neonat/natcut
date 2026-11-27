@@ -25,6 +25,11 @@ apps/worker/*
 
 !packages/
 packages/*
+!packages/artifacts/
+packages/artifacts/*
+!packages/artifacts/package.json
+!packages/artifacts/src/
+!packages/artifacts/src/**
 !packages/cut-geometry/
 packages/cut-geometry/*
 !packages/cut-geometry/package.json

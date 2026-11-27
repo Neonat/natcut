@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { sha256Hex } from './sha256.ts';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
 export const PrintProfileSchema = z
   .object({
@@ -62,8 +63,12 @@ export const PublishedPrintProfileSchema = PrintProfileSchema.extend({ id: z.str
     return profile;
   });
 
-export function printProfileHash(profile: unknown): Promise<string> {
+export function printProfileHashSync(profile: unknown): string {
   const snapshot = PrintProfileSchema.parse(profile);
   const canonical = JSON.stringify(snapshot, Object.keys(snapshot).sort());
-  return sha256Hex(new TextEncoder().encode(canonical));
+  return bytesToHex(sha256(new TextEncoder().encode(canonical)));
+}
+
+export function printProfileHash(profile: unknown): Promise<string> {
+  return Promise.resolve(printProfileHashSync(profile));
 }

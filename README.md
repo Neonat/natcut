@@ -190,7 +190,9 @@ npm run deploy:hosting
 
 Do not run bare `firebase deploy` in this project. The cloud provisioning and recovery commands are recorded in [`docs/runbooks/cloud-preview.md`](docs/runbooks/cloud-preview.md).
 
-On the booth Mac, authenticate Application Default Credentials once and run the outbound simulator with a durable journal:
+**Stop every legacy cloud worker before deploying the version 2 submission API.** Keep the cloud simulator stopped after activation. Queue consumption can resume with a worker that verifies stored artifacts. Follow the deployment gates in the [cloud preview runbook](docs/runbooks/cloud-preview.md).
+
+The following booth Mac command is for the legacy API and legacy queue only.
 
 ```bash
 gcloud auth application-default login \

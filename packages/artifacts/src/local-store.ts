@@ -2,14 +2,24 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { link, lstat, mkdir, open, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { decodeLogicalSourceBundle, verifyLogicalSourceBundleDescriptor } from '@natcut/domain';
+import { decodeLogicalSourceBundle, verifyLogicalSourceBundleDescriptor, type LogicalSourceBundle } from '@natcut/domain';
+import type { ArtifactPublisher } from './publisher.ts';
 
-export class LocalArtifactStore {
+export class LocalArtifactStore implements ArtifactPublisher {
   private readonly root: string;
 
   /** `directory` must live below a stable parent controlled by the process owner. */
   constructor(directory: string) {
     this.root = resolve(directory);
+  }
+
+  async publish(bundle: LogicalSourceBundle, { signal }: { signal?: AbortSignal } = {}) {
+    signal?.throwIfAborted();
+    const descriptor = await verifyLogicalSourceBundleDescriptor(bundle.descriptor);
+    await this.putIfAbsent(bundle.bytes, descriptor, signal);
+    signal?.throwIfAborted();
+    // A local content address has exactly one immutable generation.
+    return { descriptor, generation: '1' };
   }
 
   private async ensurePrivateRoot(create: boolean): Promise<void> {
@@ -23,15 +33,17 @@ export class LocalArtifactStore {
     }
   }
 
-  async putIfAbsent(input: Uint8Array, descriptorInput: unknown): Promise<'created' | 'reused'> {
+  async putIfAbsent(input: Uint8Array, descriptorInput: unknown, signal?: AbortSignal): Promise<'created' | 'reused'> {
+    signal?.throwIfAborted();
     const { bytes, descriptor } = await decodeLogicalSourceBundle(input, descriptorInput);
+    signal?.throwIfAborted();
     await this.ensurePrivateRoot(true);
     const target = join(this.root, descriptor.bundleSha256);
     const temporary = join(this.root, `.${randomUUID()}.tmp`);
     const file = await open(temporary, 'wx', 0o600);
     try {
       try {
-        await file.writeFile(bytes);
+        await file.writeFile(bytes, signal ? { signal } : undefined);
         await file.sync();
       } finally {
         await file.close();
@@ -39,20 +51,22 @@ export class LocalArtifactStore {
       // POSIX rename replaces an existing object. A same-directory hard link publishes
       // the complete inode atomically and fails with EEXIST if another writer won.
       let result: 'created' | 'reused' = 'created';
+      signal?.throwIfAborted();
       try {
         await link(temporary, target);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         result = 'reused';
       }
-      await this.readVerified(descriptor);
+      await this.readVerified(descriptor, signal);
       return result;
     } finally {
       await unlink(temporary);
     }
   }
 
-  async readVerified(descriptorInput: unknown): Promise<Uint8Array> {
+  async readVerified(descriptorInput: unknown, signal?: AbortSignal): Promise<Uint8Array> {
+    signal?.throwIfAborted();
     const descriptor = await verifyLogicalSourceBundleDescriptor(descriptorInput);
     await this.ensurePrivateRoot(false);
     const file = await open(join(this.root, descriptor.bundleSha256),
@@ -63,6 +77,7 @@ export class LocalArtifactStore {
       const bytes = new Uint8Array(descriptor.byteLength);
       let offset = 0;
       while (offset < bytes.length) {
+        signal?.throwIfAborted();
         const { bytesRead } = await file.read(bytes, offset, bytes.length - offset, offset);
         if (bytesRead === 0) throw new Error('Artifact truncated while reading.');
         offset += bytesRead;

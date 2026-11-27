@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PublishedPrintProfileSchema, printProfileHash } from './print-profile.ts';
+import { PublishedPrintProfileSchema, printProfileHashSync } from './print-profile.ts';
 import { sha256Hex } from './sha256.ts';
 
 const version = z.string().min(1).max(64);
@@ -36,10 +36,23 @@ export const LogicalSourceBundleDescriptorSchema = metadata.safeExtend({
   const expected = lengths(descriptor.profile.sheetWidthPx, descriptor.profile.sheetHeightPx);
   return descriptor.colorByteLength === expected.colorByteLength &&
     descriptor.maskByteLength === expected.maskByteLength && descriptor.byteLength === expected.byteLength;
-}, { message: 'Declared byte lengths must match the published profile sheet.' });
+}, { message: 'Declared byte lengths must match the published profile sheet.' })
+  .refine((descriptor) => descriptor.profileSha256 === printProfileHashSync(descriptor.profile),
+    { message: 'Print profile digest mismatch.' });
 
 export type LogicalSourceBundleDescriptor = z.infer<typeof LogicalSourceBundleDescriptorSchema>;
 export type LogicalSourceBundle = { descriptor: LogicalSourceBundleDescriptor; bytes: Uint8Array };
+export const ArtifactGenerationSchema = z.string().regex(/^[1-9][0-9]*$/);
+export const ArtifactReceiptSchema = z.strictObject({
+  descriptor: LogicalSourceBundleDescriptorSchema,
+  generation: ArtifactGenerationSchema,
+});
+export type ArtifactReceipt = z.infer<typeof ArtifactReceiptSchema>;
+
+export function artifactObjectPath(bundleSha256: string): string {
+  return 'logical/v1/' + digest.parse(bundleSha256);
+}
+
 type LogicalSource = z.input<typeof metadata> & { rgba: Uint8Array | Uint8ClampedArray; mask: Uint8Array };
 
 const typedArrayByteLength = Object.getOwnPropertyDescriptor(
@@ -93,15 +106,13 @@ export async function encodeLogicalSourceBundle(source: LogicalSource): Promise<
   bytes.set(mask, sizes.colorByteLength);
   const hashes = await hashPayload(bytes, sizes.colorByteLength);
   return {
-    descriptor: { formatVersion: 1, ...header, ...sizes, ...hashes, profileSha256: await printProfileHash(header.profile) },
+    descriptor: { formatVersion: 1, ...header, ...sizes, ...hashes, profileSha256: printProfileHashSync(header.profile) },
     bytes,
   };
 }
 
 export async function verifyLogicalSourceBundleDescriptor(input: unknown): Promise<LogicalSourceBundleDescriptor> {
-  const descriptor = LogicalSourceBundleDescriptorSchema.parse(input);
-  if (descriptor.profileSha256 !== await printProfileHash(descriptor.profile)) throw new Error('Print profile digest mismatch.');
-  return descriptor;
+  return LogicalSourceBundleDescriptorSchema.parse(input);
 }
 
 export async function decodeLogicalSourceBundle(input: Uint8Array, descriptorInput: unknown) {

@@ -13,8 +13,8 @@ This design does not define JPEG, PLT, registration, printer commands, or physic
 3. Object paths are derived locally from the trusted bundle hash. Firestore will never supply an arbitrary path to a worker.
 4. Print profiles are resolved from an immutable `(id, version)` registry. Published profile entries are never edited; changes create a new version.
 5. The first tranche uses a create-only local artifact store with bounded, verified reads. It proves the artifact contract without pretending that local files are accepted cloud evidence.
-6. A later atomic-acceptance tranche will upload a generation-pinned object before the Firestore acceptance transaction and store the verified descriptor in that same transaction. Artifact publication and the Firestore pointer must ship together.
-7. Legacy accepted submissions remain readable. Future artifact-bearing records need an explicit record-version decoder; missing artifacts mean legacy, never verified.
+6. New acceptances publish a create-only object, verify the returned generation and then commit its receipt with the submission, counter and idempotency binding in one Firestore transaction.
+7. Version 2 records require an artifact receipt. Unversioned records remain readable as legacy records. An unknown version or inconsistent receipt fails decoding.
 8. Worker execution, token-fenced finish writes, operator holds, and simulation-only reconciliation form a later migration-tested tranche. No uncertain operation may be retried automatically.
 9. `firebase.json` stays Hosting-only. A pure offline checker validates the checked-in index specification and an explicitly supplied named-database inventory. It performs no deployment or account access.
 
@@ -48,10 +48,22 @@ The local store requires a stable, non-symlinked root owned by the process user 
 
 The index checker accepts plain JSON inputs, requires project `sprout-dev-66f08`, database `natcut`, and the two exact ascending `submissions` indexes. It reports missing, building, or ready state. It cannot invoke Firebase or Google Cloud commands.
 
+## Atomic acceptance
+
+A new requeue request checks its source before preparation or publication and checks again inside the acceptance transaction. Queue counts read the public status of each matching ticket. Full receipt decoding applies to the requested ticket or requeue source.
+
+The submission API allows 30 seconds for storage publication. Each GCS HTTP request has a 15-second deadline. The publisher uses the Admin bucket's credentials and abortable HTTP requests for create-only multipart uploads, metadata and pinned media. The route cancels publication at its deadline and returns HTTP 503. A late completion can leave a reusable object and cannot allocate a ticket.
+
+An authenticated retry first looks up the owner, event and idempotency key. Its canonical manifest hash and requeue source must match the binding. A hit returns the accepted ticket and token even during a rendering or storage outage. A miss prepares one bundle, checks any warning acknowledgement against the expanded mask hash, publishes and then enters the queue transaction. The transaction repeats the binding check to resolve concurrent requests and requires a cancelled requeue source owned by the same visitor in the same event.
+
+The private bucket selection is fixed to `NATCUT_ARTIFACT_BUCKET=sprout-dev-66f08-natcut-artifacts`. The object key is `logical/v1/<bundleSha256>`. GCS creation uses `ifGenerationMatch=0`. Verification reads only the pinned decimal-string generation and compares its bytes with the locally verified payload within the profile-derived size limit. Firestore stores `recordVersion: 2` and `artifact: { descriptor, generation }`. The storage path is derived from the digest. Storage failure returns HTTP 503 before ticket allocation. An upload followed by a lost Firestore race or failure may leave a reusable immutable object.
+
+The local emulator runtime uses its private local create-only store, whose sole generation is `1`. Production bucket ownership, storage IAM, end-to-end GCS behavior and readiness remain unverified. Stop all old workers before deploying an artifact-bearing submission API. Queue consumption requires a separately verified worker rollout.
+
 ## Later tranches
 
-1. Add a private generation-pinned object-store adapter and early idempotency lookup. Publish and verify the object, then commit its descriptor with the submission, counter, and idempotency binding in one Firestore transaction.
-2. Add versioned stored-acceptance decoding and worker verification before the execution fence. Unknown, corrupt, missing, or legacy active artifacts hold the queue head visibly.
+1. Verify the production bucket, IAM and pinned upload/read behavior during an authorized storage smoke.
+2. Add worker verification before the execution fence. Unknown, corrupt, missing, or legacy active artifacts hold the queue head visibly.
 3. Narrow begin/finish cloud writes around event, slot, claim, and execution token. Migrate SQLite additively without reinterpreting historic hash columns.
 4. Run one clearly labelled simulator scheduler with a loopback operator desk. Add a simulation-only terminal reconciliation decision only after finish-versus-close and crash recovery tests pass.
 5. After explicit authorization, provision IAM and indexes, verify production readiness, and deploy. Physical artifact generation and USB execution remain separate.

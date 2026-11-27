@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-27-trusted-artifacts-cloud-ops-design.md`
 
-## Global Constraints
+## Foundation constraints (tasks 1–6)
 
 - Preserve the existing `validation.rasterHash` wire and persistence semantics.
 - Do not change Firestore submission records in this tranche.
@@ -134,3 +134,13 @@
 - [ ] Run a dependency-boundary check proving the new packages do not import USB or printer bridge code.
 - [ ] Review the diff for Firestore, cloud, and hardware side effects; there must be none.
 - [ ] Request a fresh whole-branch code review and fix accepted findings.
+
+### Task 7: Publish before Firestore acceptance
+
+- [x] Decode the version 2 receipt and keep unversioned submissions readable.
+- [x] Look up accepted keys before preparing artwork. Repeat the payload check inside the queue transaction.
+- [x] Publish with create-only GCS preconditions and read back the exact string generation before creating a ticket.
+- [x] Bind the receipt, ticket, counter and idempotency key atomically. Reject a requeue across owners or events.
+- [x] Configure the submission image and require `NATCUT_ARTIFACT_BUCKET=sprout-dev-66f08-natcut-artifacts`.
+- [ ] During an authorized rollout, verify private bucket ownership, production storage IAM and a pinned-generation smoke. Production readiness remains unverified.
+- [ ] Stop all old workers before deploying the artifact-bearing API. Keep queue consumption stopped until the verification-capable worker rollout.
