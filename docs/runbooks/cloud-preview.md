@@ -20,6 +20,19 @@ npm run deploy:hosting
 
 The wrapper rejects additional arguments, uses only `firebase.json`, and invokes the explicit `sprout-dev-66f08` / `hosting:natcut` target. The emulator rules live in `firebase.emulators.json` and are absent from the production deployment configuration.
 
+## Verify a saved index inventory offline
+
+Use an operator-supplied composite-index listing from project `sprout-dev-66f08`, database `natcut`. Keep the full resource name, query scope, ordered fields, and state of every index. Given a saved listing in JSON array format, wrap it locally with the project and database that produced it.
+
+```bash
+jq '{projectId:"sprout-dev-66f08", databaseId:"natcut", indexes:.}' named-index-list.json > inventory.json
+npm run verify:indexes -- --inventory inventory.json
+```
+
+The checker reads the local inventory and `firestore.indexes.json`. It checks the project and database in each resource name and exits successfully only when the inventory reports both required `submissions` indexes as `READY`. `MISSING` identifies an absent definition. `BUILDING` means construction was underway at capture time. For a non-ready result, obtain a fresh listing after the operator has addressed the reported state.
+
+The result describes the saved inventory at capture time. Collecting a fresh live listing requires separate authorization for the named project and database. Provisioning or repairing an index requires a separately authorized cloud change.
+
 ## Preserved Sprout baseline
 
 Before NatCut provisioning, the project contained:

@@ -10,6 +10,7 @@ const workspaces = [
   ['apps/submission', '@natcut/submission'],
   ['apps/visitor', '@natcut/visitor'],
   ['apps/worker', '@natcut/worker'],
+  ['packages/artifacts', '@natcut/artifacts'],
   ['packages/domain', '@natcut/domain'],
   ['packages/pipeline', '@natcut/pipeline'],
   ['packages/render', '@natcut/render'],
