@@ -1,5 +1,5 @@
 const byId = (id) => document.getElementById(id);
-const labels = { queued: 'Queued', next: 'Next', printing: 'Simulating', ready: 'Ready for simulated pickup', blocked: 'On hold' };
+const labels = { queued: 'Queued', next: 'Next', printing: 'Simulating', ready: 'Ready for simulated pickup', collected: 'Collected', acknowledgement_pending: 'Completion acknowledgement pending', blocked: 'On hold' };
 const errors = {
   SIMULATOR_BUSY: 'A worker command is in progress.',
   JOB_ALREADY_CLAIMED: 'A ticket is already claimed.',
@@ -33,9 +33,12 @@ async function run(task) {
 
 function updateButtons() {
   const held = snapshot?.rows.some((row) => row.onHold);
+  const retry = snapshot?.completionRetrySubmissionId;
   byId('refresh').disabled = pending;
+  byId('claim').textContent = retry ? 'Retry completion acknowledgement' : 'Claim next';
   byId('claim').disabled = pending || !snapshot || snapshot.busy || held || Boolean(snapshot.claimedSubmissionId);
   byId('start').disabled = pending || !snapshot?.claimedSubmissionId || snapshot.busy || held;
+  byId('hold').hidden = !held;
   for (const button of document.querySelectorAll('tbody button, nav button')) button.disabled = pending;
 }
 
@@ -61,6 +64,7 @@ async function refresh() {
   for (const ticket of data.rows) {
     const tr = body.insertRow();
     cell(tr, ticket.queueNumber === null ? 'Unavailable' : '#' + ticket.queueNumber);
+    cell(tr, ticket.submissionId);
     cell(tr, ticket.onHold ? 'On hold' : labels[ticket.publicStatus]);
     const phase = cell(tr, ticket.localState?.replaceAll('_', ' ') ?? '—');
     if (ticket.notice) phase.append(Object.assign(document.createElement('small'), { textContent: ticket.notice }));
@@ -84,7 +88,9 @@ async function command(path, message) {
   byId('message').textContent = message;
 }
 
-byId('claim').onclick = () => run(() => command('/claim', 'Ticket claimed.'));
+byId('claim').onclick = () => run(() => snapshot.completionRetrySubmissionId
+  ? command('/retry-completion/' + encodeURIComponent(snapshot.completionRetrySubmissionId), 'Completion acknowledgement confirmed.')
+  : command('/claim', 'Ticket claimed.'));
 byId('start').onclick = () => run(() => command('/start', 'Simulation started.'));
 byId('refresh').onclick = () => run(refresh);
 byId('first').onclick = () => run(async () => { cursors.queued = cursors.ready = 0; await refresh(); });

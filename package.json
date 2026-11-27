@@ -32,6 +32,7 @@
     "physical:dry-run": "tsx scripts/physical-dry-run.ts",
     "test": "npm run test:legacy && npm run test:unit",
     "test:e2e": "playwright test",
+    "rehearsal:sim": "node scripts/simulated-rehearsal.mjs",
     "test:legacy": "node --test test/protocol.test.mjs test/server.test.mjs test/snapshot.test.mjs test/usb-session.test.mjs",
     "test:unit": "node --import tsx --test test/workspace-smoke.test.mjs test/cloud-worker-entrypoint.test.mjs test/cloud-boundaries.test.mjs test/cloud-storage-smoke.test.mjs test/cloud-submission-smoke.test.mjs test/dev-config.test.mjs test/physical-dry-run.test.mjs test/transport-attempt-boundary.test.mjs test/proof-sheet.test.mjs test/sprite-review.test.mjs test/natcut-indexes.test.mjs && vitest run --passWithNoTests",
     "emulators:test": "node scripts/emulators-test.mjs",

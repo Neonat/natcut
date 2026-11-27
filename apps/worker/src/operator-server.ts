@@ -75,6 +75,29 @@ export function createOperatorServer(deps: WorkerDependencies, queue: OperatorQu
         if (result === 'not-ready') return send(response, 409, { error: 'TICKET_NOT_READY' });
         return send(response, 200, { publicStatus: result });
       }
+      const completionRetry = /^\/retry-completion\/([A-Za-z0-9_-]{1,128})$/.exec(url.pathname);
+      if (request.method === 'POST' && completionRetry) {
+        if (claiming || executing) return send(response, 409, { error: 'SIMULATOR_BUSY' });
+        if (currentJob) return send(response, 409, { error: 'JOB_ALREADY_CLAIMED' });
+        const submissionId = completionRetry[1]!;
+        claiming = true;
+        try {
+          const page = await queue.list({ queued: 0, ready: 0 });
+          if (page.completionRetrySubmissionId !== submissionId) {
+            return send(response, 409, { error: 'JOB_NEEDS_RECONCILIATION', submissionId });
+          }
+          const prepared = await prepareNextWorkerJob({ ...deps, expectedSubmissionId: submissionId });
+          const job = deps.store.getBySubmissionId(submissionId);
+          const acknowledged = job?.state === 'ready' && job.completionAcknowledgedAt !== null &&
+            !deps.store.listPendingPublicStatuses().some((pending) => pending.submissionId === submissionId);
+          if (acknowledged) return send(response, 200, { submissionId, completionAcknowledged: true });
+          if (prepared.kind === 'busy') return send(response, 409, { error: 'SIMULATOR_BUSY' });
+          if (prepared.kind === 'waiting_for_cloud') return send(response, 503, { error: 'STATUS_SYNC_PENDING' });
+          return send(response, 409, { error: 'JOB_NEEDS_RECONCILIATION', submissionId });
+        } finally {
+          claiming = false;
+        }
+      }
       if (request.method === 'POST' && request.url === '/claim') {
         if (claiming || executing) return send(response, 409, { error: 'SIMULATOR_BUSY' });
         if (currentJob) return send(response, 409, { error: 'JOB_ALREADY_CLAIMED' });

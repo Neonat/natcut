@@ -13,11 +13,13 @@ button { font: inherit; font-weight: 600; color: #244d32; border: 1px solid #92a
 button:disabled { opacity: .5; cursor: default; }
 button:focus-visible { outline: 3px solid #ac5e14; outline-offset: 2px; }
 #message { min-height: 1.5rem; }
+#hold { border-left: .35rem solid #9b2c20; padding: .7rem 1rem; color: #74251d; background: #fff1ef; font-weight: 650; }
 section { background: white; padding: clamp(.8rem, 2vw, 1.5rem); border: 1px solid #d1dbd1; border-radius: .8rem; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: .65rem .5rem; border-bottom: 1px solid #e1e7de; }
 th { font-size: .85rem; color: #49604e; }
 td:first-child { font-weight: bold; font-variant-numeric: tabular-nums; }
+td:nth-child(2) { font: .82rem ui-monospace, monospace; overflow-wrap: anywhere; }
 small { display: block; color: #81481a; }
 nav:has(button:not([hidden])) { margin-top: 1rem; }

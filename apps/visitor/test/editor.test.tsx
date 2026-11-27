@@ -2,10 +2,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { catalogManifest, sprites } from '@natcut/render/browser';
 import { canonicalManifestJson, type GeometryReport } from '@natcut/domain';
-import { CutPreview, EditorPage, fixtureManifest, overlapFixtureManifest } from '../src/index.ts';
+import { CutPreview, EditorPage, fixtureManifest, overlapFixtureManifest, QueuePage, type VisitorApi } from '../src/index.ts';
 
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -184,6 +186,192 @@ describe('mobile editor', () => {
     fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
     await waitFor(() => expect(submitSubmission).toHaveBeenCalledTimes(2));
     expect(submitSubmission.mock.calls[0]![0].idempotencyKey).toBe(submitSubmission.mock.calls[1]![0].idempotencyKey);
+  });
+
+  it('recovers the original accepted ticket after a committed response is lost and the editor reloads', async () => {
+    const accepted = {
+      submissionId: 'submission-original',
+      statusToken: 'original-status-token',
+      queueNumber: 4,
+      jobsAhead: 3,
+      publicStatus: 'queued' as const,
+    };
+    let committedKey = '';
+    const submitSubmission = vi.fn(async (request: { idempotencyKey: string }) => {
+      if (!committedKey) {
+        committedKey = request.idempotencyKey;
+        throw new Error('response lost after commit');
+      }
+      expect(request.idempotencyKey).toBe(committedKey);
+      return accepted;
+    });
+    const onNavigate = vi.fn();
+    const first = render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={onNavigate} />);
+    loadVisibleArtwork(first.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    await screen.findByRole('alert');
+    expect(sessionStorage.getItem(`natcut:status:${accepted.submissionId}`)).toBeNull();
+
+    first.unmount();
+    const reloaded = render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={onNavigate} />);
+    loadVisibleArtwork(reloaded.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/queue/${accepted.submissionId}#token=${accepted.statusToken}`));
+    expect(submitSubmission).toHaveBeenCalledTimes(2);
+    expect(submitSubmission.mock.calls[1]![0].idempotencyKey).toBe(submitSubmission.mock.calls[0]![0].idempotencyKey);
+    const stored = JSON.parse(sessionStorage.getItem('natcut:submission-attempt:v1')!);
+    expect(stored).toEqual(expect.objectContaining({ state: 'accepted', submissionId: accepted.submissionId }));
+    expect(JSON.stringify(stored)).not.toContain(accepted.statusToken);
+  });
+
+  it('redirects without another POST after a crash between acceptance and navigation', async () => {
+    const accepted = {
+      submissionId: 'submission-accepted', statusToken: 'accepted-token', queueNumber: 1, jobsAhead: 0, publicStatus: 'queued' as const,
+    };
+    const submitSubmission = vi.fn().mockResolvedValue(accepted);
+    const interruptedNavigation = vi.fn();
+    const first = render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={interruptedNavigation} />);
+    loadVisibleArtwork(first.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    await waitFor(() => expect(interruptedNavigation).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    const recoveredNavigation = vi.fn();
+    render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={recoveredNavigation} />);
+
+    await waitFor(() => expect(recoveredNavigation).toHaveBeenCalledWith(`/queue/${accepted.submissionId}#token=${accepted.statusToken}`));
+    expect(submitSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the accepted fence when the queue page cannot confirm the ticket', async () => {
+    const accepted = {
+      submissionId: 'submission-accepted', statusToken: 'accepted-token', queueNumber: 1, jobsAhead: 0, publicStatus: 'queued' as const,
+    };
+    const onNavigate = vi.fn();
+    const editor = render(<EditorPage submitSubmission={vi.fn().mockResolvedValue(accepted)} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={onNavigate} />);
+    loadVisibleArtwork(editor.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledTimes(1));
+    editor.unmount();
+
+    const queueApi = { getStatus: vi.fn().mockRejectedValue(new Error('offline')) } as unknown as VisitorApi;
+    render(<QueuePage submissionId={accepted.submissionId} statusToken={accepted.statusToken} api={queueApi} />);
+    await screen.findByRole('alert');
+
+    expect(JSON.parse(sessionStorage.getItem('natcut:submission-attempt:v1')!)).toEqual(expect.objectContaining({
+      state: 'accepted', submissionId: accepted.submissionId,
+    }));
+  });
+
+  it('starts a fresh attempt for a later intentional same-design submission after acceptance', async () => {
+    const submitSubmission = vi.fn()
+      .mockResolvedValueOnce({
+        submissionId: 'submission-first', statusToken: 'token-first', queueNumber: 1, jobsAhead: 0, publicStatus: 'queued',
+      })
+      .mockResolvedValueOnce({
+        submissionId: 'submission-second', statusToken: 'token-second', queueNumber: 2, jobsAhead: 1, publicStatus: 'queued',
+      });
+    const firstNavigate = vi.fn();
+    const first = render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={firstNavigate} />);
+    loadVisibleArtwork(first.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    await waitFor(() => expect(firstNavigate).toHaveBeenCalledTimes(1));
+    first.unmount();
+    expect(JSON.parse(sessionStorage.getItem('natcut:submission-attempt:v1')!).state).toBe('accepted');
+
+    const queueApi = {
+      getStatus: vi.fn().mockResolvedValue({
+        submissionId: 'submission-first', publicStatus: 'queued', queueNumber: 1, jobsAhead: 0,
+        canLeaveQueue: true, updatedAt: '2026-11-28T00:00:00.000Z',
+      }),
+    } as unknown as VisitorApi;
+    const queue = render(<QueuePage submissionId="submission-first" statusToken="token-first" api={queueApi} />);
+    await waitFor(() => expect(queueApi.getStatus).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(sessionStorage.getItem('natcut:submission-attempt:v1')).toBeNull());
+    queue.unmount();
+
+    const secondNavigate = vi.fn();
+    const second = render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={secondNavigate} />);
+    loadVisibleArtwork(second.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    await waitFor(() => expect(secondNavigate).toHaveBeenCalledTimes(1));
+
+    expect(submitSubmission).toHaveBeenCalledTimes(2);
+    expect(submitSubmission.mock.calls[1]![0].idempotencyKey).not.toBe(submitSubmission.mock.calls[0]![0].idempotencyKey);
+  });
+
+  it('does not clear a newer attempt that replaced the accepted one while its response was in flight', async () => {
+    const submitSubmission = vi.fn(async () => {
+      const stored = JSON.parse(sessionStorage.getItem('natcut:submission-attempt:v1')!);
+      sessionStorage.setItem('natcut:submission-attempt:v1', JSON.stringify({ ...stored, idempotencyKey: 'newer-attempt-key' }));
+      return { submissionId: 'submission-first', statusToken: 'token-first', queueNumber: 1, jobsAhead: 0, publicStatus: 'queued' as const };
+    });
+    const onNavigate = vi.fn();
+    const view = render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={onNavigate} />);
+    loadVisibleArtwork(view.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledTimes(1));
+
+    expect(JSON.parse(sessionStorage.getItem('natcut:submission-attempt:v1')!).idempotencyKey).toBe('newer-attempt-key');
+  });
+
+  it('keeps the accepted attempt when its status token cannot be stored', async () => {
+    const nativeSetItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === 'natcut:status:submission-first') throw new Error('storage full');
+      nativeSetItem.call(this, key, value);
+    });
+    const submitSubmission = vi.fn().mockResolvedValue({
+      submissionId: 'submission-first', statusToken: 'token-first', queueNumber: 1, jobsAhead: 0, publicStatus: 'queued',
+    });
+    const view = render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={vi.fn()} />);
+    loadVisibleArtwork(view.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    await screen.findByRole('alert');
+
+    const stored = JSON.parse(sessionStorage.getItem('natcut:submission-attempt:v1')!);
+    expect(stored.idempotencyKey).toBe(submitSubmission.mock.calls[0]![0].idempotencyKey);
+  });
+
+  it('does not trust corrupt attempt storage', async () => {
+    sessionStorage.setItem('natcut:submission-attempt:v1', '{not-json');
+    const submitSubmission = vi.fn().mockRejectedValue(new Error('offline'));
+    const view = render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} />);
+    loadVisibleArtwork(view.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+
+    await screen.findByRole('alert');
+    expect(submitSubmission).toHaveBeenCalledTimes(1);
+    expect(submitSubmission.mock.calls[0]![0].idempotencyKey).toEqual(expect.any(String));
+  });
+
+  it('does not POST when the attempt cannot be persisted first', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage disabled'); });
+    const submitSubmission = vi.fn();
+    const view = render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} />);
+    loadVisibleArtwork(view.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+
+    expect((await screen.findByRole('alert')).textContent).toMatch(/could not be saved/i);
+    expect(submitSubmission).not.toHaveBeenCalled();
+  });
+
+  it('rotates a stored attempt when an explicit requeue changes the request source', async () => {
+    const submitSubmission = vi.fn().mockRejectedValue(new Error('offline'));
+    const first = render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} />);
+    loadVisibleArtwork(first.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    await screen.findByRole('alert');
+    first.unmount();
+
+    const requeue = render(<EditorPage submitSubmission={submitSubmission} requeuedFrom="submission-previous" previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} />);
+    loadVisibleArtwork(requeue.container);
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    await screen.findByRole('alert');
+
+    expect(submitSubmission).toHaveBeenCalledTimes(2);
+    expect(submitSubmission.mock.calls[1]![0].idempotencyKey).not.toBe(submitSubmission.mock.calls[0]![0].idempotencyKey);
   });
 
   it('previews every trusted composition layer instead of a hardcoded single sprite', () => {

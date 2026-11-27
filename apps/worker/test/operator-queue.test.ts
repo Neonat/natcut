@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { PublicStatus } from '@natcut/domain';
-import type { Firestore } from 'firebase-admin/firestore';
+import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFirestoreCloudQueue, runWorkerOnce, SimulatedPrinter } from '../src/index.ts';
 import { JobStore, type LocalJobState } from '../src/job-store.ts';
@@ -51,7 +51,9 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
   it.each(['ready', 'collected'])('clears only the local ready intent after a committed ready response was lost and the ticket is %s', async terminal => {
     const ticket = await seed(1, 'queued');
     const cloud = createFirestoreCloudQueue(firestore, undefined, eventId);
-    const result = await runWorkerOnce({ workerId: 'dev-mac', store, artifactReader, executor: new SimulatedPrinter(), cloud: {
+    const simulator = new SimulatedPrinter();
+    const execute = vi.fn(simulator.execute.bind(simulator));
+    const result = await runWorkerOnce({ workerId: 'dev-mac', store, artifactReader, executor: { execute }, cloud: {
       ...cloud,
       async completeExecution(...args) {
         await cloud.completeExecution(...args);
@@ -66,24 +68,86 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     const ref = firestore.doc('submissions/' + ticket.id);
     const before = await ref.get();
     expect(before.get('publicStatus')).toBe(terminal);
+    const recoverable = await (await fetch(origin + '/queue')).json();
+    expect(recoverable.completionRetrySubmissionId).toBe(ticket.id);
+    expect(recoverable.rows.find((row: {submissionId: string}) => row.submissionId === ticket.id)).toMatchObject({
+      completionRetry: true, onHold: false, publicStatus: 'acknowledgement_pending',
+    });
     await seed(2, 'queued');
     expect((await cloud.claimNextSubmission('next-worker'))?.submission.queueNumber).toBe(2);
     const nextSlot = await slot.get();
+    const localBefore = store.getBySubmissionId(ticket.id);
+    await new Promise<void>((done) => server.close(() => done()));
+    store.close();
     const reopened = new JobStore(journal);
-    const execute = vi.fn();
-    const completeExecution = vi.fn(cloud.completeExecution);
-    const beginExecution = vi.fn();
-    try {
-      expect(await runWorkerOnce({ workerId: 'dev-mac', store: reopened, artifactReader, executor: { execute },
-        cloud: { ...cloud, completeExecution, beginExecution } })).toEqual({ kind: 'idle' });
-      expect(reopened.listPendingPublicStatuses()).toEqual([]);
-      expect((await ref.get()).updateTime).toEqual(before.updateTime);
-      expect((await slot.get()).updateTime).toEqual(nextSlot.updateTime);
-      expect((await slot.get()).get('workerId')).toBe('next-worker');
-      expect(execute).not.toHaveBeenCalled();
-      expect(completeExecution).toHaveBeenCalledTimes(1);
-      expect(beginExecution).not.toHaveBeenCalled();
-    } finally { reopened.close(); }
+    store = reopened;
+    server = await startSimulatorDesk({ artifactReader, firestore, eventId, store: reopened, port: 0, delayMs: 0 });
+    origin = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
+    const session = await (await fetch(origin + '/session')).json();
+    headers = { 'x-natcut-control': session.capability, 'content-type': 'application/json' };
+    const retry = await post('/retry-completion/' + ticket.id);
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ submissionId: ticket.id, completionAcknowledged: true });
+    expect(reopened.listPendingPublicStatuses()).toEqual([]);
+    expect(reopened.getBySubmissionId(ticket.id)).toMatchObject({
+      state: 'ready', stateChangedAt: localBefore?.stateChangedAt, completionAcknowledgedAt: localBefore?.stateChangedAt,
+    });
+    expect((await ref.get()).updateTime).toEqual(before.updateTime);
+    expect((await slot.get()).updateTime).toEqual(nextSlot.updateTime);
+    expect((await slot.get()).get('workerId')).toBe('next-worker');
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['missing', 'string', 'duplicate'] as const)(
+    'keeps a %s queue-number head visible and blocks its follower without claiming either ticket', async variant => {
+      const ticket = await seed(1, 'queued');
+      const follower = await seed(2, 'queued');
+      const ref = firestore.doc('submissions/' + ticket.id);
+      if (variant === 'missing') await ref.update({ queueNumber: FieldValue.delete() });
+      if (variant === 'string') await ref.update({ queueNumber: '1' });
+      if (variant === 'duplicate') await firestore.doc('submissions/' + follower.id).update({ queueNumber: 1 });
+
+      const page = await (await fetch(origin + '/queue')).json();
+      expect(page.rows.find((row: {submissionId: string}) => row.submissionId === ticket.id)).toMatchObject({
+        submissionId: ticket.id, publicStatus: 'queued', onHold: true,
+      });
+      expect(page.rows.find((row: {submissionId: string}) => row.submissionId === follower.id)).toMatchObject({
+        submissionId: follower.id, publicStatus: 'queued',
+      });
+      expect(page.completionRetrySubmissionId).toBeNull();
+      expect((await post('/claim')).status).toBe(409);
+      expect((await post('/start')).status).toBe(409);
+      expect((await ref.get()).get('publicStatus')).toBe('queued');
+      expect((await firestore.doc('submissions/' + follower.id).get()).get('publicStatus')).toBe('queued');
+      expect((await firestore.doc('workerSlots/' + eventId).get()).exists).toBe(false);
+    },
+  );
+
+  it('front-loads a duplicate beyond the ordinary page boundary so the hold cannot be paged past', async () => {
+    const tickets = await Promise.all(Array.from({ length: 30 }, (_, index) => seed(index + 1, 'queued')));
+    await firestore.doc('submissions/' + tickets[29]!.id).update({ queueNumber: 29 });
+
+    const page = await (await fetch(origin + '/queue')).json();
+    expect(page.rows.slice(0, 2).map((row: {submissionId: string}) => row.submissionId).sort()).toEqual(
+      [tickets[28]!.id, tickets[29]!.id].sort(),
+    );
+    expect(page.rows.slice(0, 2).every((row: {onHold: boolean}) => row.onHold)).toBe(true);
+    expect(page.next.queued).toBeNull();
+    expect((await post('/claim')).status).toBe(409);
+    expect((await firestore.doc('submissions/' + tickets[0]!.id).get()).get('publicStatus')).toBe('queued');
+  });
+
+  it('ignores a stale nonzero cursor when an earlier queued record becomes malformed', async () => {
+    const tickets = await Promise.all(Array.from({ length: 30 }, (_, index) => seed(index + 1, 'queued')));
+    const clean = await (await fetch(origin + '/queue')).json();
+    expect(clean.next.queued).toBe(25);
+    await firestore.doc('submissions/' + tickets[0]!.id).update({ queueNumber: FieldValue.delete() });
+
+    const page = await (await fetch(origin + '/queue?queuedAfter=25&readyAfter=0')).json();
+    expect(page.rows[0]).toMatchObject({
+      submissionId: tickets[0]!.id, queueNumber: null, publicStatus: 'queued', onHold: true,
+    });
+    expect(page.next.queued).toBeNull();
   });
 
   it.each(['next', 'printing', 'foreign-event', 'still-slotted'] as const)(
@@ -178,9 +242,13 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     }
     const page = await (await fetch(origin + '/queue')).json();
     if (variant === 'invalid-number') expect(page.rows[0].queueNumber).toBeNull();
-    expect(page.rows[0]).toMatchObject({ submissionId: ticket.id, publicStatus: 'next', onHold: true, notice: expect.stringMatching(/hold/i) });
+    expect(page.rows[0]).toMatchObject({
+      submissionId: ticket.id, publicStatus: variant === 'invalid-number' ? 'queued' : 'next',
+      onHold: true, notice: expect.stringMatching(/hold/i),
+    });
     expect(page.rows[1]).toMatchObject({ submissionId: next.id, publicStatus: 'queued' });
-    expect((await firestore.doc('workerSlots/' + eventId).get()).get('submissionId')).toBe(ticket.id);
+    if (variant === 'invalid-number') expect((await firestore.doc('workerSlots/' + eventId).get()).exists).toBe(false);
+    else expect((await firestore.doc('workerSlots/' + eventId).get()).get('submissionId')).toBe(ticket.id);
     expect((await ticketRef.get()).get('executionLease')).toBeUndefined();
     expect(store.list()).toEqual([]);
   });
@@ -209,7 +277,7 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     const heldRow = page.rows.find((row: {queueNumber: number}) => row.queueNumber === 31);
     expect(heldRow).toEqual({
       submissionId: held.id, queueNumber: 31, publicStatus: 'printing', localState: 'needs_reconciliation',
-      onHold: true, notice: expect.stringMatching(/interrupted|reconciliation/i),
+      onHold: true, notice: expect.stringMatching(/interrupted|reconciliation/i), completionRetry: false,
     });
     expect(JSON.stringify(page)).not.toMatch(/ownerUid|idempotency|token|hash|private|lastError|jpegPath/i);
     const next = await (await fetch(origin + '/queue?queuedAfter=25&readyAfter=64')).json();
@@ -250,6 +318,23 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     });
     expect(start.status).toBe(409);
     expect(store.getBySubmissionId(next.id)?.state).toBe('claimed');
+  });
+
+  it('holds an orphan Next record without a worker slot and leaves its queued follower untouched', async () => {
+    const orphan = await seed(1, 'next');
+    const follower = await seed(2, 'queued');
+
+    const page = await (await fetch(origin + '/queue')).json();
+    expect(page.rows.find((row: {submissionId: string}) => row.submissionId === orphan.id)).toMatchObject({
+      publicStatus: 'next', onHold: true, notice: expect.stringMatching(/reconciliation|hold/i),
+    });
+    const claim = await post('/claim');
+    expect(claim.status).toBe(409);
+    expect(await claim.json()).toEqual({ error: 'JOB_NEEDS_RECONCILIATION', submissionId: orphan.id });
+    expect((await post('/start')).status).toBe(409);
+    expect((await firestore.doc('workerSlots/' + eventId).get()).exists).toBe(false);
+    expect((await firestore.doc('submissions/' + orphan.id).get()).get('publicStatus')).toBe('next');
+    expect((await firestore.doc('submissions/' + follower.id).get()).get('publicStatus')).toBe('queued');
   });
 
   it('collects a ready ticket once even with simultaneous tabs and leaves the active slot intact', async () => {
@@ -374,7 +459,7 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
 
     const initial = await (await fetch(origin + '/queue')).json();
     expect(initial.rows).toEqual(expect.arrayContaining([
-      expect.objectContaining({ submissionId: collected.id, publicStatus: 'blocked', onHold: true }),
+      expect.objectContaining({ submissionId: collected.id, publicStatus: 'blocked', onHold: true, completionRetry: false }),
       expect.objectContaining({ submissionId: 'missing-local-intent', publicStatus: 'blocked', onHold: true }),
       expect.objectContaining({ submissionId: next.id, publicStatus: 'queued' }),
     ]));
@@ -383,6 +468,49 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     expect(await claim.json()).toMatchObject({ error: 'JOB_NEEDS_RECONCILIATION', submissionId: collected.id });
     expect(store.hasArtifactHold(collected.id)).toBe(true);
     expect((await firestore.doc('submissions/' + next.id).get()).get('publicStatus')).toBe('queued');
+  });
+
+  it('never exposes legacy or mismatched completion intents as retryable acknowledgements', async () => {
+    const ready = await seed(1, 'ready');
+    store.stagePublicStatus(ready.id, 'ready', ready.updatedAt);
+    store.stagePublicStatus('legacy-printing-intent', 'printing', ready.updatedAt);
+
+    const page = await (await fetch(origin + '/queue')).json();
+    expect(page.completionRetrySubmissionId).toBeNull();
+    expect(page.rows.filter((row: {completionRetry: boolean}) => row.completionRetry)).toEqual([]);
+    expect(page.rows.some((row: {onHold: boolean}) => row.onHold)).toBe(true);
+    const pending = store.listPendingPublicStatuses();
+    expect((await post('/retry-completion/' + ready.id)).status).toBe(409);
+    expect(store.listPendingPublicStatuses()).toEqual(pending);
+  });
+
+  it('keeps a real ready journal with a legacy printing intent on reconciliation hold', async () => {
+    const ready = await seed(1, 'ready');
+    store.insertClaimed(await verifiedClaim({ submission: ready, workerId: 'dev-mac', claimedAt: ready.updatedAt }));
+    store.transitionAndStagePublicStatus(ready.id, 'ready', ready.updatedAt, 'printing');
+
+    const page = await (await fetch(origin + '/queue')).json();
+    expect(page.completionRetrySubmissionId).toBeNull();
+    expect(page.rows.find((row: {submissionId: string}) => row.submissionId === ready.id)).toMatchObject({
+      localState: 'ready', completionRetry: false, onHold: true,
+      notice: expect.stringMatching(/reconciliation/i),
+    });
+  });
+
+  it('does not expose a ready intent whose trusted journal artifact can no longer be verified', async () => {
+    const ready = await seed(1, 'ready');
+    store.insertClaimed(await verifiedClaim({ submission: ready, workerId: 'dev-mac', claimedAt: ready.updatedAt }));
+    store.getOrCreateExecutionToken(ready.id);
+    store.transitionAndStagePublicStatus(ready.id, 'ready', ready.updatedAt, 'ready');
+    const database = new Database(journal);
+    database.prepare('UPDATE local_print_jobs SET artifactBytes = NULL WHERE submissionId = ?').run(ready.id);
+    database.close();
+
+    const page = await (await fetch(origin + '/queue')).json();
+    expect(page.completionRetrySubmissionId).toBeNull();
+    expect(page.rows.find((row: {submissionId: string}) => row.submissionId === ready.id)).toMatchObject({
+      completionRetry: false, onHold: true,
+    });
   });
 
   it('holds a recovered claim when the cloud execution fence advanced before the local phase was saved', async () => {

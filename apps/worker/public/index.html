@@ -17,11 +17,12 @@
       <button id="start" disabled>Start simulation</button>
       <button id="refresh">Refresh</button>
     </div>
+    <p id="hold" role="alert" hidden>Stop: one or more tickets require operator reconciliation. Do not claim or start another ticket.</p>
     <p id="message" role="status" aria-live="polite"></p>
     <section aria-labelledby="queue-title">
       <h2 id="queue-title">Queue</h2>
       <div class="table-wrap">
-        <table><thead><tr><th>Ticket</th><th>Queue status</th><th>Worker phase</th><th>Pickup</th></tr></thead>
+        <table><thead><tr><th>Ticket</th><th>Submission ID</th><th>Queue status</th><th>Worker phase</th><th>Pickup</th></tr></thead>
           <tbody id="rows"></tbody>
         </table>
       </div>

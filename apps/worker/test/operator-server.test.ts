@@ -45,6 +45,17 @@ async function desk(
 }
 
 describe('loopback control boundary', () => {
+  it('serves a correlatable submission column and a non-sensitive reconciliation alert', async () => {
+    const { send } = await desk();
+    const [html, script] = await Promise.all([send('/'), send('/desk.js')]);
+    expect(html.body).toContain('<th>Submission ID</th>');
+    expect(html.body).toMatch(/id="hold" role="alert"/);
+    expect(html.body).toContain('require operator reconciliation');
+    expect(script.body).toContain('ticket.submissionId');
+    expect(script.body).toContain('Retry completion acknowledgement');
+    expect(html.body + script.body).not.toMatch(/lastError|executionToken|artifactReceiptJson|jpegPath/);
+  });
+
   it('issues a different capability for each listener, only to local clients', async () => {
     const a = await desk();
     const b = await desk();
@@ -106,10 +117,11 @@ describe('loopback control boundary', () => {
         await delayed.promise;
         return {
           rows: [
-            { submissionId: 'first', queueNumber: 1, publicStatus: 'next', localState: 'claimed', notice: null, onHold: false },
-            { submissionId: 'second', queueNumber: 2, publicStatus: 'queued', localState: null, notice: null, onHold: false },
+            { submissionId: 'first', queueNumber: 1, publicStatus: 'next', localState: 'claimed', notice: null, onHold: false, completionRetry: false },
+            { submissionId: 'second', queueNumber: 2, publicStatus: 'queued', localState: null, notice: null, onHold: false, completionRetry: false },
           ],
           next: { queued: null, ready: null },
+          completionRetrySubmissionId: null,
         };
       },
     );

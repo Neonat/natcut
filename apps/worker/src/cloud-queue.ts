@@ -70,6 +70,23 @@ export type CompletionEvidence = ExecutionEvidence & {
 
 export type CompletionOutcome = 'committed' | 'confirmed' | 'fenced';
 
+const queueIntegrityScanLimit = 1_000;
+
+function invalidQueuedSubmission(
+  documents: FirebaseFirestore.QueryDocumentSnapshot[],
+): string | null {
+  const numbers = new Map<number, string>();
+  for (const document of documents) {
+    const value: unknown = document.get('queueNumber');
+    if (!Number.isSafeInteger(value) || Number(value) <= 0) return document.id;
+    const queueNumber = Number(value);
+    const duplicate = numbers.get(queueNumber);
+    if (duplicate) return [duplicate, document.id].sort()[0]!;
+    numbers.set(queueNumber, document.id);
+  }
+  return null;
+}
+
 function isIsoTimestamp(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
   const parsed = new Date(value);
@@ -124,10 +141,28 @@ export function createFirestoreCloudQueue(
       const claimed = await firestore.runTransaction(async (transaction) => {
         const slotSnapshot = await transaction.get(slot);
         if (slotSnapshot.exists) return null;
-        const queued = await transaction.get(
+        const orphanedNext = await transaction.get(
           submissions
             .where('eventId', '==', eventId)
-            .where('publicStatus', '==', 'queued')
+            .where('publicStatus', '==', 'next')
+            .select('queueNumber')
+            .limit(1),
+        );
+        if (orphanedNext.docs[0]) throw new InvalidClaimError(orphanedNext.docs[0].id);
+        const queuedBase = submissions
+          .where('eventId', '==', eventId)
+          .where('publicStatus', '==', 'queued');
+        // Firestore ordering omits documents that do not contain the ordered field. Audit the
+        // bounded active queue first so a malformed invisible record cannot release its follower.
+        const integrity = await transaction.get(
+          queuedBase.select('queueNumber').limit(queueIntegrityScanLimit + 1),
+        );
+        const invalid = integrity.size > queueIntegrityScanLimit
+          ? integrity.docs.map((document) => document.id).sort()[0] ?? null
+          : invalidQueuedSubmission(integrity.docs);
+        if (invalid) throw new InvalidClaimError(invalid);
+        const queued = await transaction.get(
+          queuedBase
             .orderBy('queueNumber', 'asc')
             .limit(1),
         );
