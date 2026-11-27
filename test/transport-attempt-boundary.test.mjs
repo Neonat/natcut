@@ -46,7 +46,6 @@ test('transport attempt import graph contains only the approved offline dependen
   ]);
   const allowedExternals = new Set(['node:crypto', 'node:path', 'node:util', 'better-sqlite3', 'zod']);
   // esbuild resolves the unused preparation entrypoint's lazy codec import too.
-  // Check every edge from the transport modules and every emitted dependency.
   for (const source of allowedInputs) {
     for (const entry of inputs[source]?.imports ?? []) {
       if (source === 'packages/printer/src/prepared-evidence.ts' && entry.kind === 'dynamic-import' &&

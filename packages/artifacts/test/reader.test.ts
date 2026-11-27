@@ -3,7 +3,6 @@ import { expect, it } from 'vitest';
 import { artifactObjectPath, DEVFEST_SG_V1 as profile } from '@natcut/domain';
 import { verifyArtifactBytes, parseArtifactReceipt } from '../src/reader.ts';
 
-// Shipped logical/v1 format: raw RGBA8 followed by the binary mask; no color declaration.
 it('verifies the original receipt without assigning new provenance or moving its object', async () => {
   const { sheetWidthPx: width, sheetHeightPx: height } = profile;
   const pixels = width * height;

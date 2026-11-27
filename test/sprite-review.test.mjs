@@ -109,7 +109,6 @@ test('publishes a deterministic offline packet with importer-compatible candidat
   await importRoster();
   const { sprites } = JSON.parse(await readFile(path.join(catalog, 'index.json'), 'utf8'));
 
-  // Stand in for packaging this imported index with the submission service.
   const catalogHook = registerHooks({ resolve(specifier, context, nextResolve) {
     if (specifier === '../catalog/index.json' && context.parentURL?.endsWith('/render/src/catalog.ts')) {
       return nextResolve(pathToFileURL(path.join(catalog, 'index.json')).href, context);

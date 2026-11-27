@@ -119,8 +119,6 @@ export function loadPackagedAssets(
   return loadPlannedAssets(plan, async (filename, id) => {
     const bytes = await readFile(path.join(directory, filename));
     if (filename !== sha256(bytes) + '.png') throw new Error(`Artwork digest mismatch for ${id}.`);
-    // The trusted catalog pins normalized sRGB PNGs by digest, including shipped
-    // artwork that predates embedded profiles. External callers cannot take this path.
     const entry = catalogSpriteEntry(id);
     if (entry && catalogSpriteId(entry) !== id) throw new Error(`Catalog sprite identity mismatch for ${id}.`);
     const decoded = await decodeAsset(bytes, id, true);

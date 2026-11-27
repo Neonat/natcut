@@ -163,7 +163,7 @@ export function createServer({
         const proof = await queueProof();
         let sendEnabled = false;
         if (physicalSendEnabled && !physicalSendStarted) {
-          try { sendEnabled = getPhysicalAttemptEvidence() === null; } catch { /* Offline inspection stays available. */ }
+          try { sendEnabled = getPhysicalAttemptEvidence() === null; } catch { sendEnabled = false; }
         }
         sendJson(response, 200, { ok: true, proof: proof.summary, sendEnabled });
       } catch (error) {

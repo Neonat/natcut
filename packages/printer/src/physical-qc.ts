@@ -138,7 +138,6 @@ export class SqlitePhysicalQcJournal {
   constructor(file: string) {
     this.database = openTransportJournalDatabase(file, true);
     try {
-      // QC only attaches to an existing transport journal.
       this.database.prepare('SELECT submissionId FROM transport_attempts LIMIT 0').all();
       this.database.transaction(() => initializeQcTables(this.database)).immediate();
     } catch (error) {

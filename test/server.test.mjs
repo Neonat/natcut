@@ -366,7 +366,6 @@ test('QC routes retain exact private-journal evidence across server restarts and
     assert.equal((await post(base, 'record-completed', { ...completed, executionToken: 'extra' })).status, 400);
     assert.equal((await post(base, 'record-completed', '{"invalid"')).status, 400);
     assert.equal((await post(base, 'record-completed', JSON.stringify(completed).replace('"printerJobId":32', '"printerJobId":31,"printerJobId":32'))).status, 400);
-    // A stale tab may try to replace the completed upload reason before the owner records it.
     assert.equal((await post(base, 'browser/hold', { attemptId: evidenceHash, reason: 'pacing_outcome_unknown' })).status, 409);
     const uploaded = await post(base, 'record-completed', completed);
     assert.equal(uploaded.status, 200);

@@ -14,7 +14,6 @@ let reserved = false;
 
 class CompetingJournal extends SqliteTransportAttemptJournal {
   reserve(evidence, hash) {
-    // Both contenders must reach this exact point using independent SQLite connections.
     Atomics.add(barrier, 0, 1);
     Atomics.notify(barrier, 0);
     while (Atomics.load(barrier, 0) < 2) {

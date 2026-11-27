@@ -5,8 +5,6 @@ import { sha256Hex } from './sha256.ts';
 const version = z.string().min(1).max(64);
 const positiveInteger = z.number().int().positive();
 const digest = z.string().length(64).regex(/^[a-f0-9]+$/);
-// Whole ICC profiles, not mutable descriptions or an RGB channel count. First the three
-// libvips built-ins, then Apple's sRGB, Display P3 and Generic CMYK profiles.
 const supportedProfiles = new Map<string, 'srgb' | 'display-p3' | 'cmyk'>([
   ['c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353', 'srgb'],
   ['231752984cd4a5278e1b8d2390fe496767d4511fc81f54e1a5c69ae9ab4c42b5', 'display-p3'],
@@ -33,8 +31,6 @@ export const SourceColorEvidenceSchema = z.strictObject({
 
 export type SourceColorEvidence = z.infer<typeof SourceColorEvidenceSchema>;
 
-// Sort ASCII space names first, then the full ICC digest (null sorts first), then
-// the action. These validated fields contain no separator and do not depend on locale.
 function sourceKey(source: SourceColorEvidence) {
   return [source.sourceSpace, source.sourceProfileSha256 ?? '', source.action].join('\0');
 }

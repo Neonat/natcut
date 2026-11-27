@@ -31,7 +31,6 @@ export function createPhysicalEvidenceRuntime({
     } catch (error) {
       if (error instanceof InvalidObservation) throw Object.assign(error, { code: 'BAD_REQUEST' });
       if (error instanceof ObservationConflict) throw Object.assign(error, { code: 'OBSERVATION_CONFLICT' });
-      // Never return raw database errors, paths, or validation input from the transport row.
       throw journalUnavailable();
     } finally {
       journal?.close();

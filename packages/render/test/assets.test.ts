@@ -38,7 +38,6 @@ it('rejects untagged external pixels even when Sharp reports sRGB', async () => 
   await expect(loadRgbaAsset(image, 'external')).rejects.toThrow(/profile|untagged/i);
 });
 
-// Insert an ancillary chunk immediately after IHDR; metadata must agree with the pixels.
 function tagPng(bytes: Buffer, type: string, value: Buffer) {
   const chunk = Buffer.alloc(12 + value.length);
   chunk.writeUInt32BE(value.length, 0);
