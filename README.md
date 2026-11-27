@@ -119,6 +119,37 @@ npm run sprites:import -- --input /path/to/approved-art/roster.json
 
 Each batch supplies the complete picker roster. The importer fits each image on a transparent square up to 760 pixels across and publishes the catalog in `packages/render/catalog`. Use `--out <directory>` to inspect a separate catalog. Commit the generated index and PNGs together. Changed names or artwork receive new IDs. Earlier IDs retain their artwork for accepted tickets and offline proof.
 
+### Review sprite candidates offline
+
+Save a version 1 manifest outside the repository. List one still reference photo and one or more still PNG candidates per plant. Keep image paths relative to the manifest and use distinct candidate artwork across the batch. Scientific names are optional.
+
+```json
+{
+  "version": 1,
+  "plants": [
+    {
+      "name": "Monstera",
+      "scientificName": "Monstera deliciosa",
+      "reference": "photos/monstera.jpg",
+      "candidates": ["generated/monstera-a.png", "generated/monstera-b.png"]
+    }
+  ]
+}
+```
+
+On macOS, build the packet in a new directory and open its `index.html` in your browser. Score candidates from 1 to 5 for cuteness and accuracy. Export is available once each plant has an approved sprite with both scores. Save the downloaded `roster.json` beside `index.html` and the packet PNGs before importing.
+
+```bash
+npm run sprites:review -- --input /path/to/manifest.json --out /path/to/new-review
+npm run sprites:import -- --input /path/to/new-review/roster.json
+```
+
+### Replay the Sprout stream offline
+
+`@natcut/pipeline` reads synthetic response bytes for Sprout's `POST /api/pipeline/run-stream` with `pauseAt2b: false`. Run `npm exec --offline -- vitest run --project pipeline` to replay the contract. Fresh scans yield a validated PNG after a successful model render and cutout. Cache hits yield an untrusted HTTPS reference. Cancellation and failed or incomplete runs yield a fallback reason. The booth still uses its approved catalog.
+
+Before enabling live generation, resolve how a plant search supplies Sprout's required image, authenticate booth requests, and enforce per-session and per-event provider budgets. Test quality on the golden set, add visitor approval with a library fallback, and import approved artwork under an immutable catalog ID before a submission can reference it.
+
 ### Generate an offline sheet proof
 
 Create a review packet from the current fixture without connecting to Firebase or the printer:

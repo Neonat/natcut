@@ -28,11 +28,12 @@
     "test": "npm run test:legacy && npm run test:unit",
     "test:e2e": "playwright test",
     "test:legacy": "node --test test/protocol.test.mjs test/server.test.mjs test/snapshot.test.mjs test/usb-session.test.mjs",
-    "test:unit": "node --import tsx --test test/workspace-smoke.test.mjs test/cloud-worker-entrypoint.test.mjs test/cloud-boundaries.test.mjs test/dev-config.test.mjs test/proof-sheet.test.mjs && vitest run --passWithNoTests",
+    "test:unit": "node --import tsx --test test/workspace-smoke.test.mjs test/cloud-worker-entrypoint.test.mjs test/cloud-boundaries.test.mjs test/dev-config.test.mjs test/proof-sheet.test.mjs test/sprite-review.test.mjs && vitest run --passWithNoTests",
     "emulators:test": "node scripts/emulators-test.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "status": "node bin/status.mjs",
-    "sprites:import": "node scripts/import-sprites.mjs"
+    "sprites:import": "node scripts/import-sprites.mjs",
+    "sprites:review": "node scripts/sprite-review.ts"
   },
   "dependencies": {
     "usb": "^2.14.0"
