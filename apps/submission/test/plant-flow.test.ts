@@ -96,6 +96,15 @@ it('retries a lost create response with the same intent and original deadline', 
   await expect(h.coordinator.begin({ ...input, sanitizedImage: Buffer.from('different') })).rejects.toBeInstanceOf(PlantFlowConflictError);
 });
 
+it('holds a conflicting create response for reconciliation across retries', async () => {
+  const h = harness();
+  h.create.mockRejectedValueOnce(new SproutEvidenceConflictError('different intent'));
+  expect(await h.coordinator.begin(input)).toMatchObject({ state: 'needs_reconciliation' });
+  expect(h.repository.flow!.eligibility).toBe('needs_reconciliation');
+  expect(await h.coordinator.begin(input)).toMatchObject({ state: 'needs_reconciliation' });
+  expect(h.create).toHaveBeenCalledTimes(1);
+});
+
 it('commits one immutable fallback at the monotonic deadline and retries a lost outcome acknowledgement', async () => {
   const h = harness();
   await h.coordinator.begin(input);

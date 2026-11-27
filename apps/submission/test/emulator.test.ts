@@ -6,13 +6,16 @@ import { connectAuthEmulator, getAuth, signInAnonymously } from 'firebase/auth';
 import { connectFirestoreEmulator, doc, getFirestore, setDoc } from 'firebase/firestore';
 import { beforeAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
-import { catalogManifest, normalizeSpritePng } from '@natcut/render';
+import { catalogManifest, loadRgbaAsset, normalizeSpritePng } from '@natcut/render';
 import { NATIVE_SRGB_EVIDENCE } from '@natcut/domain';
 import { IdempotencyConflictError, RequeueForbiddenError, createSubmissionRepository, createSurveyRepository } from '../src/index.ts';
 import { createPlantFlowRepository, PlantFlowConflictError } from '../src/plant-flow-repository.ts';
 import { createRuntimeSpriteRegistry, RuntimeSpriteIntegrityError, type RuntimeSpriteObjectStore } from '../src/runtime-sprite.ts';
 import { createAcceptedRuntimeArtifactPreparer } from '../src/runtime-preparation.ts';
 import { createTrustedArtifactPreparer } from '../src/validation.ts';
+import { createTrustedCandidateRegistrar, createPlantFlowCoordinator } from '../src/plant-flow.ts';
+import { sourcePhotoDigest, type PlantOutcome } from '../src/plant-job-contract.ts';
+import { buildSubmissionServer } from '../src/routes.ts';
 import { artifact, submissionInput as input } from './fixtures/artifact.ts';
 
 const emulatorEnabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST && process.env.FIREBASE_AUTH_EMULATOR_HOST);
@@ -168,6 +171,109 @@ emulatorDescribe('Firebase emulator integration', () => {
     generation = '18';
     await expect(registry.loadAccepted(key, assetId)).rejects.toThrow(/Generation is missing/i);
   }, 20_000);
+
+  it('runs an authenticated plant capture through generated acceptance and one fenced queue submission', async () => {
+    const firestore = database();
+    const flows = createPlantFlowRepository(firestore);
+    const objectsInMemory = new Map<string, Buffer>();
+    let runtimeStorageUnavailable = false;
+    const objects: RuntimeSpriteObjectStore = {
+      async publishCreateOnly(path, bytes) {
+        if (!objectsInMemory.has(path)) objectsInMemory.set(path, Buffer.from(bytes));
+        return { generation: '31' };
+      },
+      async readExact(path, generation) {
+        if (runtimeStorageUnavailable) throw new Error('Temporary runtime storage outage.');
+        if (generation !== '31' || !objectsInMemory.has(path)) throw new Error('Pinned object unavailable.');
+        return Buffer.from(objectsInMemory.get(path)!);
+      },
+    };
+    const registry = createRuntimeSpriteRegistry({ firestore, flows, objects });
+    const captureBytes = await sharp(Buffer.from([60, 120, 90]), {
+      raw: { width: 1, height: 1, channels: 3 },
+    }).withIccProfile('srgb').jpeg().toBuffer();
+    const captureColor = (await loadRgbaAsset(captureBytes, 'capture')).colorEvidence;
+    const candidateBytes = await sharp(Buffer.from([119, 255, 0, 255]), {
+      raw: { width: 1, height: 1, channels: 4 },
+    }).withIccProfile('srgb').png().toBuffer();
+    const candidate = { candidateId: 'candidate-1', mediaType: 'image/png' as const,
+      byteLength: candidateBytes.length, sha256: sourcePhotoDigest(candidateBytes), objectGeneration: '7' };
+    const createCalls: string[] = [];
+    const sprout = {
+      async create(request: { generationIntentId: string }) {
+        createCalls.push(request.generationIntentId);
+        return { plantJobId: 'plant-job', generationIntentId: request.generationIntentId,
+          state: 'received' as const, createdAt: new Date().toISOString(), liveDeadlineMs: 15_000 as const };
+      },
+      async status() { return { plantJobId: 'plant-job', generationIntentId: createCalls[0]!,
+        state: 'candidate_ready' as const, createdAt: new Date().toISOString(), liveDeadlineMs: 15_000 as const,
+        identificationThresholdBps: 7000 as const, candidate, lateResultStored: false }; },
+      async candidate() { return candidateBytes; },
+      async outcome(_jobId: string, decision: PlantOutcome) { return decision; },
+    };
+    const coordinator = createPlantFlowCoordinator({ repository: flows, sprout,
+      registrar: createTrustedCandidateRegistrar(registry) });
+    const captures = {
+      async resolveConfirmed(ownerUid: string, _eventId: string, captureId: string) {
+        return ownerUid === 'alice' && captureId === 'capture-1' ? {
+          visitorSessionId: 'session-1', captureId, sanitizedImage: captureBytes,
+          sanitizedImageSha256: sourcePhotoDigest(captureBytes),
+          sourcePhotoReceipt: { mediaType: 'image/jpeg' as const, width: 1, height: 1, colorEvidence: captureColor },
+        } : null;
+      },
+      async findOwned(ownerUid: string, _eventId: string, captureId: string) {
+        return ownerUid === 'alice' && captureId === 'capture-1'
+          ? { visitorSessionId: 'session-1', captureId } : null;
+      },
+    };
+    const submissions = createSubmissionRepository(firestore);
+    const server = buildSubmissionServer({ eventId: 'devfest-sg', statusTokenSecret: 'test-secret-at-least-32-bytes-long',
+      repository: submissions, surveyRepository: createSurveyRepository(firestore),
+      verifyBearerToken: async token => { if (token !== 'alice' && token !== 'bob') throw new Error('auth'); return { uid: token }; },
+      prepareArtifact: createTrustedArtifactPreparer(),
+      publisher: { publish: async bundle => ({ descriptor: bundle.descriptor, generation: '1' }) },
+      plant: { captureSource: captures, coordinator, policyVersion: 'policy-v1',
+        verifyRuntimeAcceptance: (key, manifest) => registry.assertAccepted(key, manifest.spriteAssetId),
+        prepareRuntimeArtifact: createAcceptedRuntimeArtifactPreparer(registry) },
+    });
+    const post = (url: string, payload: object, token = 'alice') => server.inject({ method: 'POST', url,
+      headers: { authorization: `Bearer ${token}` }, payload });
+    try {
+      expect((await post('/v1/plant-jobs', { captureId: 'capture-1', fallbackAssetId: catalogManifest.spriteAssetId,
+        sanitizedImageBase64: 'browser-forged' })).statusCode).toBe(400);
+      expect((await post('/v1/plant-jobs', { captureId: 'capture-1', fallbackAssetId: catalogManifest.spriteAssetId }, 'bob')).statusCode).toBe(404);
+      expect((await post('/v1/plant-jobs', { captureId: 'capture-1', fallbackAssetId: catalogManifest.spriteAssetId })).json())
+        .toMatchObject({ state: 'waiting' });
+      expect(createCalls).toHaveLength(1);
+      expect((await server.inject({ method: 'GET', url: '/v1/plant-jobs/capture-1',
+        headers: { authorization: 'Bearer bob' } })).statusCode).toBe(404);
+      expect((await server.inject({ method: 'GET', url: '/v1/plant-jobs/capture-1',
+        headers: { authorization: 'Bearer alice' } })).json()).toMatchObject({ state: 'candidate_available', candidateId: 'candidate-1' });
+      const unaccepted = { ...catalogManifest, spriteAssetId: `sprite/runtime/${'0'.repeat(64)}`,
+        renderVersion: 'runtime-catalog-v1' };
+      expect((await post('/v1/plant-jobs/capture-1/submissions', {
+        manifest: unaccepted, idempotencyKey: 'one' })).statusCode).toBe(409);
+      const chosen = (await post('/v1/plant-jobs/capture-1/accept-generated', { candidateId: 'candidate-1' })).json();
+      expect(chosen).toMatchObject({ state: 'accepted', sproutAck: 'pending',
+        decision: { outcome: 'generated_accepted' } });
+      const manifest = { ...catalogManifest, spriteAssetId: chosen.decision.natcutAssetId,
+        renderVersion: 'runtime-catalog-v1' };
+      expect((await post('/v1/plant-jobs/capture-1/submissions', { manifest, idempotencyKey: 'one' })).statusCode).toBe(409);
+      expect((await post('/v1/plant-jobs/capture-1/sync-outcome', {})).json()).toMatchObject({ state: 'accepted', sproutAck: 'confirmed' });
+      expect((await post('/v1/plant-jobs', { captureId: 'capture-1', fallbackAssetId: catalogManifest.spriteAssetId })).json())
+        .toMatchObject({ state: 'accepted', sproutAck: 'confirmed' });
+      expect(createCalls).toHaveLength(1);
+      const first = await post('/v1/plant-jobs/capture-1/submissions', { manifest, idempotencyKey: 'one' });
+      expect(first.statusCode).toBe(201);
+      runtimeStorageUnavailable = true;
+      const retry = await post('/v1/plant-jobs/capture-1/submissions', { manifest, idempotencyKey: 'one' });
+      expect(retry.statusCode).toBe(200);
+      expect(retry.json().submissionId).toBe(first.json().submissionId);
+      expect((await post('/v1/submissions', { manifest, idempotencyKey: 'one' })).statusCode).toBe(422);
+      expect((await post('/v1/plant-jobs/capture-1/submissions', { manifest, idempotencyKey: 'one' }, 'bob')).statusCode).toBe(404);
+      expect((await firestore.collection('submissions').where('ownerUid', '==', 'alice').get()).size).toBe(1);
+    } finally { await server.close(); }
+  }, 30_000);
 
   it('counts queued tickets with future or malformed receipts without decoding unrelated artifacts', async () => {
     const firestore = database();

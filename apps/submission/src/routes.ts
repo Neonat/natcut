@@ -20,6 +20,8 @@ import {
 } from './repository.ts';
 import { SurveyUnavailableError, type SurveyRepository } from './survey-repository.ts';
 import type { PreparedTrustedArtifact } from './validation.ts';
+import type { PlantFlowKey } from './plant-flow-repository.ts';
+import { registerPlantRoutes, type PlantRouteDependencies } from './plant-routes.ts';
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const CuteRatingSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]);
@@ -40,6 +42,7 @@ const CreateBodySchema = z
     requeuedFrom: FirestoreDocumentIdSchema.nullable().optional(),
   })
   .strict();
+const RuntimeCreateBodySchema = CreateBodySchema.omit({ requeuedFrom: true });
 
 const SurveyBodySchema = z.discriminatedUnion('marketingOptIn', [
   z.object({
@@ -66,6 +69,10 @@ export type SubmissionServerDependencies = {
   now?: () => string;
   corsOrigin?: boolean | string | RegExp;
   routePrefix?: '' | `/${string}`;
+  plant?: Omit<PlantRouteDependencies, 'eventId' | 'verifyBearerToken' | 'submitRuntime'> & {
+    verifyRuntimeAcceptance: (flowKey: PlantFlowKey, manifest: CompositionManifest) => Promise<unknown>;
+    prepareRuntimeArtifact: (flowKey: PlantFlowKey, manifest: CompositionManifest) => Promise<Pick<PreparedTrustedArtifact, 'report' | 'bundle'>>;
+  };
 };
 
 function hashToken(token: string): string {
@@ -123,6 +130,9 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
     if (!parsed.success) return reply.code(400).send({ error: 'INVALID_SUBMISSION', details: parsed.error.issues });
 
     const { manifest, idempotencyKey, warningAcknowledgement } = parsed.data;
+    if (manifest.renderVersion === 'runtime-catalog-v1') {
+      return reply.code(422).send({ error: 'RUNTIME_ARTWORK_REQUIRES_ACCEPTED_FLOW' });
+    }
     const lookup = {
       ownerUid: visitor.uid, eventId: deps.eventId, idempotencyKey,
       manifestHash: await manifestHash(manifest), requeuedFrom: parsed.data.requeuedFrom ?? null,
@@ -254,6 +264,66 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
     if (result === 'locked') return reply.code(409).send({ error: 'QUEUE_LEAVE_LOCKED' });
     return { submissionId: request.params.id, publicStatus: 'cancelled' };
   });
+
+  if (deps.plant) {
+    const plant = deps.plant;
+    registerPlantRoutes(app, routePrefix, {
+      ...plant, eventId: deps.eventId, verifyBearerToken: deps.verifyBearerToken,
+      async submitRuntime(ownerUid, flowKey, body) {
+        const parsed = RuntimeCreateBodySchema.safeParse(body);
+        if (!parsed.success || parsed.data.manifest.renderVersion !== 'runtime-catalog-v1') {
+          return { statusCode: 400, payload: { error: 'INVALID_RUNTIME_SUBMISSION' } };
+        }
+        const { manifest, warningAcknowledgement } = parsed.data;
+        try {
+          await plant.verifyRuntimeAcceptance(flowKey, manifest);
+        } catch {
+          return { statusCode: 409, payload: { error: 'RUNTIME_ARTWORK_NOT_ACCEPTED' } };
+        }
+        const scopedKey = 'runtime-' + createHash('sha256').update(`${flowKey.eventId}\0${flowKey.visitorSessionId}\0${flowKey.captureId}\0${parsed.data.idempotencyKey}`).digest('hex');
+        const lookup = { ownerUid, eventId: deps.eventId, idempotencyKey: scopedKey,
+          manifestHash: await manifestHash(manifest), requeuedFrom: null };
+        const publicStatusToken = statusToken(deps.statusTokenSecret, ownerUid, deps.eventId, scopedKey);
+        const accepted = (submission: Submission, created: boolean) => ({ statusCode: created ? 201 : 200, payload: {
+          submissionId: submission.id, queueNumber: submission.queueNumber, jobsAhead: submission.jobsAhead,
+          publicStatus: submission.publicStatus, statusToken: publicStatusToken,
+        } });
+        try {
+          const existing = await deps.repository.findAccepted(lookup);
+          if (existing) return accepted(existing, false);
+          let prepared;
+          try { prepared = await plant.prepareRuntimeArtifact(flowKey, manifest); }
+          catch { return { statusCode: 409, payload: { error: 'RUNTIME_ARTWORK_UNAVAILABLE' } }; }
+          let validation = prepared.report;
+          if (!validation.valid || validation.severity === 'error') {
+            return { statusCode: 422, payload: { error: 'INVALID_GEOMETRY', validation } };
+          }
+          const acceptedAt = now();
+          if (validation.severity === 'warning') {
+            if (!warningAcknowledgement ||
+              warningAcknowledgement.geometryVersion !== validation.geometryVersion ||
+              warningAcknowledgement.rasterHash !== validation.rasterHash ||
+              warningAcknowledgement.manifestHash !== lookup.manifestHash ||
+              warningAcknowledgement.issuesHash !== await geometryIssuesHash(validation.issues)) {
+              return { statusCode: 409, payload: { error: 'WARNING_ACKNOWLEDGEMENT_REQUIRED', validation } };
+            }
+            validation = { ...validation, acknowledgedByVisitor: true, acknowledgedAt: acceptedAt };
+          }
+          let artifact;
+          try { artifact = await publishWithDeadline(deps.publisher, prepared.bundle); }
+          catch { return { statusCode: 503, payload: { error: 'ARTIFACT_STORAGE_UNAVAILABLE' } }; }
+          const profile = prepared.bundle.descriptor.profile;
+          const result = await deps.repository.create({ ...lookup, manifest, artifact,
+            printSpec: { profileId: profile.id, profileVersion: profile.version, cutMarginMm: manifest.cutMarginMm },
+            validation, publicStatusTokenHash: hashToken(publicStatusToken), acceptedAt });
+          return accepted(result.submission, result.created);
+        } catch (error) {
+          if (error instanceof IdempotencyConflictError) return { statusCode: 409, payload: { error: 'IDEMPOTENCY_CONFLICT' } };
+          throw error;
+        }
+      },
+    });
+  }
 
   return app;
 }

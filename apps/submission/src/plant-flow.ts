@@ -119,8 +119,8 @@ export function createPlantFlowCoordinator(deps: {
         liveDeadlineAt: new Date(clock.wallNowMs() + LIVE_DEADLINE_MS).toISOString(),
         fallbackAssetId: input.fallbackAssetId });
       if (flow.accepted) return reportAccepted(flow);
+      if (flow.eligibility === 'needs_reconciliation') return reconcile(flow);
       if (flow.plantJobId) {
-        if (flow.eligibility === 'needs_reconciliation') return reconcile(flow);
         if (flow.eligibility === 'below_threshold') return { state: 'identification_review',
           generationIntentId: flow.generationIntentId, suggestions: flow.identificationSuggestions };
         return remainingMs(flow) === 0 ? deadlineResult(flow) :
@@ -131,6 +131,11 @@ export function createPlantFlowCoordinator(deps: {
         created = await withinDeadline(flow, signal => deps.sprout.create({ ...base,
           generationIntentId: flow.generationIntentId, liveDeadlineAt: flow.liveDeadlineAt }, signal));
       } catch (error) {
+        if (error instanceof SproutEvidenceConflictError ||
+          (error instanceof SproutHttpError && error.status >= 400 && error.status < 500)) {
+          await deps.repository.observe(flow, flow.generationIntentId, 'needs_reconciliation');
+          return reconcile(flow);
+        }
         if (remainingMs(flow) === 0) return deadlineResult(flow);
         throw error;
       }

@@ -75,7 +75,9 @@ export function createSproutPlantJobClient(options: SproutClientOptions): Sprout
   const path = (plantJobId: string) => `/v1/plant-jobs/${encodeURIComponent(plantJobId)}`;
   return {
     async create(request, signal) {
-      const response = PlantJobCreateResponseSchema.parse(await json(await call('/v1/plant-jobs', 'POST', request, request.generationIntentId, signal)));
+      const parsed = PlantJobCreateResponseSchema.safeParse(await json(await call('/v1/plant-jobs', 'POST', request, request.generationIntentId, signal)));
+      if (!parsed.success) throw new SproutEvidenceConflictError('Sprout returned malformed create evidence.');
+      const response = parsed.data;
       if (response.generationIntentId !== request.generationIntentId) throw new SproutEvidenceConflictError('Sprout returned a different generation intent.');
       return response;
     },

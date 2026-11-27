@@ -64,6 +64,28 @@ export function createRuntimeSpriteRegistry(deps: {
   objects: RuntimeSpriteObjectStore;
 }) {
   const collection = deps.firestore.collection('runtimeSpriteReceipts');
+  async function acceptedReceipt(flowKey: PlantFlowKey, assetId: string): Promise<RuntimeSpriteReceipt> {
+    if (!/^sprite\/runtime\/[a-f0-9]{64}$/.test(assetId)) throw new RuntimeSpriteIntegrityError('Invalid runtime sprite identity.');
+    const [flow, snapshot] = await Promise.all([
+      deps.flows.get(flowKey), collection.doc(assetId.slice('sprite/runtime/'.length)).get(),
+    ]);
+    if (!snapshot.exists) throw new RuntimeSpriteIntegrityError('Runtime sprite receipt is missing.');
+    const receipt = RuntimeSpriteReceiptSchema.parse(snapshot.data());
+    if (!flow || flow.accepted?.outcome !== 'generated_accepted' ||
+      flow.accepted.natcutAssetId !== assetId || flow.accepted.candidateId !== receipt.candidateId ||
+      flow.sproutAck !== 'confirmed' || flow.generationIntentId !== receipt.generationIntentId ||
+      flow.plantJobId !== receipt.plantJobId || receipt.assetId !== assetId ||
+      flowKey.eventId !== receipt.flowKey.eventId || flowKey.visitorSessionId !== receipt.flowKey.visitorSessionId ||
+      flowKey.captureId !== receipt.flowKey.captureId) {
+      throw new RuntimeSpriteIntegrityError('Runtime sprite has no matching confirmed NatCut acceptance.');
+    }
+    const { assetId: _assetId, ...identity } = receipt;
+    if (receipt.objectPath !== objectPath(receipt.pngSha256) ||
+      receipt.assetId !== `sprite/runtime/${receiptId(identity)}`) {
+      throw new RuntimeSpriteIntegrityError('Runtime sprite receipt identity mismatch.');
+    }
+    return receipt;
+  }
   return {
     async stage(input: StageRuntimeSpriteInput): Promise<string> {
       const flow = await deps.flows.get(input.flowKey);
@@ -146,26 +168,10 @@ export function createRuntimeSpriteRegistry(deps: {
       return receipt.assetId;
     },
 
+    assertAccepted: acceptedReceipt,
+
     async loadAccepted(flowKey: PlantFlowKey, assetId: string): Promise<SrgbRgbaAsset> {
-      if (!/^sprite\/runtime\/[a-f0-9]{64}$/.test(assetId)) throw new RuntimeSpriteIntegrityError('Invalid runtime sprite identity.');
-      const [flow, snapshot] = await Promise.all([
-        deps.flows.get(flowKey), collection.doc(assetId.slice('sprite/runtime/'.length)).get(),
-      ]);
-      if (!snapshot.exists) throw new RuntimeSpriteIntegrityError('Runtime sprite receipt is missing.');
-      const receipt = RuntimeSpriteReceiptSchema.parse(snapshot.data());
-      if (!flow || flow.accepted?.outcome !== 'generated_accepted' ||
-        flow.accepted.natcutAssetId !== assetId || flow.accepted.candidateId !== receipt.candidateId ||
-        flow.sproutAck !== 'confirmed' || flow.generationIntentId !== receipt.generationIntentId ||
-        flow.plantJobId !== receipt.plantJobId || receipt.assetId !== assetId ||
-        flowKey.eventId !== receipt.flowKey.eventId || flowKey.visitorSessionId !== receipt.flowKey.visitorSessionId ||
-        flowKey.captureId !== receipt.flowKey.captureId) {
-        throw new RuntimeSpriteIntegrityError('Runtime sprite has no matching confirmed NatCut acceptance.');
-      }
-      const { assetId: _assetId, ...identity } = receipt;
-      if (receipt.objectPath !== objectPath(receipt.pngSha256) ||
-        receipt.assetId !== `sprite/runtime/${receiptId(identity)}`) {
-        throw new RuntimeSpriteIntegrityError('Runtime sprite receipt identity mismatch.');
-      }
+      const receipt = await acceptedReceipt(flowKey, assetId);
       const bytes = await deps.objects.readExact(receipt.objectPath, receipt.objectGeneration);
       if (bytes.length !== receipt.pngByteLength || sha256(bytes) !== receipt.pngSha256) {
         throw new RuntimeSpriteIntegrityError('Pinned runtime sprite digest or length mismatch.');
