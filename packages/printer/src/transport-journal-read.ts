@@ -43,12 +43,26 @@ function matchesPhase(row: TransportAttemptRecord) {
   }
 }
 
+export function parseStoredJournalJson(raw: string): unknown {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error('Invalid JSON in the physical journal.');
+  }
+  // Writers persist compact JSON.stringify output. A duplicate member cannot round-trip.
+  if (JSON.stringify(value) !== raw) throw new Error('Ambiguous JSON encoding in the physical journal.');
+  return value;
+}
+
 export function parseTransportAttemptRow(input: unknown) {
   const attempt = rowSchema.parse(input);
   const { evidenceJson, printerJobId, acknowledgedFrames, pendingKind, pendingIndex } = attempt;
-  const evidence = transportEvidence.parse(JSON.parse(evidenceJson));
-  if (createHash('sha256').update(evidenceJson).digest('hex') !== attempt.evidenceHash ||
-      evidence.submissionId !== attempt.submissionId || evidence.jpeg.byteLength > evidence.receipt.descriptor.profile.jpegMaxBytes) {
+  if (createHash('sha256').update(evidenceJson).digest('hex') !== attempt.evidenceHash) {
+    throw new Error('Transport attempt evidence digest mismatch.');
+  }
+  const evidence = transportEvidence.parse(parseStoredJournalJson(evidenceJson));
+  if (evidence.submissionId !== attempt.submissionId || evidence.jpeg.byteLength > evidence.receipt.descriptor.profile.jpegMaxBytes) {
     throw new Error('Transport attempt does not match its stored evidence.');
   }
   const pltFrames = Math.ceil(evidence.plt.byteLength / uploadFramePayloadBytes);

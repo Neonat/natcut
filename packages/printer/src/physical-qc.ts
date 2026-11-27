@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import {
-  journalDigest, journalIdentity, journalJobId, openTransportJournalDatabase, parseTransportAttemptRow,
+  journalDigest, journalIdentity, journalJobId, openTransportJournalDatabase, parseStoredJournalJson, parseTransportAttemptRow,
   type TransportAttemptRecord,
 } from './transport-journal-read.ts';
 
@@ -35,8 +35,21 @@ export type PhysicalAttemptOutcome = z.infer<typeof completedAttempt>;
 export type RibbonRegistrationQc = z.infer<typeof ribbonQc>;
 export type PhysicalQcStatus = z.infer<typeof channel>;
 
+function publicCheckpoint(row: TransportAttemptRecord) {
+  return Object.freeze({
+    submissionId: row.submissionId,
+    evidenceHash: row.evidenceHash,
+    phase: row.phase,
+    printerJobId: row.printerJobId,
+    acknowledgedFrames: row.acknowledgedFrames,
+    pendingKind: row.pendingKind,
+    pendingIndex: row.pendingIndex,
+    reason: row.reason,
+  });
+}
+
 export type PhysicalAttemptEvidence = {
-  attempt: TransportAttemptRecord;
+  readonly attempt: ReturnType<typeof publicCheckpoint>;
   outcome: PhysicalAttemptOutcome | null;
   ribbonRegistrationQc: RibbonRegistrationQc | null;
 };
@@ -59,10 +72,10 @@ function parseObservation<T>(rows: unknown[], submissionId: string | undefined, 
   if (row === undefined) return null;
   const stored = storedRow.parse(row);
   if (stored.submissionId !== submissionId) throw new Error('Observation has no matching transport attempt.');
-  return schema.parse(JSON.parse(stored.recordJson));
+  return schema.parse(parseStoredJournalJson(stored.recordJson));
 }
 
-function requireCompletedUpload(attempt: TransportAttemptRecord, expectedFrames: number) {
+function requireCompletedUpload(attempt: PhysicalAttemptEvidence['attempt'], expectedFrames: number) {
   if (attempt.phase !== 'needs_reconciliation' || attempt.reason !== 'physical_observation_required' ||
       attempt.printerJobId === null || attempt.pendingKind !== null || attempt.pendingIndex !== null ||
       attempt.acknowledgedFrames !== expectedFrames) {
@@ -70,7 +83,7 @@ function requireCompletedUpload(attempt: TransportAttemptRecord, expectedFrames:
   }
 }
 
-function requireExactOutcome(record: PhysicalAttemptOutcome, attempt: TransportAttemptRecord) {
+function requireExactOutcome(record: PhysicalAttemptOutcome, attempt: PhysicalAttemptEvidence['attempt']) {
   if (record.evidenceHash !== attempt.evidenceHash || record.submissionId !== attempt.submissionId ||
       record.printerJobId !== attempt.printerJobId) throw new Error('Completed observation does not match the transport identity.');
 }
@@ -143,7 +156,7 @@ export class SqlitePhysicalQcJournal {
     if (ribbonRegistrationQc && (!outcome || ribbonRegistrationQc.evidenceHash !== attempt.evidenceHash)) {
       throw new Error('Ribbon registration QC has no matching completed observation.');
     }
-    return { evidence: { attempt, outcome, ribbonRegistrationQc }, expectedFrames };
+    return { evidence: { attempt: publicCheckpoint(attempt), outcome, ribbonRegistrationQc }, expectedFrames };
   }
 
   getPhysicalAttemptEvidence(): PhysicalAttemptEvidence | null {

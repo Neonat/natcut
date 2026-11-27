@@ -112,15 +112,19 @@ describe('physical observations on the durable, one-attempt journal', () => {
     expect(journal.getPhysicalAttemptEvidence()).toBeNull();
   });
 
-  it('retains the exact transport record, completed observation, and first CMY record across restart and replay', async () => {
+  it('retains only the public transport checkpoint, completed observation, and first CMY record across restart and replay', async () => {
     const file = await journalFile();
     const first = new SqlitePhysicalQcJournal(file);
     const original = first.getPhysicalAttemptEvidence();
     try {
-      expect(original).toMatchObject({
-        attempt: { evidenceHash, submissionId, printerJobId, acknowledgedFrames: 4, evidenceJson: JSON.stringify(evidence) },
+      expect(original).toEqual({
+        attempt: {
+          evidenceHash, submissionId, printerJobId, acknowledgedFrames: 4,
+          phase: 'needs_reconciliation', pendingKind: null, pendingIndex: null, reason: 'physical_observation_required',
+        },
         outcome: null, ribbonRegistrationQc: null,
       });
+      expect(Object.isFrozen(original!.attempt)).toBe(true);
       expect(() => first.recordRibbonRegistrationQc(qc)).toThrow();
       expect(first.recordCompletedAttempt(outcome)).toEqual(outcome);
       expect(first.recordRibbonRegistrationQc(qc)).toEqual(qc);
@@ -133,6 +137,7 @@ describe('physical observations on the durable, one-attempt journal', () => {
     expect(() => reopened.recordCompletedAttempt({ ...outcome, observedAt: '2026-01-16T13:01:02.345Z' })).toThrow();
     expect(() => reopened.recordRibbonRegistrationQc({ ...qc, notes: 'different' })).toThrow();
     expect(reopened.getPhysicalAttemptEvidence()).toEqual({ ...original, outcome, ribbonRegistrationQc: qc });
+    expect(JSON.stringify(reopened.getPhysicalAttemptEvidence())).not.toContain(evidence.executionToken);
     expectLocked(file);
   });
 
@@ -252,6 +257,59 @@ describe('physical observations on the durable, one-attempt journal', () => {
     const journal = openQc(file);
     expect(() => journal.getPhysicalAttemptEvidence()).toThrow();
     expect(() => journal.recordCompletedAttempt({ ...outcome, evidenceHash: storedHash })).toThrow();
+    expectLocked(file);
+  });
+
+  it.each([
+    ['nested duplicate JPEG lengths', '"jpeg":{"byteLength":8142', '"jpeg":{"byteLength":1,"byteLength":8142'],
+    ['alternate number encoding', '"byteLength":8142', '"byteLength":8142.0'],
+    ['alternate escape', '"fixture-token"', '"fixture-\\u0074oken"'],
+    ['extraneous whitespace', '"submissionId":', '"submissionId": '],
+  ] as const)('rejects stored transport JSON with %s, even with a matching raw digest', async (_case, before, after) => {
+    const file = await journalFile();
+    const journal = openQc(file);
+    const raw = JSON.stringify(evidence).replace(before, after);
+    expect(raw).not.toEqual(JSON.stringify(evidence));
+    const storedHash = hash(raw);
+    const matchingOutcome = { ...outcome, evidenceHash: storedHash };
+    editFixture(file, 'UPDATE transport_attempts SET evidenceJson = ?, evidenceHash = ?', raw, storedHash);
+    editFixture(file, 'INSERT INTO physical_attempt_outcomes (submissionId, recordJson) VALUES (?, ?)',
+      submissionId, JSON.stringify(matchingOutcome));
+    expect(() => journal.getPhysicalAttemptEvidence()).toThrow();
+    expect(() => journal.recordCompletedAttempt(matchingOutcome)).toThrow();
+    expect(() => journal.recordRibbonRegistrationQc({ ...qc, evidenceHash: storedHash })).toThrow();
+    expectLocked(file);
+  });
+
+  it('verifies the pinned digest of the original bytes when unique transport fields are reordered', async () => {
+    const file = await journalFile();
+    const journal = openQc(file);
+    const { submissionId: id, ...rest } = evidence;
+    const reordered = JSON.stringify({ ...rest, submissionId: id });
+    expect(JSON.parse(reordered)).toEqual(evidence);
+    expect(hash(reordered)).not.toBe(evidenceHash);
+    editFixture(file, 'UPDATE transport_attempts SET evidenceJson = ?', reordered);
+    expect(() => journal.getPhysicalAttemptEvidence()).toThrow(/digest mismatch/);
+    expect(() => journal.recordCompletedAttempt(outcome)).toThrow(/digest mismatch/);
+    expect(() => journal.recordRibbonRegistrationQc(qc)).toThrow(/digest mismatch/);
+    expectLocked(file);
+  });
+
+  it.each([
+    ['physical_attempt_outcomes', '"printerJobId":37', '"printerJobId":12,"printerJobId":37'],
+    ['ribbon_registration_qc', '"evidenceHash":', '"evidenceHash":"' + hash('stale') + '","evidenceHash":'],
+    ['ribbon_registration_qc', '"magenta":"fail"', '"magenta":"pass","magenta":"fail"'],
+  ] as const)('rejects conflicting observation fields in %s (%s) for reads and both appends', async (table, before, after) => {
+    const file = await journalFile();
+    const journal = openQc(file);
+    if (table === 'ribbon_registration_qc') journal.recordCompletedAttempt(outcome);
+    const json = JSON.stringify(table === 'physical_attempt_outcomes' ? outcome : qc);
+    const raw = json.replace(before, after);
+    expect(raw).not.toEqual(json);
+    editFixture(file, 'INSERT INTO ' + table + ' (submissionId, recordJson) VALUES (?, ?)', submissionId, raw);
+    expect(() => journal.getPhysicalAttemptEvidence()).toThrow();
+    expect(() => journal.recordCompletedAttempt(outcome)).toThrow();
+    expect(() => journal.recordRibbonRegistrationQc(qc)).toThrow();
     expectLocked(file);
   });
 
