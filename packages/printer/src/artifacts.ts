@@ -7,7 +7,7 @@ import { generateCutPath, type GenerateOptions } from '../../../vendor/pixcut-tr
 import { CUT_CANVAS } from '../../../vendor/pixcut-trace/units.ts';
 import type { PltStats } from '../../../vendor/pixcut-trace/plt.ts';
 import { verifyPrintJpeg, type CanonicalPrintPreview, type GenerationQcResult } from './generation-qc.ts';
-import { sealPreparedArtifacts } from './prepared-evidence.ts';
+export { preparePhysicalArtifacts } from './prepared-evidence.ts';
 
 export const jpegQualities = [95, 92, 90, 85, 80, 75, 70, 60, 50] as const;
 
@@ -135,7 +135,7 @@ function prepareCut(mask: Uint8Array, profile: PrintProfile): PreparedCutArtifac
   return { kind: 'cut-path-plt', bytes, sha256: sha256(bytes), sourceMaskSha256: sha256(mask), stats: result.stats };
 }
 
-export async function preparePhysicalArtifacts(input: VerifiedArtifact): Promise<PreparedPhysicalArtifacts> {
+export async function generateVerifiedPhysicalOutputs(input: VerifiedArtifact) {
   const receipt = parseArtifactReceipt(input.receipt);
   const verified = await verifyArtifactBytes(input.bytes, receipt);
   const decoded = await decodeLogicalSourceBundle(verified.bytes, verified.receipt.descriptor);
@@ -143,5 +143,5 @@ export async function preparePhysicalArtifacts(input: VerifiedArtifact): Promise
   if (decoded.descriptor.formatVersion !== 2) throw new Error('Physical generation requires trusted sRGB color evidence.');
   const cut = prepareCut(decoded.mask, profile);
   const print = await preparePrint(decoded.rgba, decoded.descriptor.colorEvidence, profile);
-  return sealPreparedArtifacts({ receipt: verified.receipt, profile, print, cut });
+  return { receipt: verified.receipt, print, cut };
 }

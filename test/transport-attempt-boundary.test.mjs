@@ -20,7 +20,7 @@ function bundleGraph(entryPoints, external) {
 }
 
 test('transport attempt import graph contains only the approved offline dependencies', async () => {
-  const { inputs } = await bundleGraph([transportModule], ['better-sqlite3', 'zod']);
+  const { inputs, outputs } = await bundleGraph([transportModule], ['better-sqlite3', 'zod']);
   const allowedInputs = new Set([
     transportModule,
     'node_modules/@noble/hashes/_md.js',
@@ -43,11 +43,19 @@ test('transport attempt import graph contains only the approved offline dependen
     'vendor/pixcut-trace/units.ts',
   ]);
   const allowedExternals = new Set(['node:crypto', 'node:path', 'node:util', 'better-sqlite3', 'zod']);
-  const externalPaths = Object.values(inputs).flatMap(({ imports }) =>
-    imports.filter((entry) => entry.external).map((entry) => entry.path),
-  );
-  assert.deepEqual(Object.keys(inputs).filter((path) => !allowedInputs.has(path)), []);
-  assert.deepEqual([...new Set(externalPaths)].filter((path) => !allowedExternals.has(path)), []);
+  // esbuild resolves the unused preparation entrypoint's lazy codec import too.
+  // Check every edge from the transport modules and every emitted dependency.
+  for (const source of allowedInputs) {
+    for (const entry of inputs[source]?.imports ?? []) {
+      if (source === 'packages/printer/src/prepared-evidence.ts' && entry.kind === 'dynamic-import' &&
+          entry.path === 'packages/printer/src/artifacts.ts') continue;
+      assert.ok((entry.external ? allowedExternals : allowedInputs).has(entry.path), `${source} imports ${entry.path}`);
+    }
+  }
+  for (const output of Object.values(outputs)) {
+    assert.deepEqual(Object.keys(output.inputs).filter(path => !allowedInputs.has(path)), []);
+    assert.deepEqual(output.imports.filter(entry => entry.external && !allowedExternals.has(entry.path)), []);
+  }
 });
 
 test('the worker and non-physical printer entry points do not import the transport attempt', async () => {

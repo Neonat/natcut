@@ -1,12 +1,17 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { prepared } from './prepared-fixture.ts';
+import * as preparationAuthority from '../src/prepared-evidence.ts';
 import type { PreparedPhysicalArtifacts } from '../src/artifacts.ts';
 import { frameUploadPayload, planComboJob, planUploadPayloads } from '../src/index.ts';
 
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
 describe('protocol plan', () => {
+  it('exposes only checked preparation and a read-only membership test from the source authority', () => {
+    expect(Object.keys(preparationAuthority).sort()).toEqual(['isPreparedArtifactPair', 'preparePhysicalArtifacts']);
+  });
+
   it('declares the exact deterministic print-and-cut documents from immutable evidence', async () => {
     const artifact = await prepared();
     const document = 'natcut-' + artifact.receipt.descriptor.bundleSha256.slice(0, 32);
