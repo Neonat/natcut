@@ -11,10 +11,11 @@ export function SpritePicker({ selected, onChange, reloadKey = 0 }: {
       <div className="sprite-options">
         {spriteChoices(selected).map((entry) => (
           <label className="sprite-option" key={entry.id}>
-            <input type="radio" name="sprite" value={entry.id} checked={entry.id === selected}
+            <input type="radio" name="sprite" value={entry.id} checked={entry.id === selected} aria-label={entry.name}
+              aria-describedby={entry.scientificName ? `sprite-scientific-${entry.id.slice(-12)}` : undefined}
               onChange={() => onChange(entry.id)} />
             <img src={`/${assetPngFilename(entry.id)}?reload=${entry.id === selected ? reloadKey : 0}`} alt="" loading="lazy" width="44" height="44" />
-            <span>{entry.name}{entry.scientificName && <small>{entry.scientificName}</small>}</span>
+            <span>{entry.name}{entry.scientificName && <small id={`sprite-scientific-${entry.id.slice(-12)}`}>{entry.scientificName}</small>}</span>
           </label>
         ))}
       </div>

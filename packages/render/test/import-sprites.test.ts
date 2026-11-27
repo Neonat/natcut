@@ -80,10 +80,24 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
       expect(await readdir(path.join(out, 'artwork'))).toEqual(files);
     }
 
-    await mkdir(out + '.import-lock', { recursive: true });
-    await writeFile(path.join(out + '.import-lock', 'owner.json'), JSON.stringify({ pid: 999_999_999 }));
+    await mkdir(out + '.import-lock-v2', { recursive: true });
+    await writeFile(path.join(out + '.import-lock-v2', 'ticket-999999999-00000000-0000-0000-0000-000000000000'), '1');
     await importRows(rows);
     expect(await loadIndex()).toEqual(changed);
+
+    const concurrentA = path.join(dir, 'concurrent-a.json');
+    const concurrentB = path.join(dir, 'concurrent-b.json');
+    await sharp({ create: { width: 5, height: 9, channels: 4, background: 'blue' } }).png().toFile(path.join(dir, 'a.png'));
+    await sharp({ create: { width: 9, height: 5, channels: 4, background: 'green' } }).png().toFile(path.join(dir, 'b.png'));
+    await writeFile(concurrentA, JSON.stringify(rows.with(0, { ...rows[0]!, file: 'a.png' })));
+    await writeFile(concurrentB, JSON.stringify(rows.with(0, { ...rows[0]!, file: 'b.png' })));
+    await Promise.all([
+      exec('npm', ['run', 'sprites:import', '--', '--input', concurrentA, '--out', out], { cwd: path.resolve(import.meta.dirname, '../../..') }),
+      exec('npm', ['run', 'sprites:import', '--', '--input', concurrentB, '--out', out], { cwd: path.resolve(import.meta.dirname, '../../..') }),
+    ]);
+    const serialized = await loadIndex();
+    const versions = [...serialized.sprites, ...serialized.archived].filter((entry) => entry.name === 'Plant 0');
+    expect(new Set(versions.map((entry) => entry.id)).size).toBeGreaterThanOrEqual(3);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

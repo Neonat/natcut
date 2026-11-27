@@ -140,7 +140,8 @@ export function EditorPage(props: EditorPageProps) {
       ) : null}
       {error ? <div className="notice error" role="alert">{error}</div> : null}
       <div className="sticky-action">
-        <button className="primary-action" type="button" disabled={submitting || structuralError || (!report && !previewFailed) || artworkState === 'loading'}
+        <button className="primary-action" type="button"
+          disabled={submitting || (!previewFailed && (structuralError || !report || artworkState === 'loading'))}
           onClick={() => previewFailed ? retryPreview() : void submit()}>
           {submitting ? 'Joining queue…' : previewFailed ? 'Retry preview' : (!report || artworkState === 'loading') ? 'Checking cut…' : report.severity === 'warning' ? 'Print anyway' : 'Join print queue'}
         </button>

@@ -30,6 +30,12 @@ function loadVisibleArtwork(root: ParentNode = document): void {
   root.querySelectorAll('.sticker-preview image').forEach((node) => fireEvent.load(node));
 }
 
+function spriteRadio(id: string): HTMLInputElement {
+  const radio = screen.getAllByRole<HTMLInputElement>('radio').find((input) => input.value === id);
+  if (!radio) throw new Error(`Missing sprite radio ${id}`);
+  return radio;
+}
+
 describe('mobile editor', () => {
   const alternate = sprites[1];
   const itWithAlternate = alternate ? it : it.skip;
@@ -55,7 +61,7 @@ describe('mobile editor', () => {
     const warning = { report: warningReport(), contours: [[{ x: 10, y: 10 }, { x: 30, y: 20 }]] };
     respond(0, warning);
     expect(paths()).toHaveLength(1);
-    fireEvent.click(screen.getByRole('radio', { name: alternate!.name }));
+    fireEvent.click(spriteRadio(alternate!.id));
     expect(image()).not.toBe(oldImage);
     expect(paths()).toHaveLength(0);
     expect(screen.queryByRole('alert')).toBeNull();
@@ -63,6 +69,7 @@ describe('mobile editor', () => {
     respond(0, warning);
     expect(paths()).toHaveLength(0);
     respond(1, { error: 'Could not load artwork.' });
+    expect(screen.getByRole('button', { name: /retry preview/i })).toHaveProperty('disabled', false);
     fireEvent.error(container.querySelector('.sticker-preview image')!);
     expect(screen.getByRole('alert').textContent).toMatch(/sprite|preview/i);
     const failedHref = image();
@@ -85,7 +92,7 @@ describe('mobile editor', () => {
     await clickSubmit();
     fireEvent.click(screen.getByRole('button', { name: /standard/i }));
     await clickSubmit();
-    fireEvent.click(screen.getByRole('radio', { name: alternate!.name }));
+    fireEvent.click(spriteRadio(alternate!.id));
     loadVisibleArtwork();
     await clickSubmit();
     expect(submit.mock.calls[1]![0].idempotencyKey).toBe(submit.mock.calls[0]![0].idempotencyKey);
@@ -98,7 +105,7 @@ describe('mobile editor', () => {
       previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} />);
     loadVisibleArtwork();
     fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
-    const pear = screen.getByRole('radio', { name: alternate!.name });
+    const pear = spriteRadio(alternate!.id);
     const wide = screen.getByRole('button', { name: /Wide/ });
     expect(pear.matches(':disabled')).toBe(true);
     expect(wide.matches(':disabled')).toBe(true);

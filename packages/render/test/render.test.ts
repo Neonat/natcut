@@ -1,4 +1,5 @@
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -162,6 +163,30 @@ describe('renderServerRaster', () => {
     expect(second.sha256).toBe(first.sha256);
     expect(second.rgba).toEqual(first.rgba);
     expect(first.rgba[3]).toBe(0);
+  });
+
+  it('changes both printable pixels and the cut mask for a controlled silhouette change', async () => {
+    const plan = planComposition(manifest, DEVFEST_SG_V1);
+    const alternateSprite: RgbaAsset = {
+      ...solidAsset('sprite/monstera-v1', 58, 148, 92),
+      rgba: new Uint8ClampedArray([
+        58, 148, 92, 255,
+        58, 148, 92, 0,
+        58, 148, 92, 0,
+        58, 148, 92, 0,
+      ]),
+    };
+    const alternateAssets: AssetCatalog = new Map(assets).set(alternateSprite.id, alternateSprite);
+    const [firstRaster, secondRaster] = await Promise.all([
+      renderServerRaster(plan, assets),
+      renderServerRaster(plan, alternateAssets),
+    ]);
+    const maskHash = (catalog: AssetCatalog) => createHash('sha256')
+      .update(renderCutGroupMasks(plan, catalog)[0]!.alpha)
+      .digest('hex');
+
+    expect(secondRaster.sha256).not.toBe(firstRaster.sha256);
+    expect(maskHash(alternateAssets)).not.toBe(maskHash(assets));
   });
 
   it('uses the same alpha resampling for the trusted raster and cut masks', async () => {

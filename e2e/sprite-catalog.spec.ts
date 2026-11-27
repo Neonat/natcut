@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { sprites } from '@natcut/render/browser';
 import { execFile } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
@@ -8,7 +9,8 @@ test.use({ viewport: { width: 375, height: 812 }, isMobile: true, deviceScaleFac
 test('the selected rehearsal sprite survives a queue round trip and reproduces the worker contour offline', async ({ page, request }, info) => {
   await page.goto('/edit');
   const choices = page.getByRole('radio');
-  test.skip(await choices.count() < 2, 'Selection round trip needs at least two active sprites.');
+  test.skip(sprites.length < 2, 'Selection round trip needs at least two configured sprites.');
+  await expect(choices).toHaveCount(sprites.length);
   const first = choices.first();
   const second = choices.nth(1);
   await expect(first).toBeChecked();
@@ -56,9 +58,6 @@ test('the selected rehearsal sprite survives a queue round trip and reproduces t
   const proof = await prove('submitted', manifest);
   expect(proof.manifestHash).toBe(fields.manifestHash.stringValue);
   expect(proof.cutMask.sha256).toBe(fields.validation.mapValue.fields.rasterHash.stringValue);
-  const standard = await prove('standard', { ...manifest, cutMarginMm: 1.5 });
-  expect(standard.logicalRaster.sha256).not.toBe('895dcc90da435793a4ff483e4b9a26b0adaf739037cea0945a8af061c5d8f143');
-  expect(standard.cutMask.sha256).not.toBe('1465f6f4822228afd53188f8490373156e9005a673cf06a6f3da849ecf90e84d');
   const overlay = await readFile(info.outputPath('submitted', 'cut-overlay.svg'), 'utf8');
   expect([...overlay.matchAll(/<path d="([^"]+)"\/>/g)].map((m) => m[1]).join(' ')).toEqual(wideContours);
   await page.getByRole('button', { name: 'Leave queue' }).click();
@@ -82,7 +81,8 @@ test('fetches only the planned artwork for geometry and can retry a failed image
   });
   await page.goto('/edit');
   const choices = page.getByRole('radio');
-  test.skip(await choices.count() < 2, 'Retry selection needs at least two active sprites.');
+  test.skip(sprites.length < 2, 'Retry selection needs at least two configured sprites.');
+  await expect(choices).toHaveCount(sprites.length);
   const selected = choices.nth(1);
   selectedPath = new URL((await selected.locator('..').locator('img').getAttribute('src'))!, page.url()).pathname;
   const submit = page.getByRole('button', { name: 'Join print queue' });

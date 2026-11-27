@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { link, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -48,22 +48,58 @@ function processIsAlive(pid) {
   }
 }
 
-async function acquireLock(lock) {
-  for (let attempt = 0; attempt < 2; attempt++) {
+function lockParticipant(root) {
+  const id = `${process.pid}-${randomUUID()}`;
+  return { root, id, choosing: path.join(root, `choosing-${id}`), ticket: path.join(root, `ticket-${id}`) };
+}
+
+async function releaseParticipant(participant) {
+  await Promise.all([rm(participant.choosing, { force: true }), rm(participant.ticket, { force: true })]);
+}
+
+async function lockFiles(root) {
+  return (await readdir(root)).filter((file) => /^(choosing|ticket)-\d+-[0-9a-f-]+$/.test(file));
+}
+
+async function removeDeadParticipants(root, files) {
+  const dead = new Set(files.map((file) => Number(file.split('-')[1])).filter((pid) => !processIsAlive(pid)));
+  await Promise.all(files.filter((file) => dead.has(Number(file.split('-')[1])))
+    .map((file) => rm(path.join(root, file), { force: true })));
+}
+
+async function readTickets(participant) {
+  const files = await lockFiles(participant.root);
+  await removeDeadParticipants(participant.root, files);
+  const current = await lockFiles(participant.root);
+  const tickets = [];
+  for (const file of current.filter((name) => name.startsWith('ticket-'))) {
     try {
-      await mkdir(lock);
-      await writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid }) + '\n', { flag: 'wx' });
-      return;
+      tickets.push({ id: file.slice('ticket-'.length), number: Number(await readFile(path.join(participant.root, file), 'utf8')) });
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      let owner;
-      try { owner = JSON.parse(await readFile(path.join(lock, 'owner.json'), 'utf8')); }
-      catch { throw new Error(`Sprite import lock is incomplete: ${lock}`); }
-      if (processIsAlive(owner.pid)) throw new Error(`Another sprite import is running (PID ${owner.pid}).`);
-      await rm(lock, { recursive: true, force: true });
+      if (error.code !== 'ENOENT') throw error;
     }
   }
-  throw new Error('Could not acquire the sprite import lock.');
+  return { files: current, tickets };
+}
+
+async function acquireLock(participant) {
+  await mkdir(participant.root, { recursive: true });
+  await writeFile(participant.choosing, '', { flag: 'wx' });
+  const existing = await readTickets(participant);
+  const number = Math.max(0, ...existing.tickets.map((ticket) => ticket.number)) + 1;
+  await writeFile(participant.ticket, String(number), { flag: 'wx' });
+  await rm(participant.choosing);
+
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const { files, tickets } = await readTickets(participant);
+    const anotherChoosing = files.some((file) => file.startsWith('choosing-') && file.slice('choosing-'.length) !== participant.id);
+    const ahead = tickets.some((ticket) => ticket.id !== participant.id
+      && (ticket.number < number || (ticket.number === number && ticket.id < participant.id)));
+    if (!anotherChoosing && !ahead) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('Timed out waiting for another sprite import to finish.');
 }
 
 async function publish(input, out) {
@@ -83,9 +119,8 @@ async function publish(input, out) {
 
   const artwork = path.join(out, 'artwork');
   await mkdir(path.dirname(out), { recursive: true });
-  const lock = out + '.import-lock';
-  await acquireLock(lock);
-  const stop = (code) => { void rm(lock, { recursive: true, force: true }).finally(() => process.exit(code)); };
+  const participant = lockParticipant(out + '.import-lock-v2');
+  const stop = (code) => { void releaseParticipant(participant).finally(() => process.exit(code)); };
   const interrupt = () => stop(130);
   const terminate = () => stop(143);
   process.once('SIGINT', interrupt);
@@ -93,6 +128,7 @@ async function publish(input, out) {
   const created = [];
   let stage;
   try {
+    await acquireLock(participant);
     let previous = { version: 1, sprites: [], archived: [] };
     try {
       previous = JSON.parse(await readFile(path.join(out, 'index.json'), 'utf8'));
@@ -126,7 +162,7 @@ async function publish(input, out) {
     process.off('SIGINT', interrupt);
     process.off('SIGTERM', terminate);
     if (stage) await rm(stage, { recursive: true, force: true });
-    await rm(lock, { recursive: true });
+    await releaseParticipant(participant);
   }
 }
 
