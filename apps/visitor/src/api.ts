@@ -32,10 +32,18 @@ export type PublicQueueStatus = {
   updatedAt: string;
 };
 
+export type SurveyRequest = {
+  stickerSubmissionId: string;
+  cuteRating: 1 | 2 | 3 | 4 | 5;
+} & ({ marketingOptIn: false } | { marketingOptIn: true; email: string });
+
+export type SurveyResponse = { surveyId: string; created: boolean };
+
 export interface VisitorApi {
   submit(request: SubmissionRequest): Promise<SubmissionResponse>;
   getStatus(submissionId: string, statusToken: string): Promise<PublicQueueStatus>;
   leave(submissionId: string, statusToken: string): Promise<{ submissionId: string; publicStatus: 'cancelled' }>;
+  submitSurvey(request: SurveyRequest): Promise<SurveyResponse>;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -75,6 +83,13 @@ export function createVisitorApi(options: {
       return parseResponse(await fetch(url(`/v1/submissions/${encodeURIComponent(submissionId)}/leave`), {
         method: 'POST',
         headers: { 'X-NatCut-Status-Token': statusToken },
+      }));
+    },
+    async submitSurvey(request) {
+      return parseResponse<SurveyResponse>(await fetch(url('/v1/surveys'), {
+        method: 'POST',
+        headers: { authorization: `Bearer ${await identityToken()}`, 'content-type': 'application/json' },
+        body: JSON.stringify(request),
       }));
     },
   };

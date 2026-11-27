@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PublicQueueStatus, VisitorApi } from '../api.ts';
 import { usePullToRefresh } from './use-pull-to-refresh.ts';
+import { SurveyCard } from './survey-card.tsx';
 
 const statusCopy = {
   joining: { title: 'Joining the queue', detail: 'Saving your sticker…' },
@@ -93,6 +94,7 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
         ) : null}
         {status?.publicStatus === 'cancelled' ? <button className="primary-action" type="button" onClick={rejoin}>Rejoin queue</button> : null}
       </div>
+      {status?.publicStatus === 'collected' ? <SurveyCard stickerSubmissionId={props.submissionId} api={props.api} /> : null}
       <p className="pull-hint">Pull down or tap Refresh for the latest status.</p>
     </main>
   );

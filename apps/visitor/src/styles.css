@@ -69,6 +69,23 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .ticket-number { margin-top: 20px !important; font-size: .8rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
 .queue-actions { display: grid; gap: 10px; }
 .pull-hint { margin: 20px 0; color: var(--ink-muted); text-align: center; font-size: .8rem; }
+.survey-card { display: grid; gap: 16px; margin-top: 28px; padding: 20px; border: 2px solid var(--forest); border-radius: 24px; background: var(--paper); box-shadow: 6px 7px 0 var(--forest); }
+.survey-card h2 { margin: -10px 0 0; font-size: 1.55rem; letter-spacing: -.035em; }
+.rating-field { min-width: 0; margin: 0; padding: 0; border: 0; }
+.rating-field legend { margin-bottom: 8px; color: var(--ink-muted); font-size: .82rem; }
+.rating-options { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; }
+.rating-options label { position: relative; display: grid; min-height: 48px; place-items: center; border: 2px solid #b8c2b7; border-radius: 13px; background: var(--cream); cursor: pointer; }
+.rating-options label:has(:checked) { border-color: var(--forest); background: var(--lime); }
+.rating-options label:has(:focus-visible) { outline: 3px solid var(--orange); outline-offset: 2px; }
+.rating-options input { position: absolute; opacity: 0; }
+.rating-options span { color: var(--forest); font-size: 1.35rem; }
+.marketing-choice { display: flex; align-items: flex-start; gap: 10px; line-height: 1.3; cursor: pointer; }
+.marketing-choice input { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--forest); }
+.marketing-choice span { font-weight: 750; }
+.marketing-choice small { display: block; color: var(--ink-muted); font-weight: 500; }
+.email-field { display: grid; gap: 7px; font-weight: 800; }
+.email-field input { min-height: 48px; padding: 10px 12px; border: 2px solid #b8c2b7; border-radius: 12px; background: white; }
+.survey-thanks { min-height: 96px; place-items: center; text-align: center; background: var(--lime); }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; transition-duration: .001ms !important; } }
