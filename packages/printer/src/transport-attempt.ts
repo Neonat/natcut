@@ -1,11 +1,16 @@
 import { createHash } from 'node:crypto';
-import { isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import { parseArtifactReceipt } from '@natcut/artifacts/reader';
 import type { ArtifactReceipt } from '@natcut/domain';
 import type { PreparedPhysicalArtifacts } from './artifacts.ts';
 import { frameUploadPayload, planComboJob, planUploadPayloads, type UploadPayload } from './protocol-plan.ts';
+import {
+  openTransportJournalDatabase, parseTransportAttemptRow,
+  type TransportAttemptEvidence, type TransportAttemptReason, type TransportAttemptRecord,
+} from './transport-journal-read.ts';
+
+export type { TransportAttemptEvidence, TransportAttemptPhase, TransportAttemptReason, TransportAttemptRecord } from './transport-journal-read.ts';
 
 export type TransportAttemptBinding = {
   submissionId: string;
@@ -14,47 +19,6 @@ export type TransportAttemptBinding = {
   executionToken: string;
   manifestHash: string;
   receipt: ArtifactReceipt;
-};
-
-export type TransportAttemptEvidence = {
-  submissionId: string;
-  eventId: string;
-  workerId: string;
-  executionToken: string;
-  manifestHash: string;
-  receipt: ArtifactReceipt;
-  jpeg: { byteLength: number; sha256: string };
-  plt: { byteLength: number; sha256: string };
-};
-
-export type TransportAttemptPhase =
-  | 'declaring'
-  | 'declared'
-  | 'frame_pending'
-  | 'frame_acknowledged'
-  | 'needs_reconciliation';
-
-export type TransportAttemptReason =
-  | 'attempt_already_reserved'
-  | 'declaration_outcome_unknown'
-  | 'printer_job_id_invalid'
-  | 'job_id_persistence_failed'
-  | 'frame_checkpoint_failed'
-  | 'frame_acknowledgement_unknown'
-  | 'acknowledgement_checkpoint_failed'
-  | 'pacing_outcome_unknown'
-  | 'physical_observation_required';
-
-export type TransportAttemptRecord = {
-  submissionId: string;
-  evidenceHash: string;
-  evidenceJson: string;
-  phase: TransportAttemptPhase;
-  printerJobId: number | null;
-  acknowledgedFrames: number;
-  pendingKind: 'plt' | 'jpeg' | null;
-  pendingIndex: number | null;
-  reason: TransportAttemptReason | null;
 };
 
 export interface TransportAttemptJournal {
@@ -85,67 +49,16 @@ export type TransportAttemptResult =
   | { kind: 'preflight_failed'; reason: 'evidence_mismatch' | 'journal_unavailable' }
   | { kind: 'needs_reconciliation'; reason: TransportAttemptReason };
 
-const phases: ReadonlySet<string> = new Set([
-  'declaring', 'declared', 'frame_pending', 'frame_acknowledged', 'needs_reconciliation',
-]);
-const reasons: ReadonlySet<string> = new Set([
-  'attempt_already_reserved', 'declaration_outcome_unknown', 'printer_job_id_invalid',
-  'job_id_persistence_failed', 'frame_checkpoint_failed', 'frame_acknowledgement_unknown',
-  'acknowledgement_checkpoint_failed', 'pacing_outcome_unknown', 'physical_observation_required',
-]);
-
 function isRecord(input: unknown): input is Record<string, unknown> {
   return Boolean(input) && typeof input === 'object' && !Array.isArray(input);
-}
-
-function isPhase(input: unknown): input is TransportAttemptPhase {
-  return typeof input === 'string' && phases.has(input);
-}
-
-function isReason(input: unknown): input is TransportAttemptReason {
-  return typeof input === 'string' && reasons.has(input);
-}
-
-function parseRecord(input: unknown): TransportAttemptRecord | null {
-  if (!isRecord(input)) return null;
-  const row = input;
-  if (typeof row.submissionId !== 'string' || typeof row.evidenceHash !== 'string' ||
-      typeof row.evidenceJson !== 'string' || !isPhase(row.phase) ||
-      (row.printerJobId !== null && typeof row.printerJobId !== 'number') ||
-      typeof row.acknowledgedFrames !== 'number' ||
-      (row.pendingKind !== null && row.pendingKind !== 'plt' && row.pendingKind !== 'jpeg') ||
-      (row.pendingIndex !== null && typeof row.pendingIndex !== 'number') ||
-      (row.reason !== null && !isReason(row.reason))) {
-    throw new Error('Invalid transport attempt journal row.');
-  }
-  return {
-    submissionId: row.submissionId,
-    evidenceHash: row.evidenceHash,
-    evidenceJson: row.evidenceJson,
-    phase: row.phase,
-    printerJobId: row.printerJobId,
-    acknowledgedFrames: row.acknowledgedFrames,
-    pendingKind: row.pendingKind,
-    pendingIndex: row.pendingIndex,
-    reason: row.reason,
-  };
 }
 
 export class SqliteTransportAttemptJournal implements TransportAttemptJournal {
   private readonly database: Database.Database;
 
   constructor(file: string) {
-    if (typeof file !== 'string' || !isAbsolute(file) || file !== file.trim() || file.includes('\0')) {
-      throw new Error('The transport attempt journal requires an absolute file path.');
-    }
-    this.database = new Database(file);
+    this.database = openTransportJournalDatabase(file, false);
     try {
-      this.database.pragma('busy_timeout = 5000');
-      if (this.database.pragma('journal_mode = WAL', { simple: true }) !== 'wal') {
-        throw new Error('The transport attempt journal requires SQLite WAL mode.');
-      }
-      this.database.pragma('synchronous = FULL');
-      if (process.platform === 'darwin') this.database.pragma('fullfsync = ON');
       this.database.exec(`
         CREATE TABLE IF NOT EXISTS transport_attempts (
           submissionId TEXT PRIMARY KEY,
@@ -218,11 +131,12 @@ export class SqliteTransportAttemptJournal implements TransportAttemptJournal {
   }
 
   get(submissionId: string): TransportAttemptRecord | null {
-    return parseRecord(this.database.prepare(`
+    const row = this.database.prepare(`
       SELECT submissionId, evidenceHash, evidenceJson, phase, printerJobId,
         acknowledgedFrames, pendingKind, pendingIndex, reason
       FROM transport_attempts WHERE submissionId = ?
-    `).get(submissionId));
+    `).get(submissionId);
+    return row === undefined ? null : parseTransportAttemptRow(row).attempt;
   }
 
   close(): void {

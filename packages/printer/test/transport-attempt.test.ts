@@ -494,3 +494,22 @@ describe('runTransportAttempt', () => {
     reopened.close();
   });
 });
+
+it('rejects corrupted evidence on a transport read and retains the reservation', async () => {
+  const file = await journalPath();
+  const artifact = await prepared();
+  const evidence: TransportAttemptEvidence = {
+    ...binding(artifact),
+    jpeg: { byteLength: artifact.print.bytes.byteLength, sha256: artifact.print.sha256 },
+    plt: { byteLength: artifact.cut.bytes.byteLength, sha256: artifact.cut.sha256 },
+  };
+  const journal = new SqliteTransportAttemptJournal(file);
+  const brokenHash = 'a'.repeat(64);
+  try {
+    expect(journal.reserve(evidence, brokenHash)).toBe(true);
+    expect(() => journal.get(evidence.submissionId)).toThrow();
+    expect(journal.reserve(evidence, brokenHash)).toBe(false);
+  } finally {
+    journal.close();
+  }
+});

@@ -27,6 +27,8 @@ test('transport attempt import graph contains only the approved offline dependen
     'node_modules/@noble/hashes/_u64.js',
     'node_modules/@noble/hashes/sha2.js',
     'node_modules/@noble/hashes/utils.js',
+    'packages/printer/src/transport-journal-read.ts',
+    'packages/printer/src/upload-frame-size.ts',
     'packages/printer/src/protocol-plan.ts',
     'packages/printer/src/prepared-evidence.ts',
     'packages/artifacts/src/reader.ts',
@@ -84,4 +86,23 @@ test('the local operator server reaches transport mutation only through the phys
   assert.deepEqual(Object.keys(inputs).filter((path) =>
     path.startsWith('apps/worker/') || path.includes('cloud-worker') || path.includes('simulated-printer')
   ), []);
+});
+
+test('physical QC can read and append evidence without a transport, USB or codec dependency', async () => {
+  const entry = 'packages/printer/src/physical-qc.ts';
+  const { inputs, outputs } = await bundleGraph([entry], ['better-sqlite3', 'zod']);
+  const allowedPrinterInputs = new Set([
+    entry, 'packages/printer/src/transport-journal-read.ts', 'packages/printer/src/upload-frame-size.ts',
+  ]);
+  const allowedExternals = new Set(['node:crypto', 'node:path', 'node:util', 'better-sqlite3', 'zod']);
+  for (const [file, module] of Object.entries(inputs)) {
+    for (const edge of module.imports) {
+      if (edge.external) assert.ok(allowedExternals.has(edge.path), file + ' imports ' + edge.path);
+    }
+    if (file.startsWith('packages/printer/')) assert.ok(allowedPrinterInputs.has(file), file);
+    else assert.match(file, /^(packages\/domain\/src\/|node_modules\/@noble\/hashes\/)/);
+  }
+  for (const output of Object.values(outputs)) {
+    assert.deepEqual(output.imports.filter(entry => entry.external && !allowedExternals.has(entry.path)), []);
+  }
 });

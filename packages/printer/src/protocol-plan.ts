@@ -3,11 +3,10 @@ import { isDeepStrictEqual } from 'node:util';
 import { parsePlt } from '../../../vendor/pixcut-trace/plt.ts';
 import { isPreparedArtifactPair } from './prepared-evidence.ts';
 import type { PreparedPhysicalArtifacts } from './artifacts.ts';
+import { uploadFramePayloadBytes } from './upload-frame-size.ts';
 
 const capturedUuid = 'f45d69a1da22727c26aa863ea657de8b32a501f2';
 const capturedHash = '26b8714aea78792854637621ad5cf1c4ed31ad1f';
-const dataExtlen = 4075;
-const dataPayloadBytes = dataExtlen - 4;
 
 export type UploadPayload = {
   kind: 'plt' | 'jpeg';
@@ -100,8 +99,8 @@ export function frameUploadPayload(payload: UploadPayload, jobId: number): Uint8
     throw new Error('Printer job ID must be a positive unsigned 32-bit integer.');
   }
   const frames: Uint8Array[] = [];
-  for (let offset = 0; offset < payload.bytes.byteLength; offset += dataPayloadBytes) {
-    const body = payload.bytes.subarray(offset, offset + dataPayloadBytes);
+  for (let offset = 0; offset < payload.bytes.byteLength; offset += uploadFramePayloadBytes) {
+    const body = payload.bytes.subarray(offset, offset + uploadFramePayloadBytes);
     const header = new TextEncoder().encode(`cmd data EXTLEN=${body.byteLength + 4}\n`);
     const frame = new Uint8Array(header.byteLength + 4 + body.byteLength);
     frame.set(header);

@@ -4,3 +4,4 @@ export * from './generation-qc.ts';
 export * from './dry-run.ts';
 export * from './physical-proof.ts';
 export * from './protocol-plan.ts';
+export type { PhysicalAttemptEvidence, PhysicalAttemptOutcome, PhysicalQcStatus, RibbonRegistrationQc } from './physical-qc.ts';
