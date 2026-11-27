@@ -194,7 +194,9 @@ Do not run bare `firebase deploy` in this project. The cloud provisioning and re
 
 Begin and completion are now fenced to the exact submission, event, worker, durable execution token, manifest, validation, artifact generation, and immutable profile. The begin lease captures that evidence; completion must match it. The same evidence can confirm a committed `ready` or later `collected` outcome after a lost response. Until that commit or confirmation is durably acknowledged, the worker reports cloud waiting rather than success. Stale, malformed, legacy, or different evidence keeps the queue head on an operator-visible reconciliation hold and cannot release or bypass another slot.
 
-Keep production queue consumption stopped. The remaining rollout blocker is Session 2: authorized bucket/IAM and named-index verification, isolated deployment, pinned-generation storage and simulator smoke, and rollback proof. That session remains cloud-only and must not touch the printer. The booth Mac simulator configuration for that future rollout follows the [cloud preview runbook](docs/runbooks/cloud-preview.md).
+Session 2 completed the authorized cloud-only rollout. Both named-database indexes are ready; the private NatCut artifact bucket has narrow runtime IAM; pinned-generation upload/read passed under both service accounts; the API is deployed by immutable digest; Hosting is pinned to the verified revision; one immutable V2 ticket completed through `SimulatedPrinter`; and rollback plus candidate restoration passed without changing Sprout. Exact resource IDs and evidence are in the [cloud preview runbook](docs/runbooks/cloud-preview.md).
+
+This is not production or printer readiness. Session 3 remains blocked on generating the exact JPEG and PLT from the verified logical bundle and proving the protocol adapter in dry-run form. Any USB access or loaded-media printer write still requires separate explicit approval at that later boundary. End-to-end booth rehearsal and production hardening remain subsequent sessions.
 
 ```bash
 gcloud auth application-default login \

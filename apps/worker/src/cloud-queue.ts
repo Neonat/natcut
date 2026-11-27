@@ -10,6 +10,12 @@ export class InvalidClaimError extends Error {
   }
 }
 
+export class UnexpectedSubmissionError extends Error {
+  constructor(readonly expectedSubmissionId: string, readonly actualSubmissionId: string) {
+    super(`Smoke worker expected submission ${expectedSubmissionId}, but queue selected ${actualSubmissionId}.`);
+  }
+}
+
 function readClaimRecord(id: string, data: FirebaseFirestore.DocumentData | undefined, eventId: string) {
   const { workerLease: _claim, executionLease: _execution, completionFence: _completion, ...record } = data ?? {};
   const parsed = SubmissionSchema.safeParse(record);
@@ -71,8 +77,8 @@ function isIsoTimestamp(value: unknown): value is string {
 }
 
 export interface CloudQueue {
-  recoverClaim(workerId: string): Promise<ClaimedSubmission | null>;
-  claimNextSubmission(workerId: string): Promise<ClaimedSubmission | null>;
+  recoverClaim(workerId: string, expectedSubmissionId?: string): Promise<ClaimedSubmission | null>;
+  claimNextSubmission(workerId: string, expectedSubmissionId?: string): Promise<ClaimedSubmission | null>;
   beginExecution(
     submissionId: string,
     workerId: string,
@@ -91,11 +97,15 @@ export function createFirestoreCloudQueue(
   const submissions = firestore.collection('submissions');
   const slot = firestore.collection('workerSlots').doc(eventId);
   return {
-    async recoverClaim(workerId) {
+    async recoverClaim(workerId, expectedSubmissionId) {
       return firestore.runTransaction(async (transaction) => {
         const slotSnapshot = await transaction.get(slot);
         if (!slotSnapshot.exists || slotSnapshot.data()?.workerId !== workerId) return null;
-        const submissionSnapshot = await transaction.get(submissions.doc(String(slotSnapshot.data()?.submissionId)));
+        const submissionId = String(slotSnapshot.data()?.submissionId);
+        if (expectedSubmissionId && submissionId !== expectedSubmissionId) {
+          throw new UnexpectedSubmissionError(expectedSubmissionId, submissionId);
+        }
+        const submissionSnapshot = await transaction.get(submissions.doc(submissionId));
         const submission = readClaimRecord(submissionSnapshot.id, submissionSnapshot.data(), eventId);
         if (!submission) throw new InvalidClaimError(submissionSnapshot.id);
         return {
@@ -110,7 +120,7 @@ export function createFirestoreCloudQueue(
       });
     },
 
-    async claimNextSubmission(workerId) {
+    async claimNextSubmission(workerId, expectedSubmissionId) {
       const claimed = await firestore.runTransaction(async (transaction) => {
         const slotSnapshot = await transaction.get(slot);
         if (slotSnapshot.exists) return null;
@@ -123,6 +133,9 @@ export function createFirestoreCloudQueue(
         );
         const document = queued.docs[0];
         if (!document) return null;
+        if (expectedSubmissionId && document.id !== expectedSubmissionId) {
+          throw new UnexpectedSubmissionError(expectedSubmissionId, document.id);
+        }
         const claimedAt = now();
         transaction.update(document.ref, {
           publicStatus: 'next',

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ArtifactIntegrityError, type ArtifactReader } from '@natcut/artifacts';
 import { verifyClaim, verifyJournalArtifact } from './artifact-verification.ts';
-import { InvalidClaimError, type CloudQueue, type CompletionEvidence } from './cloud-queue.ts';
+import { InvalidClaimError, UnexpectedSubmissionError, type CloudQueue, type CompletionEvidence } from './cloud-queue.ts';
 import { safelyExecutableStates, type JobStore, type LocalJobState, type LocalPrintJob } from './job-store.ts';
 import type { PhysicalExecutor } from './simulated-printer.ts';
 
@@ -15,6 +15,7 @@ export type WorkerResult =
 
 export type WorkerDependencies = {
   workerId: string;
+  expectedSubmissionId?: string;
   cloud: CloudQueue;
   store: JobStore;
   executor: PhysicalExecutor;
@@ -194,7 +195,7 @@ export async function prepareNextWorkerJob(
         const held = deps.store.listBlockingSubmissionIds()[0];
         if (held) return { kind: 'needs_reconciliation', submissionId: held };
       }
-      const claim = await deps.cloud[method](deps.workerId);
+      const claim = await deps.cloud[method](deps.workerId, deps.expectedSubmissionId);
       if (!claim) continue;
       const submissionId = claim.submission.id;
       if (deps.store.hasLiveExecutionGuard()) return { kind: 'busy', submissionId };
@@ -230,6 +231,9 @@ export async function prepareNextWorkerJob(
     }
     return { kind: 'idle' };
   } catch (error) {
+    if (error instanceof UnexpectedSubmissionError) {
+      return { kind: 'failed', submissionId: error.actualSubmissionId, error: error.message };
+    }
     if (!(error instanceof InvalidClaimError)) throw error;
     return { kind: deps.store.holdArtifact(error.submissionId, now(), error.message), submissionId: error.submissionId };
   }

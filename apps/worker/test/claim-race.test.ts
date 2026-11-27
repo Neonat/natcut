@@ -143,4 +143,25 @@ emulatorDescribe('cloud claim race', () => {
     }, '2026-11-23T12:00:08.000Z')).toBe('fenced');
     expect((await head.get()).get('publicStatus')).toBe('collected');
   }, 20_000);
+
+  it('smoke claims and recovery stop when the queue head is not the expected ticket', async () => {
+    const eventId = 'smoke-scope';
+    await firestore.doc('submissions/smoke-unexpected').set({
+      ...submission('smoke-unexpected', 1), eventId,
+    });
+    await firestore.doc('submissions/smoke-expected').set({
+      ...submission('smoke-expected', 2), eventId,
+    });
+    const cloud = createFirestoreCloudQueue(firestore, () => '2026-11-28T00:00:00.000Z', eventId);
+
+    await expect(cloud.claimNextSubmission('smoke-worker', 'smoke-expected')).rejects.toThrow(/expected.*smoke-expected/i);
+    expect((await firestore.doc(`workerSlots/${eventId}`).get()).exists).toBe(false);
+    expect((await firestore.doc('submissions/smoke-unexpected').get()).get('publicStatus')).toBe('queued');
+    expect((await firestore.doc('submissions/smoke-expected').get()).get('publicStatus')).toBe('queued');
+
+    await firestore.doc('submissions/smoke-unexpected').update({ publicStatus: 'cancelled' });
+    expect((await cloud.claimNextSubmission('smoke-worker', 'smoke-expected'))?.submission.id).toBe('smoke-expected');
+    await expect(cloud.recoverClaim('smoke-worker', 'different-ticket')).rejects.toThrow(/expected.*different-ticket/i);
+    expect((await firestore.doc(`workerSlots/${eventId}`).get()).get('submissionId')).toBe('smoke-expected');
+  });
 });

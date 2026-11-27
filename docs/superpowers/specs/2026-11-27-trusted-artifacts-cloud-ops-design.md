@@ -58,7 +58,7 @@ An authenticated retry first looks up the owner, event and idempotency key. Its 
 
 The private bucket selection is fixed to `NATCUT_ARTIFACT_BUCKET=sprout-dev-66f08-natcut-artifacts`. The object key is `logical/v1/<bundleSha256>`. GCS creation uses `ifGenerationMatch=0`. Verification reads only the pinned decimal-string generation and compares its bytes with the locally verified payload within the profile-derived size limit. Firestore stores `recordVersion: 2` and `artifact: { descriptor, generation }`. The storage path is derived from the digest. Storage failure returns HTTP 503 before ticket allocation. An upload followed by a lost Firestore race or failure may leave a reusable immutable object.
 
-The local emulator runtime uses its private local create-only store, whose sole generation is `1`. Production bucket ownership, storage IAM, end-to-end GCS behavior and readiness remain unverified. Stop all old workers before deploying an artifact-bearing submission API. Queue consumption requires a separately verified worker rollout.
+The local emulator runtime uses its private local create-only store, whose sole generation is `1`. Session 2 later verified production bucket ownership, runtime storage IAM, end-to-end create-only GCS behavior, and the verification-capable simulated worker rollout. Autonomous queue consumption remains stopped outside an explicitly supervised smoke or rehearsal.
 
 ## Worker artifact verification
 
@@ -78,17 +78,27 @@ The SQLite outbox and verified journal are the durable retry boundary. A transpo
 
 Unacknowledged local work and artifact holds block every later cloud claim even if the cloud slot is missing. Ready-intent recovery is serialized by the same SQLite execution guard as simulation, so a stale worker cannot rewrite an active executor's journal. The operator desk adds local blocker rows even when the corresponding cloud ticket is collected or missing from the paginated queue. Safe pre-begin phases may resume only while cloud state remains `next`; local execution is never inferred from a terminal public status alone.
 
-## Later tranches
+## Authorized cloud rollout evidence
 
-1. Verify the production bucket, IAM and pinned upload/read behavior during an authorized storage smoke.
-2. During an authorized rollout, verify the named-database indexes, isolated deployment, pinned-generation storage behavior, simulator smoke, and rollback path without printer access.
-3. Define an operator-authorized resolution command for truly ambiguous physical outcomes only after a physical adapter can report printer evidence. It must never synthesize success from public status alone.
-4. Physical artifact generation and USB execution remain separately approved work after cloud readiness.
+Session 2 completed the cloud-only tranche without USB or printer access. It verified both named-database indexes as `READY`, provisioned the private regional NatCut artifact bucket with public-access prevention and narrow create/read runtime IAM, and proved create-only upload plus exact-generation reads as both runtime identities. It built the artifact-bearing API from commit `eff8650`, deployed immutable image digest `sha256:8ee819866f4cff9c59c70b7c676cd07b26f37e775368e94554216f0105a5266b`, and pinned the isolated `natcut` Hosting site to healthy revision `natcut-submission-00004-vrh`.
+
+One immutable V2 smoke ticket was accepted, its receipt and 12,600,000 logical bytes were verified at the pinned generation, and `SimulatedPrinter` completed it through the exact execution and completion fences. The local journal acknowledged the same completion with no pending outbox or reconciliation hold. A target-locked Hosting rollback to the recorded baseline and restoration to the candidate both passed while the default Sprout site remained HTTP 404.
+
+Post-rollout review hardened repeatability: the submission smoke now allowlists the exact Firebase web-app key before signup, persists non-secret attempt identity before POST, recovers lost responses without creating another ticket, and compares the requested and stored canonical manifest hashes. A dedicated bounded worker smoke checks the expected submission ID inside claim and recovery transactions and exits after that ticket's acknowledgement or hold, so it cannot consume an unrelated visitor ticket.
+
+This evidence establishes isolated cloud readiness for the verified logical bundle and simulator. It is not evidence of JPEG, PLT, registration, USB protocol, media loading, physical print/cut behavior, event load, or production hardening.
+
+## Remaining tranches
+
+1. Session 3 must generate the exact JPEG and PLT from the verified bundle, define and dry-run the protocol adapter, and collect non-printer evidence first. USB access and one loaded-sheet physical test remain a later step inside that session and require separate explicit approval at the time of execution.
+2. Define an operator-authorized resolution command for truly ambiguous physical outcomes only after a physical adapter can report printer evidence. It must never synthesize success from public status alone.
+3. Rehearse the full booth path and failure injection only after the physical adapter proof.
+4. Complete production hardening, retention/privacy decisions, observability, cost controls, and final release audit after rehearsal.
 
 ## Safety and rollout invariants
 
 - No printer or USB code is imported or invoked by this slice.
-- No production resource is created, changed, or deleted.
+- Production cloud changes are restricted to the authorized isolated NatCut resources and are recorded in the cloud runbook; Sprout resources remain unchanged.
 - An accepted queue record must never point at an unverified or incomplete object.
 - A digest mismatch is corruption, not a reason to regenerate accepted evidence.
 - Only the exact printing execution may publish ready and release its event slot.
