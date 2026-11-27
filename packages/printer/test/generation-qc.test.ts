@@ -45,7 +45,8 @@ describe('final JPEG generation QC', () => {
     await expect(printer.verifyPrintJpeg(preview, await asJpeg(pixels))).rejects.toMatchObject({
       code: 'jpeg_fidelity_failed',
       details: { passed: false, reasons: expect.arrayContaining([change === 'red contour' ? 'tile_color_bias' : 'mean_error']),
-        worstPixel: { delta: expect.any(Number), x: expect.any(Number), y: expect.any(Number) } },
+        worstPixel: { delta: expect.any(Number), x: expect.any(Number), y: expect.any(Number) },
+        worstTile: { channel: expect.stringMatching(/^(red|green|blue)$/), signedMeanError: expect.any(Number) } },
     });
   });
 
@@ -55,7 +56,26 @@ describe('final JPEG generation QC', () => {
     data.set([40, 12, 0], 297);
     const result = printer.compareDecodedPreview(preview, { width: 10, height: 10, channels: 3, data });
     expect(result).toMatchObject({ maeMilli: [400, 120, 0], p99: 0, highErrorPpm: 10_000, worstTileBias: 1,
-      worstPixel: { x: 9, y: 9, actual: [40, 12, 0], expected: [0, 0, 0], delta: 40 } });
+      worstPixel: { x: 9, y: 9, actual: [40, 12, 0], expected: [0, 0, 0], delta: 40 },
+      worstTile: { x: 0, y: 0, width: 10, height: 10, channel: 'red', signedMeanError: 1, magnitude: 1 } });
+  });
+
+  it('locates a biased partial tile even when the largest isolated pixel error is elsewhere', () => {
+    const width = 35, height = 21;
+    const preview = { ...reference(), width, height, data: Buffer.alloc(width * height * 3, 150) };
+    const data = Buffer.from(preview.data);
+    data[(2 * width + 2) * 3] = 250;
+    for (let y = 16; y < height; y++) for (let x = 32; x < width; x++) {
+      const offset = (y * width + x) * 3;
+      data[offset + 1] = 132;
+      data[offset + 2] = 132;
+    }
+    const result = printer.compareDecodedPreview(preview, { width, height, channels: 3, data });
+    expect(result).toMatchObject({
+      passed: false, reasons: ['tile_color_bias'], worstTileBias: 18,
+      worstPixel: { x: 2, y: 2, delta: 100 },
+      worstTile: { x: 32, y: 16, width: 3, height: 5, channel: 'green', signedMeanError: -18, magnitude: 18 },
+    });
   });
 
   it('rejects an incorrect raster size, non-RGB data, an untagged JPEG and undecodable bytes', async () => {

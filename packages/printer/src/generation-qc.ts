@@ -13,6 +13,11 @@ export type CanonicalPrintPreview = {
 
 type DecodedRaster = { width: number; height: number; channels: number; data: Uint8Array };
 type Rgb = [number, number, number];
+const channels = ['red', 'green', 'blue'] as const;
+type TileEvidence = {
+  x: number; y: number; width: number; height: number;
+  channel: typeof channels[number]; signedMeanError: number; magnitude: number;
+};
 type FidelityReason = 'mean_error' | 'tail_error' | 'high_error_fraction' | 'tile_color_bias';
 type QcErrorCode = 'raster_size_mismatch' | 'channel_mismatch' | 'raster_length_mismatch'
   | 'jpeg_decode_failed' | 'jpeg_color_profile' | 'jpeg_fidelity_failed';
@@ -50,7 +55,11 @@ export function compareDecodedPreview(preview: CanonicalPrintPreview, decoded: D
   }
   const sums: Rgb = [0, 0, 0];
   const histogram = new Uint32Array(256);
-  let highErrors = 0, worstIndex = 0, worstDelta = 0, worstTileBias = 0;
+  let highErrors = 0, worstIndex = 0, worstDelta = 0;
+  let worstTile: TileEvidence = {
+    x: 0, y: 0, width: Math.min(16, width), height: Math.min(16, height),
+    channel: 'red', signedMeanError: 0, magnitude: 0,
+  };
   // Whole-sheet averages can hide a small contour. Signed mean error in a JPEG
   // 4:2:0 MCU (16x16 pixels) distinguishes local color shifts from codec noise.
   for (let top = 0; top < height; top += 16) for (let left = 0; left < width; left += 16) {
@@ -70,7 +79,15 @@ export function compareDecodedPreview(preview: CanonicalPrintPreview, decoded: D
       if (delta > worstDelta) { worstDelta = delta; worstIndex = i / 3; }
     }
     const tilePixels = (bottom - top) * (right - left);
-    for (const sum of bias) worstTileBias = Math.max(worstTileBias, Math.ceil(Math.abs(sum) / tilePixels));
+    for (const [channel, sum] of bias.entries()) {
+      const magnitude = Math.ceil(Math.abs(sum) / tilePixels);
+      if (magnitude > worstTile.magnitude) {
+        worstTile = {
+          x: left, y: top, width: right - left, height: bottom - top, channel: channels[channel]!,
+          signedMeanError: Math.sign(sum) * magnitude, magnitude,
+        };
+      }
+    }
   }
   const rank = Math.ceil(count * 99 / 100);
   let p99 = 0, cumulative = histogram[0]!;
@@ -81,7 +98,7 @@ export function compareDecodedPreview(preview: CanonicalPrintPreview, decoded: D
   if (Math.max(...maeMilli) > JPEG_QC_LIMITS.maeMilli) reasons.push('mean_error');
   if (p99 > JPEG_QC_LIMITS.p99) reasons.push('tail_error');
   if (highErrorPpm > JPEG_QC_LIMITS.highErrorPpm) reasons.push('high_error_fraction');
-  if (worstTileBias > JPEG_QC_LIMITS.worstTileBias) reasons.push('tile_color_bias');
+  if (worstTile.magnitude > JPEG_QC_LIMITS.worstTileBias) reasons.push('tile_color_bias');
   const start = worstIndex * 3;
   const worstPixel = Object.freeze({
     x: worstIndex % width, y: Math.floor(worstIndex / width), delta: worstDelta,
@@ -94,7 +111,8 @@ export function compareDecodedPreview(preview: CanonicalPrintPreview, decoded: D
     passed: reasons.length === 0,
     reasons: Object.freeze(reasons),
     limits: JPEG_QC_LIMITS,
-    maeMilli: Object.freeze(maeMilli), p99, highErrorPpm, worstTileBias, worstPixel,
+    maeMilli: Object.freeze(maeMilli), p99, highErrorPpm, worstTileBias: worstTile.magnitude,
+    worstTile: Object.freeze(worstTile), worstPixel,
   });
 }
 

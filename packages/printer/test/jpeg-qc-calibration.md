@@ -30,6 +30,8 @@ Nine further fixtures run the verified logical-bundle constructor with the publi
 
 All means and fractions round upward. P99 uses the nearest-rank 99th percentile of each pixel's maximum absolute RGB error. The local measurement takes the largest absolute signed mean error of any channel within one 16 × 16 tile, the size of a 4:2:0 JPEG minimum coded unit. Signed errors can cancel within a tile. A localized, systematic color shift raises this measurement even when the sheet-wide measurements pass.
 
+`worstTile` records the origin in padded raster coordinates, the actual width and height, the RGB channel, the absolute magnitude, and the signed mean error (decoded minus expected, rounded away from zero). Equal magnitudes resolve in top-to-bottom, left-to-right tile order, then red, green, blue. `worstPixel` independently identifies the largest pixel error and can lie elsewhere.
+
 | Measurement | Maximum in matrix | Maximum on full sheets | Margin | Inclusive limit |
 | --- | ---: | ---: | ---: | ---: |
 | Per-channel MAE, thousandths of an RGB8 level | 18,313 | 14,746 | 1,000 | 19,313 |
