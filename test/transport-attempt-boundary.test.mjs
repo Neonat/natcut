@@ -49,7 +49,7 @@ test('transport attempt import graph contains only the approved offline dependen
   assert.deepEqual([...new Set(externalPaths)].filter((path) => !allowedExternals.has(path)), []);
 });
 
-test('the worker and existing printer-related entry points do not import the transport attempt', async () => {
+test('the worker and non-physical printer entry points do not import the transport attempt', async () => {
   const { inputs } = await bundleGraph([
     'apps/worker/src/index.ts',
     'scripts/cloud-worker.ts',
@@ -58,9 +58,21 @@ test('the worker and existing printer-related entry points do not import the tra
     'scripts/dev.mjs',
     'scripts/physical-dry-run.ts',
     'scripts/proof-sheet.ts',
-    'src/server.mjs',
     'bin/status.mjs',
   ], ['@fastify/cors', 'better-sqlite3', 'fastify', 'firebase', 'firebase-admin', 'qrcode-terminal', 'sharp', 'usb', 'vite', 'zod']);
 
   assert.equal(Object.hasOwn(inputs, transportModule), false);
+});
+
+test('the local operator server reaches transport mutation only through the physical-proof runtime', async () => {
+  const { inputs } = await bundleGraph([
+    'src/server.mjs',
+  ], ['better-sqlite3', 'sharp', 'usb', 'zod']);
+
+  assert.equal(Object.hasOwn(inputs, transportModule), true);
+  assert.equal(Object.hasOwn(inputs, 'src/physical-proof-runtime.mjs'), true);
+  assert.equal(Object.hasOwn(inputs, 'src/printer-mutation-port.mjs'), true);
+  assert.deepEqual(Object.keys(inputs).filter((path) =>
+    path.startsWith('apps/worker/') || path.includes('cloud-worker') || path.includes('simulated-printer')
+  ), []);
 });

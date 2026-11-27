@@ -51,6 +51,12 @@ test('parses split replies with NUL noise and braces inside strings', () => {
   assert.equal(tail, '');
 });
 
+test('parses real device replies whose result precedes the request id', () => {
+  const [objects, remainder] = takeJson('{"result":["DHP700"],"id":15824}');
+  assert.deepEqual(objects, [{ result: ['DHP700'], id: 15824 }]);
+  assert.equal(remainder, '');
+});
+
 test('extracts non-zero printer alert codes', () => {
   assert.deepEqual(alertCodes('::0'), []);
   assert.deepEqual(alertCodes(['::5401', '::8102']), [5401, 8102]);

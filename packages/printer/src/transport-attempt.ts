@@ -238,7 +238,7 @@ function validIdentity(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
-function prepareAttempt(
+export function prepareTransportAttempt(
   artifacts: PreparedPhysicalArtifacts,
   binding: unknown,
 ): { declaration: ReturnType<typeof planComboJob>; payloads: UploadPayload[]; evidence: TransportAttemptEvidence; evidenceHash: string } | null {
@@ -317,7 +317,7 @@ export async function runTransportAttempt(
     pace?: (milliseconds: number) => Promise<void>;
   },
 ): Promise<TransportAttemptResult> {
-  const prepared = prepareAttempt(artifacts, binding);
+  const prepared = prepareTransportAttempt(artifacts, binding);
   if (!prepared) return { kind: 'preflight_failed', reason: 'evidence_mismatch' };
   const { declaration, payloads, evidence, evidenceHash } = prepared;
   const { submissionId } = evidence;
