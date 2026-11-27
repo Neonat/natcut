@@ -250,17 +250,9 @@ export function prepareTransportAttempt(
       return null;
     }
     const receipt = parseArtifactReceipt(binding.receipt);
-    const snapshot = { ...artifacts };
-    if (!isDeepStrictEqual(receipt, snapshot.receipt) || !isDeepStrictEqual(receipt.descriptor.profile, snapshot.profile) ||
-        !(snapshot.jpeg instanceof Uint8Array) || !(snapshot.plt instanceof Uint8Array)) return null;
-    snapshot.receipt = receipt;
-    snapshot.profile = receipt.descriptor.profile;
-    snapshot.jpeg = new Uint8Array(snapshot.jpeg);
-    snapshot.plt = new Uint8Array(snapshot.plt);
-    if (snapshot.jpeg.byteLength === 0 || snapshot.plt.byteLength === 0) return null;
-
-    const payloads = planUploadPayloads(snapshot);
-    const declaration = planComboJob(snapshot);
+    if (!isDeepStrictEqual(receipt, artifacts.receipt)) return null;
+    const payloads = planUploadPayloads(artifacts);
+    const declaration = planComboJob(artifacts);
     const jpeg = payloads.find((payload) => payload.kind === 'jpeg');
     const plt = payloads.find((payload) => payload.kind === 'plt');
     if (!jpeg || !plt) return null;

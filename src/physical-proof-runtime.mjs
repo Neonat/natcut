@@ -1,6 +1,5 @@
 import { isAbsolute } from 'node:path';
-import { readFile } from 'node:fs/promises';
-import { buildPhysicalProof, buildPhysicalProofFromPng } from '../packages/printer/src/physical-proof.ts';
+import { buildPhysicalProof } from '../packages/printer/src/physical-proof.ts';
 import {
   runTransportAttempt,
   SqliteTransportAttemptJournal,
@@ -11,22 +10,15 @@ export function createPhysicalProofRuntime({
   approvalFingerprint,
   journalPath,
   openSession,
-  proofImagePath,
   buildProof = buildPhysicalProof,
-  readProofImage = readFile,
-  buildPngProof = buildPhysicalProofFromPng,
   createJournal = (file) => new SqliteTransportAttemptJournal(file),
   createTransport = createUsbTransportMutationPort,
   runAttempt = runTransportAttempt,
 }) {
   const physicalSendEnabled = typeof approvalFingerprint === 'string' && /^[a-f0-9]{64}$/.test(approvalFingerprint);
-  const preparePhysicalProof = proofImagePath
-    ? async () => buildPngProof(new Uint8Array(await readProofImage(proofImagePath)), { label: 'Moth orchid example' })
-    : buildProof;
-
   return {
     physicalSendEnabled,
-    preparePhysicalProof,
+    preparePhysicalProof: buildProof,
     async sendPhysicalProof(input, proof) {
       if (!physicalSendEnabled) throw new Error('The exact printer write still requires separate approval.');
       if (input?.approvalFingerprint !== approvalFingerprint ||

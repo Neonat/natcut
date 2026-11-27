@@ -183,7 +183,7 @@ test('prepares and previews one physical proof without invoking the send depende
     assert.equal(await cutPreview.text(), cutPreviewSvg);
     assert.equal(sends, 0);
   }, {
-    preparePhysicalProof: async () => ({ summary: proofSummary, jpeg, cutPreviewSvg }),
+    preparePhysicalProof: async () => ({ summary: proofSummary, artifacts: { print: { bytes: jpeg } }, cutPreviewSvg }),
     sendPhysicalProof: async () => { sends += 1; },
     physicalSendEnabled: false,
   });
@@ -203,7 +203,7 @@ test('keeps physical send disabled until the exact approved fingerprint is confi
     assert.match((await response.json()).error.message, /separate approval/i);
     assert.equal(sends, 0);
   }, {
-    preparePhysicalProof: async () => ({ summary: proofSummary, jpeg: new Uint8Array() }),
+    preparePhysicalProof: async () => ({ summary: proofSummary, artifacts: { print: { bytes: new Uint8Array() } } }),
     sendPhysicalProof: async () => { sends += 1; },
     physicalSendEnabled: false,
   });
@@ -226,7 +226,7 @@ test('sends one prepared proof only for the exact fingerprint and confirmation p
     });
     assert.deepEqual(inputs, [{ approvalFingerprint: proofSummary.approvalFingerprint, confirmation: 'SEND ONE SHEET' }]);
   }, {
-    preparePhysicalProof: async () => ({ summary: proofSummary, jpeg: new Uint8Array() }),
+    preparePhysicalProof: async () => ({ summary: proofSummary, artifacts: { print: { bytes: new Uint8Array() } } }),
     sendPhysicalProof: async (input) => {
       inputs.push(input);
       return { kind: 'needs_reconciliation', reason: 'physical_observation_required' };
@@ -271,7 +271,7 @@ test('checkpoints a browser WebUSB attempt through begin, job id, frame, acknowl
       kind: 'needs_reconciliation', reason: 'physical_observation_required',
     });
   }, {
-    preparePhysicalProof: async () => ({ summary: proofSummary, jpeg: new Uint8Array() }),
+    preparePhysicalProof: async () => ({ summary: proofSummary, artifacts: { print: { bytes: new Uint8Array() } } }),
     browserPhysicalCoordinator,
     physicalSendEnabled: true,
   });

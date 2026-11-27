@@ -49,7 +49,10 @@ describe('publishPhysicalDryRun', () => {
           profileSha256: input.receipt.descriptor.profileSha256,
         },
         outputs: {
-          jpeg: { file: 'print.jpg', bytes: jpeg.byteLength, sha256: sha256(jpeg) },
+          jpeg: {
+            file: 'print.jpg', bytes: jpeg.byteLength, sha256: sha256(jpeg), colorEvidence: NATIVE_SRGB_EVIDENCE,
+            generationQc: { version: 'natcut-jpeg-qc-v1', passed: true, previewSha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+          },
           plt: { file: 'cut.plt', bytes: plt.byteLength, sha256: sha256(plt), knifePressure: 42 },
         },
         protocol: {

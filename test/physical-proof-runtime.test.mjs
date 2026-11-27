@@ -6,7 +6,7 @@ import { createPhysicalProofRuntime } from '../src/physical-proof-runtime.mjs';
 const fingerprint = 'a'.repeat(64);
 const proof = {
   summary: { approvalFingerprint: fingerprint },
-  artifacts: { jpeg: new Uint8Array([1]), plt: new Uint8Array([2]) },
+  artifacts: { print: { bytes: new Uint8Array([1]) }, cut: { bytes: new Uint8Array([2]) } },
   binding: { submissionId: 'proof' },
 };
 
@@ -73,22 +73,11 @@ test('rejects a mismatched proof fingerprint before opening the journal or USB',
   );
   assert.equal(sideEffects, 0);
 });
-test('prepares the configured PNG example instead of the diagnostic circles', async () => {
-  const imageProof = { ...proof, summary: { ...proof.summary, label: 'Moth orchid example' } };
+test('the old arbitrary PNG setting cannot replace trusted diagnostic print pixels', async () => {
   const runtime = createPhysicalProofRuntime({
-    approvalFingerprint: undefined,
-    journalPath: '/tmp/not-used.sqlite',
-    proofImagePath: '/proof/moth-orchid.png',
-    readProofImage: async (path) => {
-      assert.equal(path, '/proof/moth-orchid.png');
-      return new Uint8Array([1, 2, 3]);
-    },
-    buildPngProof: async (bytes, options) => {
-      assert.deepEqual(bytes, new Uint8Array([1, 2, 3]));
-      assert.deepEqual(options, { label: 'Moth orchid example' });
-      return imageProof;
-    },
+    proofImagePath: '/proof/printed-red-contour.png',
+    readProofImage: async () => { throw new Error('untrusted image read'); },
+    buildProof: async () => proof,
   });
-
-  assert.equal(await runtime.preparePhysicalProof(), imageProof);
+  assert.equal(await runtime.preparePhysicalProof(), proof);
 });

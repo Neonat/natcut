@@ -224,7 +224,7 @@ export function createServer({
         return;
       }
       response.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' });
-      response.end(preparedProof.jpeg ?? preparedProof.artifacts?.jpeg);
+      response.end(preparedProof.artifacts.print.bytes);
       return;
     }
 
@@ -291,7 +291,6 @@ async function start() {
   const physical = createPhysicalProofRuntime({
     approvalFingerprint: process.env.NATCUT_APPROVED_PHYSICAL_FINGERPRINT,
     journalPath: process.env.NATCUT_TRANSPORT_JOURNAL,
-    proofImagePath: process.env.NATCUT_PROOF_IMAGE,
     openSession,
   });
   const browserPhysicalCoordinator = createBrowserPhysicalCoordinator({

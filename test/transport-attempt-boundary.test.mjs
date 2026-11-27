@@ -28,6 +28,7 @@ test('transport attempt import graph contains only the approved offline dependen
     'node_modules/@noble/hashes/sha2.js',
     'node_modules/@noble/hashes/utils.js',
     'packages/printer/src/protocol-plan.ts',
+    'packages/printer/src/prepared-evidence.ts',
     'packages/artifacts/src/reader.ts',
     'packages/domain/src/index.ts',
     'packages/domain/src/canonical-hash.ts',
