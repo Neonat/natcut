@@ -340,19 +340,20 @@ export function createServer({
 
 async function start() {
   const [
-    { findByIds },
     { openUsbSession },
     { readPrinterSnapshot },
     { createPhysicalProofRuntime },
     { createBrowserPhysicalCoordinator },
   ] = await Promise.all([
-    import('usb'),
     import('./usb-session.mjs'),
     import('./snapshot.mjs'),
     import('./physical-proof-runtime.mjs'),
     import('./browser-physical-coordinator.mjs'),
   ]);
-  const openSession = () => openUsbSession({ usbModule: { findByIds } });
+  const openSession = async () => {
+    const { findByIds } = await import('usb');
+    return openUsbSession({ usbModule: { findByIds } });
+  };
   const physical = createPhysicalProofRuntime({
     approvalFingerprint: process.env.NATCUT_APPROVED_PHYSICAL_FINGERPRINT,
     journalPath: process.env.NATCUT_TRANSPORT_JOURNAL,
@@ -372,7 +373,7 @@ async function start() {
   const host = process.env.NATCUT_HOST ?? '127.0.0.1';
   const port = Number(process.env.NATCUT_PORT ?? 4173);
   server.listen(port, host, () => {
-    console.log(`NatCut physical proof dashboard: http://${host}:${port}`);
+    console.log(`NatCut physical proof dashboard: http://${host}:${server.address().port}`);
     console.log(physical.physicalSendEnabled ? 'Exact physical write enabled.' : 'Physical write locked; preparation only.');
   });
 }

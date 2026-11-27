@@ -104,6 +104,12 @@ The owner reported the completed sheet on 28 November 2026. Transport, cut align
 
 The recording workflow requires the **original transport journal** at the existing absolute path configured in `NATCUT_TRANSPORT_JOURNAL`. Preserve its WAL and evidence. The repository contains no such journal. While binding is unavailable, retain the owner report and the reconciliation hold. Never substitute a new journal, a guessed timestamp, another sheet, or a generated fingerprint.
 
+From the repository root, use the original journal’s absolute path and open the dashboard at `http://127.0.0.1:4173`. Startup, evidence, QC and preview routes do not load the native USB binding.
+
+```sh
+NATCUT_TRANSPORT_JOURNAL=/absolute/path/to/original-journal.sqlite npm start
+```
+
 1. Open the local operator dashboard with the journal configured. The page reads `GET /api/physical-proof/evidence` without a printer connection. An inconsistent or unavailable journal returns 503. A checkpoint shows the exact submission ID, evidence hash and printer job ID. The execution token and raw journal JSON stay private.
 2. Verify the displayed identity matches this observation and independently confirm the actual observation time. **Record completed attempt** appears only at `needs_reconciliation / physical_observation_required` with a positive job ID, no pending frame and exactly every PLT and JPEG frame acknowledged. Supply the actual UTC observation timestamp. The page posts the fixed owner-reported outcome to `/api/physical-proof/record-completed`.
 3. The dashboard restores **Attempt locked. No resend.** from the journal on every load. The outcome seals the transport row, including writes from already-open SQLite connections. Every direct send and browser mutation checks the journal before transport. No public status, queue slot or receipt changes.

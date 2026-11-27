@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { connect } from 'node:net';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { pathToFileURL } from 'node:url';
 import { SqlitePhysicalQcJournal } from '@natcut/printer/physical-qc';
 import { buildPhysicalProof } from '../packages/printer/src/physical-proof.ts';
 import { tmpdir } from 'node:os';
@@ -496,4 +499,57 @@ test('a completed outcome between the HTTP check and direct reservation wins wit
     assert.equal(body.error.code, 'ATTEMPT_LOCKED');
     assert.deepEqual((await (await readEvidence(base)).json()).evidence.outcome, completed);
   }, options);
+});
+
+test('CLI loads native USB only after a separately approved direct request durably reserves the attempt', { timeout: 30_000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'natcut-hardware-blind-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const journalPath = join(directory, 'synthetic.sqlite');
+  new SqliteTransportAttemptJournal(journalPath).close();
+  const proof = await buildPhysicalProof();
+  const approvalFingerprint = proof.summary.approvalFingerprint;
+  const marker = join(directory, 'usb-intercepted');
+  const hook = join(directory, 'usb-trap.mjs');
+  await writeFile(hook, `
+    import { registerHooks } from 'node:module';
+    import { appendFileSync } from 'node:fs';
+    registerHooks({ resolve(specifier, context, next) {
+      if (specifier === 'usb' || specifier.startsWith('usb/') || specifier.includes('/node_modules/usb/')) {
+        appendFileSync(process.env.NATCUT_TEST_USB_TRAP, 'intercepted\\n');
+        throw new Error('Native USB module intercepted by test.');
+      }
+      return next(specifier, context);
+    } });
+  `);
+  const child = spawn(process.execPath, ['--import', 'tsx', '--import', pathToFileURL(hook).href, 'src/server.mjs'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, NATCUT_PORT: '0', NATCUT_HOST: '127.0.0.1', NATCUT_TRANSPORT_JOURNAL: journalPath,
+      NATCUT_APPROVED_PHYSICAL_FINGERPRINT: approvalFingerprint, NATCUT_TEST_USB_TRAP: marker },
+  });
+  const exited = once(child, 'exit');
+  t.after(async () => { child.kill(); await exited; });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  let base;
+  for await (const line of createInterface({ input: child.stdout })) {
+    const ready = line.match(/^NatCut physical proof dashboard: (http:\/\/127\.0\.0\.1:\d+)$/);
+    if (ready) { base = ready[1]; break; }
+  }
+  assert.ok(base, stderr || 'Dashboard did not start.');
+  for (const path of ['/api/health', '/api/physical-proof/evidence', '/']) assert.equal((await fetch(base + path)).status, 200);
+  assert.equal((await post(base, 'prepare', {})).status, 200);
+  for (const path of ['preview.jpg','cut-preview.svg']) assert.equal((await fetch(base + '/api/physical-proof/' + path)).status, 200);
+  assert.equal((await post(base, 'send', { approvalFingerprint, confirmation: 'NO' })).status, 400);
+  assert.equal((await post(base, 'record-completed', completed)).status, 409);
+  assert.equal((await post(base, 'physical-qc', registration)).status, 409);
+  await assert.rejects(access(marker), { code: 'ENOENT' });
+  const send = await post(base, 'send', { approvalFingerprint, confirmation: 'SEND ONE SHEET' });
+  assert.equal(send.status, 409);
+  assert.deepEqual((await send.json()).result, { kind: 'needs_reconciliation', reason: 'transport_open_failed' });
+  assert.equal(await readFile(marker, 'utf8'), 'intercepted\n');
+  const { evidence } = await (await readEvidence(base)).json();
+  assert.equal(evidence.attempt.submissionId, proof.binding.submissionId);
+  assert.equal(evidence.attempt.reason, 'transport_open_failed');
+  assert.equal(evidence.attempt.printerJobId, null);
+  assert.equal(evidence.outcome, null);
 });
