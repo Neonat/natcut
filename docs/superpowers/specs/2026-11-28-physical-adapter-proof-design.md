@@ -2,7 +2,7 @@
 
 ## Intent
 
-Turn an already verified immutable logical bundle into the exact two files a PixCut S1 job would consume, then prove the command and upload framing without opening USB or claiming physical success. This closes the file-generation and protocol-design portion of Session 3 while retaining a separate approval gate for a loaded-sheet test.
+Turn an already verified immutable logical bundle into the exact two files a PixCut S1 job would consume. Prove the command and upload framing and exercise crash boundaries through a semantic mock port. A loaded-sheet test requires separate approval.
 
 ## Goals
 
@@ -11,8 +11,9 @@ Turn an already verified immutable logical bundle into the exact two files a Pix
 - Encode a deterministic JPEG no larger than the profile's 1 MiB limit.
 - Trace the verified, already-expanded binary cut mask into a PLT using the immutable profile, including `KP42`, without applying the visitor margin twice.
 - Validate dimensions, digests, contour bounds, pressure, and protocol parameters before producing evidence.
-- Model the exact combo-job declaration, PLT-first/JPEG-second upload ordering, 4075-byte `EXTLEN` frames, little-endian job ID, acknowledgement requirement, and 120 ms baseline pacing as pure data and functions.
+- Model the exact combo declaration and PLT-first upload order. Each frame contains up to 4071 payload bytes and a four-byte, little-endian job ID. The transport attempt requires an acknowledgement and a 120 ms pause after each frame.
 - Publish an atomic, create-only dry-run packet containing the JPEG, PLT, and complete evidence needed to reproduce the plan.
+- Exercise durable declaration, upload, and restart behavior without a concrete printer transport.
 
 ## Non-goals and anti-goals
 
@@ -20,7 +21,7 @@ Turn an already verified immutable logical bundle into the exact two files a Pix
 - No cloud queue claim, worker phase transition, public `ready` write, or synthesized printer response.
 - No cancellation, calibration, firmware, factory, or arbitrary property mutation.
 - No claim of printer, booth, or production readiness.
-- The dry-run adapter must not implement `PhysicalExecutor`; a file-only proof must never be usable as fulfillment.
+- The dry-run CLI and transport-attempt module cannot implement `PhysicalExecutor`. File evidence and mock upload acknowledgements cannot authorize fulfillment.
 
 ## Constraints
 
@@ -39,7 +40,7 @@ Turn an already verified immutable logical bundle into the exact two files a Pix
 
 `@natcut/printer` accepts only verified artifact evidence, creates the JPEG/PLT in memory, validates a pure protocol plan, and can bind upload chunks to a caller-supplied positive job ID. A separate CLI verifies receipt and bundle files and writes a dry-run packet. It imports no USB module and never touches the worker journal or cloud queue.
 
-This makes the hardware boundary reviewable and reusable by a future real adapter without letting today's proof masquerade as a completed physical job.
+The separate `@natcut/printer/transport-attempt` export models declaration and upload through the semantic `TransportMutationPort`. It has no concrete transport and no worker or CLI wiring.
 
 ### Rejected: extend the current read-only USB client now
 
@@ -54,8 +55,19 @@ The worker treats an executor's terminal transition as fulfillment evidence. A d
 - `packages/printer/src/artifacts.ts`: verified-bundle decoding, padding, JPEG encoding, PLT creation, output validation, hashes and statistics.
 - `packages/printer/src/protocol-plan.ts`: combo declaration, upload ordering, payload chunk plan, and exact frame binding. No transport imports.
 - `packages/printer/src/dry-run.ts`: evidence schema and atomic create-only packet publication.
+- `packages/printer/src/transport-attempt.ts`: durable reservation, checkpoints, and reconciliation outcomes around the declaration and acknowledgement port.
 - `scripts/physical-dry-run.ts`: strict CLI over receipt JSON and bundle bytes.
 - Tests use synthetic verified bundles and inspect real JPEG/PLT bytes and real framed packets.
+
+## Transport-attempt invariants
+
+1. Preflight snapshots the submission, event, worker, execution token, manifest hash, full artifact receipt, immutable profile, and private copies of both output files. The receipt must match the prepared artifact, including its generation. Both files must be nonempty and match their byte counts and SHA-256 digests. Invalid evidence returns `evidence_mismatch` before reservation or any transport call.
+2. The journal uses an absolute persistent SQLite file path. It verifies WAL mode, sets `synchronous=FULL`, and enables `fullfsync` on macOS. A reservation enters `declaring` before the port sees any call. Any existing row blocks a reservation, even for a different submission or token.
+3. A declaration reply must contain exactly one enumerable own data field, `jobId`, with a positive unsigned 32-bit integer. The journal commits that ID and phase `declared` before upload. A lost declaration response, invalid reply, or failed checkpoint requires reconciliation.
+4. For each frame, commit `frame_pending` before calling the port and `frame_acknowledged` after the port acknowledges. Keep the original submission ID and evidence hash on every checkpoint. Advance only after the acknowledgement is durable and the 120 ms pace completes. An uncertain acknowledgement or checkpoint ends the attempt.
+5. Restart from `declaring`, `declared`, `frame_pending`, or `frame_acknowledged` holds the prior row. Reopening the same file permits zero further transport calls. Even a fully acknowledged upload ends with `physical_observation_required`. The module cannot write `ready` or release the worker's slot. There is no operator command to clear a held attempt.
+
+Static import tests allow only the enumerated source files, dependencies, and Node built-ins in the transport-attempt bundle graph. The reverse graph check covers the worker, cloud smoke, local simulator, dry-run and proof commands, and read-only bridge entry points.
 
 ## Failure behavior
 
@@ -63,4 +75,4 @@ Malformed or mismatched receipts, bytes, profiles, dimensions, padding, pressure
 
 ## Approval boundary
 
-This design ends after offline dry-run evidence. A future continuation may add a transport-backed adapter and a one-sheet procedure, but USB access and every printer write require the operator to confirm loaded media and give separate explicit approval at execution time.
+The remaining physical work is a concrete printer transport, observation tied to the declared job ID, and an operator procedure for held attempts. USB access and every printer write require the operator to confirm loaded media and give separate explicit approval at execution time. Upload acknowledgements, global idle, and uncorrelated status codes cannot prove that a sheet printed and cut.

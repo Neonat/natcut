@@ -183,6 +183,8 @@ The new directory contains `print.jpg`, `cut.plt`, and `evidence.json`. The comm
 
 This is still an offline proof. `transport` is fixed to `disabled-dry-run`; there is no job ID, fabricated response, USB import, cloud mutation, worker transition, or printer write. An existing output directory is never replaced, and `.incomplete` marks any interrupted packet. See [`docs/runbooks/physical-adapter-proof.md`](docs/runbooks/physical-adapter-proof.md) for inspection and the remaining approval gate.
 
+The printer package also exposes an offline transport-attempt module. Tests drive its declaration and frame acknowledgement port with mocks. The module requires a persistent SQLite file at an absolute path and reserves one attempt for the exact binding and output digests before declaration. It commits the returned job ID before upload, each frame intent before sending, and each acknowledgement before continuing. PLT precedes JPEG, with 120 ms pacing after each acknowledged frame. A reserved attempt blocks every subsequent attempt on the same journal after a restart. A fully acknowledged mock upload still ends in `needs_reconciliation` with `physical_observation_required`.
+
 ## Build the isolated cloud preview
 
 NatCut's public preview uses its own Firebase Hosting target (`natcut`), Cloud Run service (`natcut-submission`), and named Firestore database (`natcut`) inside `sprout-dev-66f08`. Existing Sprout Hosting and databases are not deployment targets.
@@ -211,7 +213,7 @@ Begin and completion are now fenced to the exact submission, event, worker, dura
 
 Session 2 completed the authorized cloud-only rollout. Both named-database indexes are ready; the private NatCut artifact bucket has narrow runtime IAM; pinned-generation upload/read passed under both service accounts; the API is deployed by immutable digest; Hosting is pinned to the verified revision; one immutable V2 ticket completed through `SimulatedPrinter`; and rollback plus candidate restoration passed without changing Sprout. Exact resource IDs and evidence are in the [cloud preview runbook](docs/runbooks/cloud-preview.md).
 
-This is not production or printer readiness. The offline portion of Session 3 now generates exact JPEG/PLT files from verified bundle evidence and proves the protocol plan without a transport. Session 3 remains blocked at the physical boundary: USB access and one loaded-media printer write require separate explicit approval. End-to-end booth rehearsal and production hardening remain subsequent sessions.
+Session 3 has offline JPEG and PLT generation and mock evidence for declaration and upload crash fencing. A concrete printer transport, evidence tied to the printer job ID, and an operator procedure to resolve held attempts are still missing. USB access and the controlled printer write require loaded media and separate explicit approval at execution time. Booth rehearsal and production hardening follow physical verification.
 
 ```bash
 gcloud auth application-default login \
@@ -236,7 +238,7 @@ npm run emulators:test -- --only worker
 npm run test:e2e
 ```
 
-**Safety boundary:** the queue-first worker contains no printer transport or mutation executor. The new pure printer package can generate files, declaration data, and upload frames offline, but it has no I/O transport and does not implement `PhysicalExecutor`; the simulated worker never imports it. The existing USB bridge remains read-only.
+The queue-first worker runs `SimulatedPrinter`. The transport-attempt module has a semantic port but no concrete printer transport or `PhysicalExecutor`. Static import tests keep it outside the worker, dry-run CLI, and read-only bridge entry points.
 
 ## Run the read-only bridge
 

@@ -177,6 +177,8 @@ npm run worker:cloud:smoke
 
 The smoke entry point runs `SimulatedPrinter` only. Its claim and recovery transactions compare the queue head or existing slot with `NATCUT_SMOKE_SUBMISSION_ID`; a different visitor ticket stops the smoke without claiming it. It exits after that exact ticket is acknowledged or enters a failure/reconciliation outcome, and it has a two-minute deadline. Retain `.local/natcut-worker-smoke.sqlite` across retries.
 
+The offline transport-attempt module has a mock-tested declaration and acknowledgement port and its own SQLite journal. It has no concrete printer transport and the cloud worker has no integration with it. The simulator's `ready` proof applies to the simulation. The [physical adapter proof runbook](physical-adapter-proof.md) records the evidence still needed for printer completion and operator resolution.
+
 Do not set `GOOGLE_CLOUD_QUOTA_PROJECT` for this impersonated worker ADC. The credential already targets `natcut-worker`; adding a quota-project header makes the storage SDK require `serviceusage.services.use`, which this deliberately narrow runtime identity does not have. Session 2 reproduced that configuration error as repeated `waiting_for_cloud`, stopped the simulator before execution, removed only the extra environment variable, and then proved the same pinned SDK read. No broader IAM role was granted.
 
 Restart with the same worker ID and the same durable SQLite journal. Completion carries the submission, event, worker, durable execution token, manifest, validation, and exact artifact receipt/profile. The transaction advances only the matching current `printing` execution, stores those facts as `completionFence`, and releases the slot atomically.

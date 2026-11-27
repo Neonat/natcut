@@ -4,6 +4,8 @@
 
 **Goal:** Generate exact validated JPEG/PLT files from a verified bundle and prove the PixCut protocol contract offline without accessing USB or advancing a visitor ticket.
 
+**Historical scope.** This plan records the first offline dry-run implementation. The [physical adapter proof design](../specs/2026-11-28-physical-adapter-proof-design.md) also covers the later mock-tested transport-attempt module.
+
 **Architecture:** Add a pure `@natcut/printer` workspace for file preparation and protocol planning, plus a create-only dry-run packet CLI. Keep the package transport-free and keep it out of `PhysicalExecutor` so no offline proof can synthesize fulfillment.
 
 **Tech Stack:** TypeScript, Vitest, Sharp, existing domain/artifact verification, vendored pixcut tracer.

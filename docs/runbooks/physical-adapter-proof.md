@@ -50,7 +50,7 @@ Verify all of the following:
 - JPEG dimensions are 1216 × 2128, its byte count does not exceed 1,048,576, and its recorded digest matches the file.
 - PLT digest and byte count match the file, its pressure is the immutable profile value `42`, and every cut point is inside the 4 × 7 cut canvas.
 - Declaration file sizes, media size `5013`, media type `2030`, quality `4`, and copies `1` match the immutable profile and the output bytes.
-- Upload order is `cut.plt` then `print.jpg`; each chunk carries at most 4071 payload bytes inside `EXTLEN=4075`, requires an acknowledgement, and records 120 ms baseline pacing.
+- Upload order is `cut.plt` then `print.jpg`. Each chunk carries at most 4071 payload bytes plus a four-byte job ID. The plan requires an acknowledgement and 120 ms pacing per frame.
 - `requiresPrinterJobIdAfterDeclaration` is true and no `jobId` field exists. Actual upload frames cannot be finalized before a real declaration returns a positive job ID.
 
 The automated proof uses real bundle verification, Sharp JPEG decoding, PLT parsing, exact declaration comparison, byte framing, failure cleanup, and create-only publication:
@@ -62,6 +62,24 @@ node --import tsx --test test/physical-dry-run.test.mjs
 
 The encoder white-composites every transparent logical pixel and constructs every padding pixel as exact opaque white before JPEG encoding. JPEG is intentionally lossy 4:2:0, so decoded pixels immediately beside saturated artwork can show bounded chroma bleed; untouched padding borders must still decode as white.
 
+## Inert transport-attempt proof
+
+Tests drive the transport-attempt module through `declareCombo` and `sendFrameAndWaitForAck` mocks. The module has no concrete printer transport, worker integration, or CLI. A dedicated journal record binds the submission, event, worker, durable execution token, manifest, full artifact receipt and generation, profile, and exact JPEG and PLT byte counts and digests.
+
+The following invariants are automated:
+
+- Malformed bindings and empty or mismatched payloads fail preflight before a journal reservation or mock call.
+- The journal requires an absolute file path. It verifies SQLite WAL mode and uses `synchronous=FULL` and macOS `fullfsync` before it accepts a reservation.
+- Declaration intent is durable before the mock can receive a declaration.
+- A single positive unsigned 32-bit printer job ID is durable before the first PLT frame.
+- Each frame intent is durable before its mock write, and each acknowledgement is durable before the next frame.
+- PLT precedes JPEG and every acknowledged frame is followed by the recorded 120 ms baseline pace.
+- Any row in the same journal blocks another reservation. Reopening from `declaring`, `declared`, `frame_pending`, or `frame_acknowledged` leaves that row intact and makes zero transport calls.
+- An invalid reply, lost acknowledgement, uncertain checkpoint, or completed upload requires reconciliation. Fully acknowledged uploads return `physical_observation_required`. The module has no access to publish `ready` or release a queue slot.
+- Static bundle checks allow only the reviewed imports for the transport-attempt module and confirm that the worker and existing printer CLI entry points do not import it.
+
+This proves local ordering and crash fencing only. The mocks cannot prove that firmware accepts the declaration or frames, that an acknowledgement belongs to a particular frame, that a job ID survives device restart, that paper was loaded or consumed, or that printing, cutting, ejection, registration, and pressure succeeded. Global idle, an empty job list, upload acknowledgement, or an uncorrelated `9000` state is not fulfillment evidence.
+
 ## Provenance and pressure ruling
 
 The transport contract was audited against BrenCut commit `e62f2d66a3dc1cc65891e8110420a9e3bf1c0cc7`. Its combo job uses the same print and cut document fields, uploads PLT before JPEG, frames 4071 payload bytes with a little-endian job ID, requires an acknowledgement per frame, and uses 120 ms pacing. The cut generator remains the unmodified `honeymaro/pixcut` source recorded in `vendor/pixcut-trace/SOURCE.md` at commit `08580a69cc8cd6823ad58297f9594000e6ad06ff`.
@@ -72,4 +90,4 @@ The vendored tracer comments describe `KP` as `0–3`, but the current device-le
 
 Stop after inspecting this packet. It does not prove media loading, print placement, cut registration, cut depth, USB recovery, or physical completion.
 
-The next continuation may prepare a transport-backed adapter and one controlled sheet procedure, but it must remain inert until the operator confirms the correct media is loaded and separately approves that exact printer write. The physical attempt must persist the returned job ID before upload, retain the token-fenced queue slot through ambiguity, and reconcile printer evidence rather than resubmit after a crash.
+A controlled sheet procedure needs a concrete transport and evidence tied to the declared job ID. Confirm the correct media is loaded and obtain separate explicit approval before USB access or a printer write. The operator clear flow is still missing. Preserve any held journal and keep the token-fenced queue slot held until the printer evidence can resolve the attempt.
