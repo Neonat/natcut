@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFile, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { crc32 } from 'node:zlib';
 import nodeTest from 'node:test';
 import sharp from 'sharp';
+import { JSDOM } from 'jsdom';
 
 const script = fileURLToPath(new URL('../scripts/sprite-review.ts', import.meta.url));
 const exec = promisify(execFile);
@@ -66,13 +68,13 @@ test('publishes a deterministic offline packet with importer-compatible candidat
   const first = packet.plants[0];
   const source = first.candidateSources[first.candidates[0]];
   assert.equal(source.sha256, sha256(await readFile(path.join(src, 'one.png'))));
-  assert.equal(source.colorEvidence.sourceSpace, 'display-p3');
-  assert.equal(source.colorEvidence.action, 'converted');
+  assert.equal(source.colorEvidence.sources[0].sourceSpace, 'display-p3');
+  assert.equal(source.colorEvidence.sources[0].action, 'converted');
   assert.match(html, /Monstera deliciosa/);
   assert.match(html, /Prickly pear/);
   assert.doesNotMatch(html, /https?:\/\//);
-  assert.deepEqual(files.map((file) => path.extname(file)).sort(), ['.html', '.jpg', '.png', '.png']);
-  for (const file of files.filter((file) => file !== 'index.html')) {
+  assert.deepEqual(files.map((file) => path.extname(file)).sort(), ['', '.html', '.jpg', '.png', '.png']);
+  for (const file of files.filter((file) => file !== 'index.html' && file !== 'sources')) {
     const bytes = await readFile(path.join(out, file));
     assert.equal(path.parse(file).name, sha256(bytes));
     assert.ok(html.includes(file));
@@ -85,19 +87,63 @@ test('publishes a deterministic offline packet with importer-compatible candidat
 
   const roster = path.join(out, 'roster.json');
   const catalog = path.join(root, 'private-catalog');
-  await writeFile(roster, JSON.stringify(files.filter((file) => file.endsWith('.png')).map((file, index) => ({
-    name: `Plant ${index + 1}`, file,
-  }))));
-  await exec(process.execPath, [fileURLToPath(new URL('../scripts/import-sprites.mjs', import.meta.url)),
+  let download;
+  const dom = new JSDOM(html, { url: 'https://review.invalid/', runScripts: 'dangerously',
+    beforeParse(window) {
+      window.Blob = Blob;
+      window.URL.createObjectURL = blob => { download = blob; return 'blob:roster'; };
+      window.URL.revokeObjectURL = () => {};
+      window.HTMLAnchorElement.prototype.click = () => {};
+    },
+  });
+  try {
+    const { document } = dom.window;
+    for (const radio of document.querySelectorAll('input[data-plant], input[data-metric][value="5"]')) radio.click();
+    document.querySelector('#export').click();
+    await writeFile(roster, await download.text());
+  } finally { dom.window.close(); }
+  const rows = JSON.parse(await readFile(roster, 'utf8'));
+  assert.deepEqual(rows.map(row => row.reviewedSource), packet.plants.map(plant => plant.candidateSources[plant.candidates[0]]));
+  const importRoster = () => exec(process.execPath, [fileURLToPath(new URL('../scripts/import-sprites.mjs', import.meta.url)),
     '--input', roster, '--out', catalog]);
+  await importRoster();
   const { sprites } = JSON.parse(await readFile(path.join(catalog, 'index.json'), 'utf8'));
-  assert.ok(sprites.every(({ colorEvidence }) => colorEvidence.sourceSpace === 'srgb'
-    && colorEvidence.action === 'preserved' && colorEvidence.sourceProfileSha256 === null));
-  for (const file of files.filter(file => file.endsWith('.png'))) {
-    assert.equal((await readFile(path.join(out, file))).toString('ascii', 37, 41), 'sRGB');
-  }
-  assert.deepEqual(sprites.map(({ pngSha256 }) => pngSha256), files.filter((file) => file.endsWith('.png'))
-    .map((file) => path.parse(file).name));
+
+  // Stand in for packaging this imported index with the submission service.
+  const catalogHook = registerHooks({ resolve(specifier, context, nextResolve) {
+    if (specifier === '../catalog/index.json' && context.parentURL?.endsWith('/render/src/catalog.ts')) {
+      return nextResolve(pathToFileURL(path.join(catalog, 'index.json')).href, context);
+    }
+    return nextResolve(specifier, context);
+  } });
+  try {
+    const { assetPngFilename, catalogManifest, loadPackagedAssets } = await import('@natcut/render');
+    const { ArtifactReceiptSchema, NATIVE_SRGB_EVIDENCE } = await import('@natcut/domain');
+    const { createTrustedArtifactPreparer } = await import('../apps/submission/src/validation.ts');
+    const artwork = path.join(catalog, 'artwork');
+    const logo = assetPngFilename('branding/logo');
+    await copyFile(fileURLToPath(new URL('../packages/render/catalog/artwork/' + logo, import.meta.url)), path.join(artwork, logo));
+    const prepare = createTrustedArtifactPreparer(plan => loadPackagedAssets(plan, artwork));
+    for (const entry of sprites) {
+      const approved = rows.find(row => row.name === entry.name);
+      assert.equal(entry.pngSha256 + '.png', approved.file);
+      assert.deepEqual(entry.colorEvidence, approved.reviewedSource.colorEvidence);
+      const { bundle } = await prepare({ ...catalogManifest, spriteAssetId: entry.id });
+      const { descriptor } = ArtifactReceiptSchema.parse({ descriptor: bundle.descriptor, generation: '1' });
+      const [source] = entry.colorEvidence.sources;
+      const [native] = NATIVE_SRGB_EVIDENCE.sources;
+      const expected = source.sourceSpace === 'display-p3' ? [source, native] : [native, source];
+      assert.deepEqual(descriptor.colorEvidence, { ...NATIVE_SRGB_EVIDENCE, sources: expected });
+    }
+  } finally { catalogHook.deregister(); }
+
+  const forged = structuredClone(rows);
+  forged[0].reviewedSource.colorEvidence = rows[1].reviewedSource.colorEvidence;
+  await writeFile(roster, JSON.stringify(forged));
+  await assert.rejects(importRoster(), /profile evidence/);
+  forged[0].reviewedSource = rows[1].reviewedSource;
+  await writeFile(roster, JSON.stringify(forged));
+  await assert.rejects(importRoster(), /approved pixels/);
 });
 
 const invalid = [
@@ -214,5 +260,5 @@ test('publishes only one complete packet when two builders race', async (t) => {
   const failed = results.find((result) => result.status === 'rejected');
   assert.match(failed.reason.stderr, /already exists/i);
   assert.deepEqual(await readdir(root), [path.basename(out), 'source']);
-  assert.equal((await readdir(out)).length, 4);
+  assert.equal((await readdir(out)).length, 5);
 });

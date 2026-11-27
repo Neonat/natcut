@@ -18,7 +18,7 @@ it('verifies the original receipt without assigning new provenance or moving its
   } };
   for (const sourceProfileSha256 of ['0'.repeat(64), 'c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353']) {
     const colorEvidence = { outputSpace: 'srgb', pipelineVersion: 'natcut-srgb-v1',
-      sourceSpace: 'cmyk', action: 'converted', sourceProfileSha256 };
+      sources: [{ sourceSpace: 'cmyk', action: 'converted', sourceProfileSha256 }] };
     expect(() => parseArtifactReceipt({ ...receipt,
       descriptor: { ...receipt.descriptor, formatVersion: 2, colorEvidence },
     })).toThrow();

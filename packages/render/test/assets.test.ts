@@ -5,8 +5,8 @@ import { expect, it } from 'vitest';
 import { DEVFEST_SG_V1 } from '@natcut/domain';
 import { catalogManifest, loadPackagedAssets, loadRgbaAsset, planComposition, renderServerRaster } from '../src/index.ts';
 
-const native = { outputSpace: 'srgb', sourceSpace: 'srgb', pipelineVersion: 'natcut-srgb-v1',
-  sourceProfileSha256: null, action: 'preserved' };
+const native = { outputSpace: 'srgb', pipelineVersion: 'natcut-srgb-v1',
+  sources: [{ sourceSpace: 'srgb', sourceProfileSha256: null, action: 'preserved' }] };
 const plan = planComposition(catalogManifest, DEVFEST_SG_V1);
 
 function swatch() {
@@ -20,8 +20,8 @@ it.each(['srgb', 'p3', 'cmyk'] as const)('interprets the actual embedded %s prof
   const asset = await loadRgbaAsset(bytes, catalogManifest.spriteAssetId);
   const sourceSpace = profile === 'p3' ? 'display-p3' : profile;
   expect(asset.colorEvidence).toEqual({
-    ...native, sourceSpace, sourceProfileSha256: createHash('sha256').update(icc!).digest('hex'),
-    action: profile === 'srgb' ? 'preserved' : 'converted',
+    ...native, sources: [{ sourceSpace, sourceProfileSha256: createHash('sha256').update(icc!).digest('hex'),
+      action: profile === 'srgb' ? 'preserved' : 'converted' }],
   });
   // The stored Display P3 triplet is [165,96,69]. These are the sRGB values after the ICC transform.
   expect(Array.from(asset.rgba)).toEqual(profile === 'cmyk' ? [172, 82, 39, 255] : [176, 92, 63, 255]);
@@ -70,11 +70,12 @@ it('rejects an unrecognized ICC even when its profile description still says sRG
   await expect(loadRgbaAsset(tagPng(png, 'iCCP', profile), 'external')).rejects.toThrow(/profile/i);
 });
 
-it('holds a composition whose two different source ICCs cannot fit one receipt', async () => {
+it('keeps both distinct ICCs in a single composed receipt', async () => {
   const layers = await loadPackagedAssets(plan);
   const sprite = await loadRgbaAsset(await swatch().withIccProfile('p3').png().toBuffer(), catalogManifest.spriteAssetId);
   const logo = await loadRgbaAsset(await swatch().withIccProfile('cmyk').tiff({ compression: 'none' }).toBuffer(), 'branding/logo');
-  await expect(renderServerRaster(plan, new Map(layers).set(sprite.id, sprite).set(logo.id, logo))).rejects.toThrow(/distinct source profiles/i);
+  const raster = await renderServerRaster(plan, new Map(layers).set(sprite.id, sprite).set(logo.id, logo));
+  expect(raster.colorEvidence.sources).toEqual([...logo.colorEvidence.sources, ...sprite.colorEvidence.sources]);
 });
 
 it('rejects conflicting gamma and chromaticities paired with a recognized sRGB ICC', async () => {

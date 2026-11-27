@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { beforeAll, expect, it } from 'vitest';
 import {
   DEVFEST_SG_V1, decodeLogicalSourceBundle, encodeLogicalSourceBundle,
-  ArtifactReceiptSchema, artifactObjectPath, LogicalSourceBundleDescriptorSchema, type LogicalSourceBundle,
+  ArtifactReceiptSchema, artifactObjectPath, LogicalSourceBundleDescriptorSchema, srgbColorEvidence, type LogicalSourceBundle,
 } from '../src/index.ts';
 
 const width = DEVFEST_SG_V1.sheetWidthPx;
@@ -12,8 +12,8 @@ const rgba = new Uint8ClampedArray(pixels * 4);
 rgba.set([90, 70, 20, 255], rgba.length - 4);
 const mask = new Uint8Array(pixels);
 mask[pixels - 1] = 255;
-const colorEvidence = { outputSpace: 'srgb', sourceSpace: 'srgb', pipelineVersion: 'natcut-srgb-v1',
-  sourceProfileSha256: null, action: 'preserved' } as const;
+const native = { sourceSpace: 'srgb', sourceProfileSha256: null, action: 'preserved' } as const;
+const colorEvidence = { outputSpace: 'srgb', pipelineVersion: 'natcut-srgb-v1', sources: [native] } as const;
 const source = { colorEvidence, width, height, rgba, mask, profile: DEVFEST_SG_V1, renderVersion: 'fixture-v1', geometryVersion: 'natcut-geometry-v1' };
 const digest = (bytes: Uint8Array | Uint8ClampedArray) => createHash('sha256').update(bytes).digest('hex');
 let bundle: LogicalSourceBundle;
@@ -123,15 +123,28 @@ it('uses intrinsic typed-array length instead of a shadowed byteLength property'
 
 it('rejects missing, unsupported and inconsistent sRGB evidence for new receipts and encoding', async () => {
   for (const invalid of [
-    undefined, { ...colorEvidence, outputSpace: 'adobe-rgb' }, { ...colorEvidence, action: 'converted' },
-    { ...colorEvidence, sourceSpace: 'cmyk', action: 'converted', sourceProfileSha256: '0'.repeat(64) },
-    { ...colorEvidence, sourceSpace: 'cmyk', action: 'converted',
-      sourceProfileSha256: 'c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353' },
-    { ...colorEvidence, sourceSpace: 'cmyk' }, { ...colorEvidence, leak: true },
-    { ...colorEvidence, sourceSpace: 'display-p3', action: 'converted' },
-    { ...colorEvidence, sourceProfileSha256: 'not-a-hash' }, { ...colorEvidence, pipelineVersion: 'other' },
+    undefined, { ...colorEvidence, outputSpace: 'adobe-rgb' }, { ...colorEvidence, leak: true },
+    { ...colorEvidence, pipelineVersion: 'other' }, { ...colorEvidence, sources: [] },
+    { ...colorEvidence, sources: [native, native] },
+    { ...colorEvidence, sources: [{ ...native, action: 'converted' }] },
+    { ...colorEvidence, sources: [{ ...native, extra: true }] },
+    { ...colorEvidence, sources: [{ ...native, sourceSpace: 'display-p3', action: 'converted' }] },
+    { ...colorEvidence, sources: [{ ...native, sourceProfileSha256: 'not-a-hash' }] },
+    { ...colorEvidence, sources: [{ sourceSpace: 'cmyk', action: 'converted', sourceProfileSha256: '0'.repeat(64) }] },
+    { ...colorEvidence, sources: [{ sourceSpace: 'cmyk', action: 'converted',
+      sourceProfileSha256: 'c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353' }] },
+    { ...colorEvidence, sources: [native, { sourceSpace: 'display-p3', action: 'converted',
+      sourceProfileSha256: '231752984cd4a5278e1b8d2390fe496767d4511fc81f54e1a5c69ae9ab4c42b5' }] },
   ]) {
     expect(ArtifactReceiptSchema.safeParse({ descriptor: { ...bundle.descriptor, colorEvidence: invalid }, generation: '1' }).success).toBe(false);
     await expect(encodeLogicalSourceBundle({ ...source, colorEvidence: invalid as never })).rejects.toThrow();
   }
+});
+
+it('orders native sRGB before every sRGB profile digest and preserves distinct sRGB profile variants', () => {
+  const apple = { ...native, sourceProfileSha256: '2b3aa1645779a9e634744faf9b01e9102b0c9b88fd6deced7934df86b949af7e' };
+  const vips = { ...native, sourceProfileSha256: 'c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353' };
+  const evidence = srgbColorEvidence([vips, apple, native, apple]);
+  expect(evidence.sources).toEqual([native, apple, vips]);
+  expect(Object.isFrozen(evidence.sources)).toBe(true);
 });

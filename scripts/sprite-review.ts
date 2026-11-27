@@ -110,12 +110,12 @@ async function normalizeImage(root: string, filename: string, name: string, role
       if (animated || !referenceFormats.includes(format ?? '')) throw new Error('Expected a still raster image.');
       const jpeg = await image.rotate().toColourspace('srgb').resize(760, 760, { fit: 'inside', withoutEnlargement: true })
         .flatten({ background: '#fffdf4' }).jpeg({ quality: 88 }).toBuffer();
-      return { bytes: jpeg, source: null };
+      return { bytes: jpeg, source: null, original: null };
     }
     if (format !== 'png' || animated || !/\.png$/i.test(filename)) throw new Error('Expected a still PNG.');
 
     const { png, colorEvidence } = await normalizeSpritePng(bytes, name, imageOptions.limitInputPixels);
-    return { bytes: png, source: { sha256: sha256(bytes), colorEvidence } };
+    return { bytes: png, source: { sha256: sha256(bytes), colorEvidence }, original: bytes };
   } catch (error) {
     throw new Error(`${name}: ${role} image ${JSON.stringify(filename)}. ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -317,8 +317,9 @@ const reviewScript = `
   exportButton.addEventListener('click', () => {
     const state = readProgress();
     if (completeCount(state) !== total) return;
-    const roster = packet.plants.map(({ name, scientificName }, index) => ({
+    const roster = packet.plants.map(({ name, scientificName, candidateSources }, index) => ({
       name, ...(scientificName ? { scientificName } : {}), file: state.approved[index],
+      reviewedSource: candidateSources[state.approved[index]],
     }));
     const url = URL.createObjectURL(new Blob([JSON.stringify(roster, null, 2) + '\\n'], { type: 'application/json' }));
     const link = document.createElement('a');
@@ -383,6 +384,7 @@ async function buildPacket(input: string, out: string) {
   await mkdir(path.dirname(out), { recursive: true });
   const stage = await mkdtemp(path.join(path.dirname(out), '.sprite-review-'));
   try {
+    await mkdir(path.join(stage, 'sources'));
     for (const plant of manifest.plants) {
       const { name, scientificName } = plant;
       const nameKey = name.toLowerCase();
@@ -397,13 +399,15 @@ async function buildPacket(input: string, out: string) {
       const candidates: string[] = [];
       const candidateSources: ReviewPlant['candidateSources'] = {};
       for (const filename of plant.candidates) {
-        const { bytes: sprite, source } = await normalizeImage(root, filename, name, 'candidate');
+        const { bytes: sprite, source, original } = await normalizeImage(root, filename, name, 'candidate');
         const candidate = `${sha256(sprite)}.png`;
         if (files.has(candidate)) throw new Error(`${name}: duplicate candidate artwork in ${JSON.stringify(filename)}.`);
         await writeFile(path.join(stage, candidate), sprite);
         files.add(candidate);
         candidates.push(candidate);
-        if (source) candidateSources[candidate] = source;
+        if (!source || !original) throw new Error('Missing original candidate evidence.');
+        candidateSources[candidate] = source;
+        await writeFile(path.join(stage, 'sources', source.sha256 + '.png'), original);
       }
       plants.push({ name, ...(scientificName ? { scientificName } : {}), reference, candidates, candidateSources });
     }

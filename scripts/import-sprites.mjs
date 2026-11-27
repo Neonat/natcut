@@ -2,8 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
+import { isDeepStrictEqual, parseArgs } from 'node:util';
 import sharp from 'sharp';
+import { z } from 'zod';
+import { SrgbColorEvidenceSchema } from '@natcut/domain';
 import { catalogSpriteId, normalizeSpritePng } from '../packages/render/src/assets.ts';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -16,6 +18,11 @@ function label(value) {
   return value.trim().normalize('NFC');
 }
 
+const reviewedSourceSchema = z.strictObject({
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  colorEvidence: SrgbColorEvidenceSchema,
+});
+
 async function normalizeSprite(row, directory) {
   const name = label(row.name);
   const scientificName = row.scientificName === undefined ? undefined : label(row.scientificName);
@@ -23,9 +30,17 @@ async function normalizeSprite(row, directory) {
     throw new Error(`Expected a PNG filename for ${name}.`);
   }
   const input = await readFile(path.join(directory, row.file));
-  const { format, pages } = await sharp(input).metadata();
+  const reviewed = row.reviewedSource === undefined ? null : reviewedSourceSchema.parse(row.reviewedSource);
+  const source = reviewed ? await readFile(path.join(directory, 'sources', reviewed.sha256 + '.png')) : input;
+  if (reviewed && (hash(source) !== reviewed.sha256 || row.file !== hash(input) + '.png')) {
+    throw new Error(`Reviewed artwork digest mismatch for ${name}.`);
+  }
+  const { format, pages } = await sharp(source).metadata();
   if (format !== 'png' || (pages ?? 1) !== 1) throw new Error(`Expected a still PNG for ${name}.`);
-  const { png, side, colorEvidence } = await normalizeSpritePng(input, name);
+  const { png, side, colorEvidence } = await normalizeSpritePng(source, name);
+  if (reviewed && (!png.equals(input) || !isDeepStrictEqual(colorEvidence, reviewed.colorEvidence))) {
+    throw new Error(`Original artwork does not reproduce the approved pixels and profile evidence for ${name}.`);
+  }
   const pngSha256 = hash(png);
   const entry = { name, ...(scientificName ? { scientificName } : {}), pngSha256, colorEvidence, width: side, height: side };
   return { entry: { id: catalogSpriteId(entry), ...entry }, png };

@@ -40,10 +40,10 @@ const review = test.extend<{ packets: { url: string; directory: string } }>({
       const monstera = artwork('sprite/monstera-v1');
       const pear = artwork('sprite/c7e71948f761c05d6361441293e262f6f11ed44de8dee2e3956a39281e91b966');
       await Promise.all([
-        sharp(monstera).png().toFile(path.join(input, 'monstera-a.png')),
-        sharp(monstera).flop().png().toFile(path.join(input, 'monstera-b.png')),
-        sharp(monstera).modulate({ hue: 37 }).png().toFile(path.join(input, 'monstera-c.png')),
-        sharp(pear).png().toFile(path.join(input, 'pear.png')),
+        sharp(monstera).withIccProfile('srgb').png().toFile(path.join(input, 'monstera-a.png')),
+        sharp(monstera).flop().withIccProfile('p3').png().toFile(path.join(input, 'monstera-b.png')),
+        sharp(monstera).modulate({ hue: 37 }).withIccProfile('srgb').png().toFile(path.join(input, 'monstera-c.png')),
+        sharp(pear).withIccProfile('srgb').png().toFile(path.join(input, 'pear.png')),
         sharp(monstera).resize(640, 480, { fit: 'contain', background: '#adbc99' })
           .flatten({ background: '#adbc99' }).jpeg().toFile(path.join(input, 'monstera.jpg')),
         sharp(pear).resize(640, 480, { fit: 'contain', background: '#d0bc91' })
@@ -57,11 +57,11 @@ const review = test.extend<{ packets: { url: string; directory: string } }>({
       await writeFile(manifest, JSON.stringify({ version: 1, plants }));
       const build = (out: string) => exec(process.execPath, ['scripts/sprite-review.ts', '--input', manifest, '--out', path.join(directory, out)], { cwd: root });
       await build('first');
-      await sharp(pear).flop().png().toFile(path.join(input, 'pear.png'));
+      await sharp(pear).flop().withIccProfile('p3').png().toFile(path.join(input, 'pear.png'));
       await build('second');
       const variants = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
         const filename = `variant-${index}.png`;
-        await sharp(monstera).modulate({ hue: (index + 2) * 37 }).png().toFile(path.join(input, filename));
+        await sharp(monstera).modulate({ hue: (index + 2) * 37 }).withIccProfile('srgb').png().toFile(path.join(input, filename));
         return filename;
       }));
       await writeFile(manifest, JSON.stringify({ version: 1, plants: plants.map((plant) =>
@@ -182,9 +182,14 @@ review('compares, scores, replaces an approval and exports the exact importer ro
     if (!source) throw new Error('Expected candidate image file.');
     return path.basename(source);
   };
+  const packet = JSON.parse(await page.locator('#review-packet').textContent() ?? '');
+  const selectedMonstera = await selected(monstera, 1);
+  const selectedPear = await selected(pear, 0);
   expect(JSON.parse(await readFile(roster, 'utf8'))).toEqual([
-    { name: 'Monstera', scientificName: 'Monstera deliciosa', file: await selected(monstera, 1) },
-    { name: 'Prickly pear with an intentionally long common name for narrow screens', file: await selected(pear, 0) },
+    { name: 'Monstera', scientificName: 'Monstera deliciosa', file: selectedMonstera,
+      reviewedSource: packet.plants[0].candidateSources[selectedMonstera] },
+    { name: 'Prickly pear with an intentionally long common name for narrow screens', file: selectedPear,
+      reviewedSource: packet.plants[1].candidateSources[selectedPear] },
   ]);
   const catalog = path.join(packets.directory, 'imported');
   await exec(process.execPath, ['scripts/import-sprites.mjs', '--input', roster, '--out', catalog], { cwd: root });

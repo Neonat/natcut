@@ -20,9 +20,7 @@ export function recognizedIccSpace(profileSha256: string) {
   return supportedProfiles.get(profileSha256);
 }
 
-export const SrgbColorEvidenceSchema = z.strictObject({
-  outputSpace: z.literal('srgb'),
-  pipelineVersion: z.literal('natcut-srgb-v1'),
+export const SourceColorEvidenceSchema = z.strictObject({
   sourceSpace: z.enum(['srgb', 'display-p3', 'cmyk']),
   sourceProfileSha256: digest.nullable(),
   action: z.enum(['preserved', 'converted']),
@@ -33,12 +31,39 @@ export const SrgbColorEvidenceSchema = z.strictObject({
   .refine(evidence => evidence.sourceProfileSha256 === null || recognizedIccSpace(evidence.sourceProfileSha256) === evidence.sourceSpace,
     { message: 'The ICC profile must be recognized and match the source color space.' }).readonly();
 
+export type SourceColorEvidence = z.infer<typeof SourceColorEvidenceSchema>;
+
+// Sort ASCII space names first, then the full ICC digest (null sorts first), then
+// the action. These validated fields contain no separator and do not depend on locale.
+function sourceKey(source: SourceColorEvidence) {
+  return [source.sourceSpace, source.sourceProfileSha256 ?? '', source.action].join('\0');
+}
+
+export const SrgbColorEvidenceSchema = z.strictObject({
+  outputSpace: z.literal('srgb'),
+  pipelineVersion: z.literal('natcut-srgb-v1'),
+  sources: z.array(SourceColorEvidenceSchema).min(1).max(supportedProfiles.size + 1)
+    .refine(sources => sources.every((source, i) => i === 0 || sourceKey(sources[i - 1]!) < sourceKey(source)),
+      { message: 'Expected a unique, canonically ordered set of color sources.' }).readonly(),
+}).readonly();
 export type SrgbColorEvidence = z.infer<typeof SrgbColorEvidenceSchema>;
-// For pixels authored directly in sRGB or received through the digest-verified catalog contract.
-export const NATIVE_SRGB_EVIDENCE = SrgbColorEvidenceSchema.parse({
-  outputSpace: 'srgb', pipelineVersion: 'natcut-srgb-v1', sourceSpace: 'srgb',
-  sourceProfileSha256: null, action: 'preserved',
-});
+
+export function srgbColorEvidence(sources: readonly SourceColorEvidence[]): SrgbColorEvidence {
+  const distinct = new Map<string, SourceColorEvidence>();
+  for (const input of sources) {
+    const source = SourceColorEvidenceSchema.parse(input);
+    distinct.set(sourceKey(source), source);
+  }
+  return SrgbColorEvidenceSchema.parse({
+    outputSpace: 'srgb', pipelineVersion: 'natcut-srgb-v1',
+    sources: [...distinct.keys()].sort().map(key => distinct.get(key)),
+  });
+}
+
+// For pixels authored directly in sRGB or received through the digest-verified legacy catalog contract.
+export const NATIVE_SRGB_EVIDENCE = srgbColorEvidence([
+  { sourceSpace: 'srgb', sourceProfileSha256: null, action: 'preserved' },
+]);
 
 const metadata = z.object({
   profile: PublishedPrintProfileSchema,

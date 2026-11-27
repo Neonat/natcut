@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import sharp from 'sharp';
 import { expect, it, vi } from 'vitest';
-import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE } from '@natcut/domain';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, ArtifactReceiptSchema } from '@natcut/domain';
 
 const exec = promisify(execFile);
 type Row = { name: string; file: string; scientificName?: string };
@@ -119,17 +119,28 @@ it('binds a converted sprite’s provenance into its ID and restores it when loa
       { cwd: path.resolve(import.meta.dirname, '../../..') });
     const index = JSON.parse(await readFile(path.join(out, 'index.json'), 'utf8'));
     const entry = index.sprites[0];
-    const expected = { ...NATIVE_SRGB_EVIDENCE, sourceSpace: 'display-p3', action: 'converted',
+    const p3 = { sourceSpace: 'display-p3', action: 'converted',
       sourceProfileSha256: '231752984cd4a5278e1b8d2390fe496767d4511fc81f54e1a5c69ae9ab4c42b5' };
+    const expected = { ...NATIVE_SRGB_EVIDENCE, sources: [p3] };
     expect(entry.colorEvidence).toEqual(expected);
     async function loadFromIndex() {
       vi.resetModules();
       vi.doMock('../catalog/index.json', () => ({ default: index }));
-      const { catalogManifest, planComposition, loadPackagedAssets } = await import('../src/index.ts');
+      const { catalogManifest, planComposition, loadPackagedAssets, assetPngFilename } = await import('../src/index.ts');
       const plan = planComposition(catalogManifest, DEVFEST_SG_V1);
-      return loadPackagedAssets({ ...plan, layers: [plan.layers[0]!] }, path.join(out, 'artwork'));
+      const logo = assetPngFilename('branding/logo');
+      await copyFile(path.join(import.meta.dirname, '../catalog/artwork', logo), path.join(out, 'artwork', logo));
+      return loadPackagedAssets(plan, path.join(out, 'artwork'));
     }
-    const asset = (await loadFromIndex()).get(entry.id)!;
+    const catalog = await loadFromIndex();
+    const asset = catalog.get(entry.id)!;
+    const { createTrustedArtifactPreparer } = await import('@natcut/submission');
+    const { catalogManifest } = await import('../src/index.ts');
+    const { bundle } = await createTrustedArtifactPreparer(catalog)(catalogManifest);
+    const receipt = ArtifactReceiptSchema.parse({ descriptor: bundle.descriptor, generation: '1' });
+    expect(receipt.descriptor).toMatchObject({ formatVersion: 2, colorEvidence: {
+      ...expected, sources: [p3, ...NATIVE_SRGB_EVIDENCE.sources],
+    } });
     expect(asset.colorEvidence).toEqual(expected);
     expect(Array.from(asset.rgba)).toEqual([176, 92, 63, 255]);
     entry.colorEvidence = NATIVE_SRGB_EVIDENCE;

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32 } from 'node:zlib';
-import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, SrgbColorEvidenceSchema, recognizedIccSpace, type SrgbColorEvidence } from '@natcut/domain';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, SrgbColorEvidenceSchema, srgbColorEvidence, recognizedIccSpace, type SourceColorEvidence, type SrgbColorEvidence } from '@natcut/domain';
 import sharp from 'sharp';
 import { catalogSpriteEntry, loadPlannedAssets, type SpriteEntry } from './catalog.ts';
 import type { PlannedComposition } from './layout.ts';
@@ -20,7 +20,7 @@ export type AssetCatalog<T extends RgbaAsset = SrgbRgbaAsset> = ReadonlyMap<stri
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 // Sharp does not expose the PNG sRGB chunk as ICC metadata. Recognize this explicit
 // declaration without accepting a guessed color space, contradictory tags, or a bad CRC.
-function pngDeclaresSrgb(bytes: Buffer, hasIcc: boolean, iccSpace: SrgbColorEvidence['sourceSpace'] | undefined): boolean {
+function pngDeclaresSrgb(bytes: Buffer, hasIcc: boolean, iccSpace: SourceColorEvidence['sourceSpace'] | undefined): boolean {
   const chunks = new Map<string, Buffer>();
   let seenPixels = false;
   for (let offset = 8; offset < bytes.length;) {
@@ -71,9 +71,9 @@ async function decodeAsset(input: Buffer, id: string, normalizedCatalog: boolean
         metadata.channels !== expectedBands + Number(metadata.hasAlpha)) {
       throw new Error('Unrecognized or inconsistent embedded ICC profile.');
     }
-    colorEvidence = SrgbColorEvidenceSchema.parse({
-      ...colorEvidence, sourceSpace, sourceProfileSha256, action: sourceSpace === 'srgb' ? 'preserved' : 'converted',
-    });
+    colorEvidence = srgbColorEvidence([
+      { sourceSpace, sourceProfileSha256, action: sourceSpace === 'srgb' ? 'preserved' : 'converted' },
+    ]);
   } else if (!pngSrgb && !normalizedCatalog) {
     throw new Error('Untagged image requires a recognized color profile.');
   }
@@ -124,7 +124,7 @@ export function loadPackagedAssets(
     const entry = catalogSpriteEntry(id);
     if (entry && catalogSpriteId(entry) !== id) throw new Error(`Catalog sprite identity mismatch for ${id}.`);
     const decoded = await decodeAsset(bytes, id, true);
-    if (decoded.colorEvidence.sourceSpace !== 'srgb') throw new Error('Catalog PNG pixels must already be normalized to sRGB.');
+    if (decoded.colorEvidence.sources.some(source => source.sourceSpace !== 'srgb')) throw new Error('Catalog PNG pixels must already be normalized to sRGB.');
     return { ...decoded, colorEvidence: entry?.colorEvidence ?? decoded.colorEvidence };
   });
 }
