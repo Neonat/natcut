@@ -6,6 +6,8 @@ Start the local stack with `npm run dev`. Use two independent browser profiles a
 2. Choose **Claim next** and refresh the first visitor’s ticket. It reads **You’re next** and the **Leave queue** action is disabled.
 3. Choose **Start simulation**. Use **Refresh** on the desk to follow the worker phases. The visitor’s next refresh shows **Ready for pickup** when the simulation finishes.
 4. Claim the next ticket. In the first ticket’s ready row, choose **Mark collected**. Refresh the first visitor’s ticket to see **Sticker collected**.
+5. On the collected ticket, choose a 1–5 star rating and submit once without selecting product updates. The page changes to **Thanks for your feedback!**; no email or marketing lead is created.
+6. For an opt-in rehearsal, use a fresh private browser session and ticket. Select **Email me Sprout product updates**, enter an address, and submit. The server normalizes the address and links one marketing lead to that session’s survey.
 5. Choose **Start simulation** for the second ticket. Refresh each screen to check its status.
 
 The desk lists the current event’s waiting and ready tickets in pages of 25 each. Each group has its own next-page button. The active ticket stays in view on every page. **First page** returns to the front of both groups.

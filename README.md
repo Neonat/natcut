@@ -72,6 +72,8 @@ curl -fsS -X POST -H "X-NatCut-Control: $desk_cap" -H 'Content-Type: application
 
 Tap **Refresh** on the visitor screen between steps. Claiming changes the public state to **You’re next**. The simulator then advances to **Ready for pickup** and the ticket explains that the rehearsal produced no physical sticker.
 
+After the desk marks a ticket collected, the visitor can leave a 1–5 cuteness rating. Product-update email is a separate, unchecked opt-in; opting out sends and stores no email and never affects the sticker. One immutable survey is accepted per anonymous visitor session. Selfie upload remains disabled until retention and publication consent are defined.
+
 Stopping either development command resets the in-memory Firebase emulators and the temporary SQLite journal. Both commands use only the `demo-natcut` Firebase project.
 
 ### Rehearse from a phone on private Wi-Fi
