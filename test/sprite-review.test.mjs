@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFile, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { crc32 } from 'node:zlib';
 import nodeTest from 'node:test';
 import sharp from 'sharp';
 
-const script = new URL('../scripts/sprite-review.ts', import.meta.url);
+const script = fileURLToPath(new URL('../scripts/sprite-review.ts', import.meta.url));
 const exec = promisify(execFile);
 const test = process.platform === 'darwin' ? nodeTest : nodeTest.skip;
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -46,7 +47,7 @@ async function fixture(t) {
   };
   const input = path.join(src, 'manifest.json');
   const out = path.join(root, 'review packet 🌿');
-  const args = (dest = out) => [script.pathname, '--input', input, '--out', dest];
+  const args = (dest = out) => [script, '--input', input, '--out', dest];
   const save = () => writeFile(input, JSON.stringify(manifest));
   const run = async (dest) => {
     await save();
@@ -81,7 +82,7 @@ test('publishes a deterministic offline packet with importer-compatible candidat
   await writeFile(roster, JSON.stringify(files.filter((file) => file.endsWith('.png')).map((file, index) => ({
     name: `Plant ${index + 1}`, file,
   }))));
-  await exec(process.execPath, [new URL('../scripts/import-sprites.mjs', import.meta.url).pathname,
+  await exec(process.execPath, [fileURLToPath(new URL('../scripts/import-sprites.mjs', import.meta.url)),
     '--input', roster, '--out', catalog]);
   const { sprites } = JSON.parse(await readFile(path.join(catalog, 'index.json'), 'utf8'));
   assert.deepEqual(sprites.map(({ pngSha256 }) => pngSha256), files.filter((file) => file.endsWith('.png'))
@@ -118,6 +119,12 @@ const invalid = [
   ['a candidate below printable alpha', /Monstera.*alpha/i, ({ src }) =>
     image({ r: 14, g: 151, b: 67 }, 0.4).png().toFile(path.join(src, 'one.png'))],
   ['duplicate common names', /duplicate.*monstera/i, ({ manifest }) => { manifest.plants[1].name = ' monstera '; }],
+  ['a common name that grows beyond 128 characters in NFC', /name[\s\S]*128/i, ({ manifest }) => {
+    manifest.plants[0].name = '\u0344'.repeat(65);
+  }],
+  ['a scientific name that grows beyond 128 characters in NFC', /scientificName[\s\S]*128/i, ({ manifest }) => {
+    manifest.plants[0].scientificName = '\u0344'.repeat(65);
+  }],
   ['duplicate candidate bytes within a plant', /Monstera.*duplicate/i, async ({ src, manifest }) => {
     await writeFile(path.join(src, 'copy.png'), await readFile(path.join(src, 'one.png')));
     manifest.plants[0].candidates.push('copy.png');
@@ -138,6 +145,38 @@ for (const [label, message, configure] of invalid) {
     assert.deepEqual(await readdir(packet.root), original);
   });
 }
+
+test('rejects a parent symlink swapped in after resolving a candidate', async (t) => {
+  const { root, src, manifest, save, args } = await fixture(t);
+  const parent = path.join(await realpath(src), 'images');
+  const outside = path.join(root, 'outside');
+  const filename = 'one.png';
+  await mkdir(parent);
+  await mkdir(outside);
+  await writeFile(path.join(parent, filename), await readFile(path.join(src, filename)));
+  await image({ r: 24, g: 38, b: 117 }).png().toFile(path.join(outside, filename));
+  manifest.plants[0].candidates = [path.join('images', filename)];
+  await save();
+  const before = await readdir(root);
+  const preload = `
+    import fs from 'node:fs/promises';
+    import { syncBuiltinESMExports } from 'node:module';
+    const original = fs.realpath;
+    fs.realpath = async (file) => {
+      const resolved = await original(file);
+      if (resolved === ${JSON.stringify(path.join(parent, filename))}) {
+        await fs.rename(${JSON.stringify(parent)}, ${JSON.stringify(parent + '-moved')});
+        await fs.symlink(${JSON.stringify(outside)}, ${JSON.stringify(parent)});
+      }
+      return resolved;
+    };
+    syncBuiltinESMExports();
+  `;
+  const run = spawnSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(preload)}`, ...args()], { encoding: 'utf8' });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /Monstera.*outside/i);
+  assert.deepEqual(await readdir(root), before);
+});
 
 test('leaves any existing destination untouched', async (t) => {
   const { root, out, run } = await fixture(t);

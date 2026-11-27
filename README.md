@@ -137,7 +137,7 @@ Save a version 1 manifest outside the repository. List one still reference photo
 }
 ```
 
-On macOS, build the packet in a new directory and open its `index.html` in your browser. Score each candidate from 1 to 5 for cuteness and accuracy. Approve one sprite per plant, then export the roster. Save the downloaded `roster.json` beside `index.html` and the packet PNGs before importing.
+On macOS, build the packet in a new directory and open its `index.html` in your browser. Score candidates from 1 to 5 for cuteness and accuracy. Export is available once each plant has an approved sprite with both scores. Save the downloaded `roster.json` beside `index.html` and the packet PNGs before importing.
 
 ```bash
 npm run sprites:review -- --input /path/to/manifest.json --out /path/to/new-review

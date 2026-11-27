@@ -9,7 +9,7 @@ Give the booth operator a private, offline way to compare generated canonical sp
 - Show the common name above the scientific name.
 - Keep each real plant photo visible beside its generated candidates.
 - Record 1–5 cuteness and plant-accuracy scores for each candidate.
-- Require one approved candidate per plant before export.
+- Require one approved candidate with both scores per plant before export.
 - Preserve review progress in the browser.
 - Export the exact roster shape accepted by `npm run sprites:import`.
 - Work without Firebase, AI providers, or printer access.
@@ -34,7 +34,7 @@ The command never overwrites an existing output directory. It validates every pa
 
 The page is a compact desktop-first review board that also works on a phone. A plant section keeps its reference image and candidate grid together. Each candidate has visible cuteness and accuracy controls plus one **Approve sprite** control. Selecting another candidate for the same plant replaces the earlier choice.
 
-A persistent summary shows approved plants out of the total. **Export roster** stays disabled until every plant has one approved candidate. Keyboard focus, selected state, and validation errors remain visible without relying on color alone.
+A persistent summary shows complete plant reviews out of the total. **Export roster** stays disabled until each plant has an approved candidate with both scores. Keyboard focus, selected state, and validation errors remain visible without relying on color alone.
 
 ## Approaches
 
@@ -50,4 +50,3 @@ A persistent summary shows approved plants out of the total. **Export roster** s
 - The page uses **sprite**, never “Plantemon.”
 - The packet contains no remote fonts, scripts, or analytics.
 - No provider, Firebase, or printer call is allowed.
-

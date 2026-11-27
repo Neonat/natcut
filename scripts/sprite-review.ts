@@ -1,5 +1,6 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
 import { lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs, promisify } from 'node:util';
@@ -7,7 +8,7 @@ import sharp from 'sharp';
 import { z } from 'zod';
 import { DEVFEST_SG_V1 } from '../packages/domain/src/print-profile.ts';
 
-const plantName = z.string().max(128).trim().min(1).normalize();
+const plantName = z.string().max(128).trim().min(1).normalize().max(128);
 const imagePath = z.string().min(1);
 const manifestSchema = z.strictObject({
   version: z.literal(1),
@@ -37,6 +38,28 @@ function isWithin(root: string, candidate: string) {
   return relative !== '' && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
 }
 
+function openedImagePath(fd: number) {
+  // macOS can resolve an inherited file descriptor with fcntl(F_GETPATH).
+  const script = String.raw`
+    open my $image, '<&=3' or die $!;
+    my $path = "\0" x 1024;
+    fcntl($image, 50, $path) or die $!;
+    $path =~ s/\0.*\z//s;
+    binmode STDOUT, ':raw';
+    print $path;
+  `;
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn('/usr/bin/perl', ['-e', script], { stdio: ['ignore', 'pipe', 'ignore', fd] });
+    let output = '';
+    child.stdout?.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code === 0 && path.isAbsolute(output)) resolve(output);
+      else reject(new Error('Could not verify the opened image path.'));
+    });
+  });
+}
+
 async function localImage(root: string, filename: string) {
   const candidate = path.resolve(root, filename);
   if (path.isAbsolute(filename) || path.win32.isAbsolute(filename) || !isWithin(root, candidate)) {
@@ -44,14 +67,22 @@ async function localImage(root: string, filename: string) {
   }
   const resolved = await realpath(candidate);
   if (!isWithin(root, resolved)) throw new Error('Image resolves outside the manifest directory.');
-  if (!(await lstat(resolved)).isFile()) throw new Error('Expected a regular image file.');
-  const file = await open(resolved, 'r');
+  const file = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    const { size } = await file.stat();
-    if (size === 0 || size > maxImageBytes) throw new Error('Expected a nonempty image of at most 32 MiB.');
-    const bytes = await file.readFile();
-    if (bytes.length !== size) throw new Error('The image changed while reading it.');
-    return bytes;
+    if (!isWithin(root, await openedImagePath(file.fd))) throw new Error('Opened image is outside the manifest directory.');
+    const stats = await file.stat();
+    if (!stats.isFile()) throw new Error('Expected a regular image file.');
+    if (stats.size === 0 || stats.size > maxImageBytes) throw new Error('Expected a nonempty image of at most 32 MiB.');
+
+    const bytes = Buffer.alloc(stats.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await file.read(bytes, length, bytes.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length !== stats.size) throw new Error('The image changed while reading it.');
+    return bytes.subarray(0, length);
   } finally {
     await file.close();
   }
@@ -80,7 +111,6 @@ async function normalizeImage(root: string, filename: string, name: string, role
     }
     if (format !== 'png' || animated || !/\.png$/i.test(filename)) throw new Error('Expected a still PNG.');
 
-    // Match the catalog importer so it accepts the same alpha and artwork seen in review.
     const side = Math.min(760, Math.max(width, height));
     const { data, info } = await image.rotate().toColourspace('srgb').ensureAlpha()
       .resize(side, side, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
@@ -140,6 +170,7 @@ const reviewStyles = `
   h1 { font-size: 1.125rem; font-weight: 750; }
   .actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
   .progress { color: var(--muted); font-size: .875rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .score-warning:not([hidden]) { display: block; font-size: .75rem; font-weight: 500; }
   button {
     min-height: 44px; padding: .5rem 1rem; border: 1px solid var(--forest); border-radius: .4rem;
     color: var(--paper); background: var(--forest); font-size: .875rem; font-weight: 750; cursor: pointer;
@@ -177,10 +208,13 @@ const reviewStyles = `
   .approval:has(input:checked) .approved-text { display: inline; }
   .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   @media (max-width: 30rem) {
+    .actions { width: 100%; }
+    .progress { flex: 1; min-width: 0; }
     .reference img, .candidate img { height: 9rem; }
   }
   @media (min-width: 48rem) {
     .comparison { grid-template-columns: minmax(12rem, 1fr) minmax(0, 3fr); }
+    .reference { position: sticky; top: 5.25rem; }
     .reference img { height: auto; aspect-ratio: 1; }
   }
 `;
@@ -231,6 +265,7 @@ const reviewScript = `
   const packet = JSON.parse(document.querySelector('#review-packet').textContent);
   const form = document.querySelector('#review');
   const progress = document.querySelector('#progress');
+  const scoreWarning = document.querySelector('#score-warning');
   const exportButton = document.querySelector('#export');
   const storageWarning = document.querySelector('#storage-warning');
   const storageKey = 'natcut:sprite-review:v1:' + packet.key;
@@ -260,9 +295,14 @@ const reviewScript = `
     return { version: 1, scores, approved };
   }
 
-  function showProgress({ approved }) {
-    const count = Object.keys(approved).length;
-    progress.textContent = count + ' of ' + total + (total === 1 ? ' plant' : ' plants') + ' approved';
+  function completeCount({ scores, approved }) {
+    return Object.values(approved).filter((file) => scores[file]?.cuteness && scores[file]?.accuracy).length;
+  }
+
+  function showProgress(state) {
+    const count = completeCount(state);
+    progress.textContent = count + ' of ' + total + (total === 1 ? ' plant' : ' plants') + ' complete';
+    scoreWarning.hidden = count === Object.keys(state.approved).length;
     exportButton.disabled = count !== total;
   }
 
@@ -278,10 +318,10 @@ const reviewScript = `
   });
 
   exportButton.addEventListener('click', () => {
-    const { approved } = readProgress();
-    if (Object.keys(approved).length !== total) return;
+    const state = readProgress();
+    if (completeCount(state) !== total) return;
     const roster = packet.plants.map(({ name, scientificName }, index) => ({
-      name, ...(scientificName ? { scientificName } : {}), file: approved[index],
+      name, ...(scientificName ? { scientificName } : {}), file: state.approved[index],
     }));
     const url = URL.createObjectURL(new Blob([JSON.stringify(roster, null, 2) + '\\n'], { type: 'application/json' }));
     const link = document.createElement('a');
@@ -311,7 +351,10 @@ function renderPage(packet: ReviewPacket) {
     <div class="frame">
       <h1>Sprite quality review</h1>
       <div class="actions">
-        <p class="progress" id="progress" role="status" aria-atomic="true">0 of ${packet.plants.length} ${packet.plants.length === 1 ? 'plant' : 'plants'} approved</p>
+        <p class="progress" role="status" aria-atomic="true">
+          <span id="progress">0 of ${packet.plants.length} ${packet.plants.length === 1 ? 'plant' : 'plants'} complete</span>
+          <small class="score-warning" id="score-warning" hidden>Score both fields on approved sprites.</small>
+        </p>
         <button id="export" type="button" disabled>Export roster</button>
       </div>
     </div>

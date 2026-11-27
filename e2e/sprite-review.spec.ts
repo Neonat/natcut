@@ -18,7 +18,7 @@ const review = test.extend<{ packets: { url: string; directory: string } }>({
   async packets({}, use) {
     const directory = await mkdtemp(path.join(tmpdir(), 'natcut-sprite-review-e2e-'));
     const server = createServer(async (request, response) => {
-      const match = /^\/(first|second)\/(index\.html|[a-f0-9]{64}\.(?:jpg|png))$/.exec(request.url ?? '');
+      const match = /^\/(first|second|wrapped)\/(index\.html|[a-f0-9]{64}\.(?:jpg|png))$/.exec(request.url ?? '');
       if (!match) {
         response.writeHead(404).end();
         return;
@@ -42,6 +42,7 @@ const review = test.extend<{ packets: { url: string; directory: string } }>({
       await Promise.all([
         sharp(monstera).png().toFile(path.join(input, 'monstera-a.png')),
         sharp(monstera).flop().png().toFile(path.join(input, 'monstera-b.png')),
+        sharp(monstera).modulate({ hue: 37 }).png().toFile(path.join(input, 'monstera-c.png')),
         sharp(pear).png().toFile(path.join(input, 'pear.png')),
         sharp(monstera).resize(640, 480, { fit: 'contain', background: '#adbc99' })
           .flatten({ background: '#adbc99' }).jpeg().toFile(path.join(input, 'monstera.jpg')),
@@ -49,14 +50,23 @@ const review = test.extend<{ packets: { url: string; directory: string } }>({
           .flatten({ background: '#d0bc91' }).jpeg().toFile(path.join(input, 'pear.jpg')),
       ]);
       const manifest = path.join(input, 'manifest.json');
-      await writeFile(manifest, JSON.stringify({ version: 1, plants: [
-        { name: 'Monstera', scientificName: 'Monstera deliciosa', reference: 'monstera.jpg', candidates: ['monstera-a.png', 'monstera-b.png'] },
+      const plants = [
+        { name: 'Monstera', scientificName: 'Monstera deliciosa', reference: 'monstera.jpg', candidates: ['monstera-a.png', 'monstera-b.png', 'monstera-c.png'] },
         { name: 'Prickly pear with an intentionally long common name for narrow screens', reference: 'pear.jpg', candidates: ['pear.png'] },
-      ] }));
+      ];
+      await writeFile(manifest, JSON.stringify({ version: 1, plants }));
       const build = (out: string) => exec(process.execPath, ['scripts/sprite-review.ts', '--input', manifest, '--out', path.join(directory, out)], { cwd: root });
       await build('first');
       await sharp(pear).flop().png().toFile(path.join(input, 'pear.png'));
       await build('second');
+      const variants = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
+        const filename = `variant-${index}.png`;
+        await sharp(monstera).modulate({ hue: (index + 2) * 37 }).png().toFile(path.join(input, filename));
+        return filename;
+      }));
+      await writeFile(manifest, JSON.stringify({ version: 1, plants: plants.map((plant) =>
+        plant.name === 'Monstera' ? { ...plant, candidates: variants } : plant) }));
+      await build('wrapped');
 
       await new Promise<void>((resolve, reject) => {
         server.once('error', reject);
@@ -89,13 +99,12 @@ review('compares, scores, replaces an approval and exports the exact importer ro
   const exportButton = page.getByRole('button', { name: 'Export roster' });
   await expect(exportButton).toBeDisabled({ timeout: 1_500 });
   const progress = page.getByRole('status');
-  await expect(progress).toHaveText('0 of 2 plants approved');
   const monstera = page.getByRole('region', { name: 'Monstera', exact: true });
   const pear = page.getByRole('region', { name: /^Prickly pear/ });
   expect((await monstera.locator('header').innerText()).split(/\n+/)).toEqual(['Monstera', 'Monstera deliciosa']);
   await expect(monstera.getByRole('img', { name: 'Reference photo of Monstera' })).toBeVisible();
   const images = page.getByRole('img');
-  await expect(images).toHaveCount(5);
+  await expect(images).toHaveCount(6);
   await expect.poll(() => images.evaluateAll((items) => items.every((item) => item instanceof HTMLImageElement && item.naturalWidth > 0)))
     .toBe(true);
   expect(outsideRequests).toEqual([]);
@@ -119,26 +128,49 @@ review('compares, scores, replaces an approval and exports the exact importer ro
 
   const approve = monstera.getByRole('radio', { name: /^Approve/ });
   await approve.nth(0).check();
-  await expect(progress).toHaveText('1 of 2 plants approved');
+  await expect(progress).toContainText('1 of 2');
   await approve.nth(1).check();
   await expect(approve.nth(0)).not.toBeChecked();
   await expect(approve.nth(1)).toBeChecked();
   await expect(approve.nth(1).locator('..')).toHaveText('Approved sprite', { useInnerText: true });
+  await expect(progress).toContainText('0 of 2');
+  const missingScores = progress.getByText('Score both fields on approved sprites.');
+  await expect(missingScores).toBeVisible();
   await expect(exportButton).toBeDisabled();
   await page.reload();
   await expect(cuteTwo).toBeChecked();
   await expect(accurateFive).toBeChecked();
   await expect(approve.nth(1)).toBeChecked();
-  await expect(progress).toHaveText('1 of 2 plants approved');
+  await expect(progress).toContainText('0 of 2 plants complete');
+
+  const second = monstera.getByRole('article').nth(1);
+  await second.getByRole('group', { name: 'Cuteness' }).getByRole('radio', { name: '4' }).check();
+  await expect(progress).toContainText('0 of 2 plants complete');
+  await second.getByRole('group', { name: 'Accuracy' }).getByRole('radio', { name: '5' }).check();
+  await expect(progress).toContainText('1 of 2 plants complete');
+  await expect(missingScores).toBeHidden();
 
   await page.goto(`${packets.url}/second/index.html`);
   await expect(cuteTwo).not.toBeChecked();
   await expect(approve.nth(1)).not.toBeChecked();
-  await expect(progress).toHaveText('0 of 2 plants approved');
+  await expect(progress).toContainText('0 of 2 plants complete');
   await page.goto(first);
-  await expect(progress).toHaveText('1 of 2 plants approved');
+  await expect(progress).toContainText('1 of 2 plants complete');
   await pear.getByRole('radio', { name: /^Approve/ }).check();
-  await expect(progress).toHaveText('2 of 2 plants approved');
+  await expect(exportButton).toBeDisabled();
+  await pear.getByRole('group', { name: 'Cuteness' }).getByRole('radio', { name: '3' }).check();
+  await expect(exportButton).toBeDisabled();
+  await pear.getByRole('group', { name: 'Accuracy' }).getByRole('radio', { name: '5' }).check();
+  await expect(progress).toContainText('2 of 2 plants complete');
+  await expect(exportButton).toBeEnabled();
+
+  await approve.nth(2).check();
+  await expect(exportButton).toBeDisabled();
+  await expect(progress).toContainText('1 of 2 plants complete');
+  await page.reload();
+  await expect(approve.nth(2)).toBeChecked();
+  await expect(exportButton).toBeDisabled();
+  await approve.nth(1).check();
   await expect(exportButton).toBeEnabled();
 
   const [download] = await Promise.all([page.waitForEvent('download'), exportButton.click()]);
@@ -171,7 +203,8 @@ review('opens directly from disk and fits a narrow touch viewport', async ({ pag
   await approval.check();
   await page.reload();
   await expect(monstera.getByRole('radio', { name: 'Approved sprite' })).toBeChecked();
-  await expect(page.getByRole('status')).toHaveText('1 of 2 plants approved');
+  await expect(page.getByRole('status')).toContainText('0 of 2');
+  await expect(monstera.getByRole('figure', { name: 'Reference photo' })).toHaveCSS('position', 'static');
   await expect.poll(() => page.getByRole('img').evaluateAll((images) => images.every((image) =>
     image instanceof HTMLImageElement && image.naturalWidth > 0))).toBe(true);
 
@@ -187,4 +220,27 @@ review('opens directly from disk and fits a narrow touch viewport', async ({ pag
   await page.screenshot({ path: info.outputPath('mobile-review.png') });
   await page.setViewportSize({ width: 320, height: 812 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+});
+
+review('keeps the reference visible beside later rows and within its plant on desktop', async ({ page, packets }, info) => {
+  await page.goto(`${packets.url}/wrapped/index.html`);
+  const monstera = page.getByRole('region', { name: 'Monstera', exact: true });
+  const first = monstera.getByRole('article').first();
+  const last = monstera.getByRole('article').last();
+  const reference = monstera.getByRole('figure', { name: 'Reference photo' });
+  const firstCard = await first.boundingBox();
+  const lastCard = await last.boundingBox();
+  if (!firstCard || !lastCard) throw new Error('Expected candidate cards to be visible.');
+  expect(lastCard.y).toBeGreaterThan(firstCard.y + firstCard.height);
+  await page.evaluate((top) => scrollTo(0, top), firstCard.y + firstCard.height);
+  const toolbarBottom = await page.getByRole('banner').evaluate((element) => element.getBoundingClientRect().bottom);
+  await expect.poll(() => reference.evaluate((element) => element.getBoundingClientRect().top)).toBeGreaterThanOrEqual(toolbarBottom);
+  expect(await reference.evaluate((element) => element.getBoundingClientRect().top)).toBeLessThan(toolbarBottom + 25);
+  await page.screenshot({ path: info.outputPath('desktop-sticky-reference.png') });
+
+  await page.evaluate(() => scrollTo(0, document.body.scrollHeight));
+  const plantBottom = await monstera.evaluate((element) => element.getBoundingClientRect().bottom);
+  const end = await reference.evaluate((element) => element.getBoundingClientRect().toJSON());
+  expect(end.bottom).toBeLessThanOrEqual(plantBottom);
+  expect(end.top).toBeLessThan(toolbarBottom);
 });
