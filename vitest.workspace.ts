@@ -49,6 +49,14 @@ export const projects = [
   },
   {
     test: {
+      name: 'printer',
+      root: './packages/printer',
+      include: ['test/**/*.test.ts'],
+      environment: 'node',
+    },
+  },
+  {
+    test: {
       name: 'render',
       root: './packages/render',
       include: ['test/**/*.test.ts'],

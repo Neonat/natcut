@@ -88,16 +88,24 @@ Post-rollout review hardened repeatability: the submission smoke now allowlists 
 
 This evidence establishes isolated cloud readiness for the verified logical bundle and simulator. It is not evidence of JPEG, PLT, registration, USB protocol, media loading, physical print/cut behavior, event load, or production hardening.
 
+## Offline physical-adapter evidence
+
+Session 3's non-printer tranche now re-verifies an exact receipt and bundle before deriving the physical files. The JPEG path white-composites the logical 1200 × 2100 RGBA raster, centers it in the immutable 1216 × 2128 printer raster, and selects the first fixed quality no larger than 1 MiB. The PLT path traces the stored expanded binary mask with no second dilation, preserves the profile's `KP42`, and rejects empty or off-sheet paths.
+
+The transport-free adapter records the deterministic combo declaration, immutable file sizes and hashes, PLT-first/JPEG-second order, 4071-byte upload payload chunks, little-endian positive job-ID binding, per-chunk acknowledgement requirement, and 120 ms baseline pacing. The dry-run packet is create-only, uses an incomplete sentinel, records `transport: disabled-dry-run`, contains no fabricated job ID, and cannot implement the worker's physical executor. Tests construct and verify real packet bytes without USB, Firebase, network, or printer access.
+
+This evidence is not physical proof. It does not establish media state, registration, cut depth, device acceptance, upload recovery, physical completion, or safe operator resolution.
+
 ## Remaining tranches
 
-1. Session 3 must generate the exact JPEG and PLT from the verified bundle, define and dry-run the protocol adapter, and collect non-printer evidence first. USB access and one loaded-sheet physical test remain a later step inside that session and require separate explicit approval at the time of execution.
+1. Session 3's offline JPEG, PLT, protocol-plan, and dry-run evidence is complete. A transport-backed adapter and one loaded-sheet physical test remain blocked behind separate explicit approval at the time of execution.
 2. Define an operator-authorized resolution command for truly ambiguous physical outcomes only after a physical adapter can report printer evidence. It must never synthesize success from public status alone.
 3. Rehearse the full booth path and failure injection only after the physical adapter proof.
 4. Complete production hardening, retention/privacy decisions, observability, cost controls, and final release audit after rehearsal.
 
 ## Safety and rollout invariants
 
-- No printer or USB code is imported or invoked by this slice.
+- No USB, printer transport, worker executor, Firebase, or network code is imported or invoked by the offline physical-adapter path.
 - Production cloud changes are restricted to the authorized isolated NatCut resources and are recorded in the cloud runbook; Sprout resources remain unchanged.
 - An accepted queue record must never point at an unverified or incomplete object.
 - A digest mismatch is corruption, not a reason to regenerate accepted evidence.

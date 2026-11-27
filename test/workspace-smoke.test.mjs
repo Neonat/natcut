@@ -13,6 +13,7 @@ const workspaces = [
   ['packages/artifacts', '@natcut/artifacts'],
   ['packages/domain', '@natcut/domain'],
   ['packages/pipeline', '@natcut/pipeline'],
+  ['packages/printer', '@natcut/printer'],
   ['packages/render', '@natcut/render'],
   ['packages/cut-geometry', '@natcut/cut-geometry'],
 ];

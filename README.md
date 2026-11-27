@@ -168,6 +168,21 @@ The new directory contains `sheet.jpg`, `cut-overlay.svg`, and `evidence.json`. 
 
 This packet is explicitly an **offline preview, not print-ready**. Centered padding is an unverified registration assumption. It contains no PLT, knife pressure, USB call, network call, or printer instruction.
 
+### Generate a physical-adapter dry run
+
+When you have a trusted artifact receipt and the exact immutable bundle bytes it names, build the physical files and protocol evidence entirely offline:
+
+```bash
+npm run physical:dry-run -- \
+  --receipt /path/to/receipt.json \
+  --bundle /path/to/logical-bundle.bin \
+  --out /tmp/natcut-physical-dry-run
+```
+
+The new directory contains `print.jpg`, `cut.plt`, and `evidence.json`. The command re-verifies the complete receipt, generation-bound bundle digests, published profile, logical dimensions, JPEG limit, PLT pressure, and unclipped cut bounds. It white-composites transparent pixels, center-pads the logical raster, traces every accepted island in the already-expanded stored mask without adding the cut border again, and records the exact deterministic combo declaration and PLT-first upload chunk plan. Exact white is a pre-encode invariant; lossy JPEG 4:2:0 may introduce bounded chroma bleed directly beside saturated artwork, while untouched padding borders remain white.
+
+This is still an offline proof. `transport` is fixed to `disabled-dry-run`; there is no job ID, fabricated response, USB import, cloud mutation, worker transition, or printer write. An existing output directory is never replaced, and `.incomplete` marks any interrupted packet. See [`docs/runbooks/physical-adapter-proof.md`](docs/runbooks/physical-adapter-proof.md) for inspection and the remaining approval gate.
+
 ## Build the isolated cloud preview
 
 NatCut's public preview uses its own Firebase Hosting target (`natcut`), Cloud Run service (`natcut-submission`), and named Firestore database (`natcut`) inside `sprout-dev-66f08`. Existing Sprout Hosting and databases are not deployment targets.
@@ -196,7 +211,7 @@ Begin and completion are now fenced to the exact submission, event, worker, dura
 
 Session 2 completed the authorized cloud-only rollout. Both named-database indexes are ready; the private NatCut artifact bucket has narrow runtime IAM; pinned-generation upload/read passed under both service accounts; the API is deployed by immutable digest; Hosting is pinned to the verified revision; one immutable V2 ticket completed through `SimulatedPrinter`; and rollback plus candidate restoration passed without changing Sprout. Exact resource IDs and evidence are in the [cloud preview runbook](docs/runbooks/cloud-preview.md).
 
-This is not production or printer readiness. Session 3 remains blocked on generating the exact JPEG and PLT from the verified logical bundle and proving the protocol adapter in dry-run form. Any USB access or loaded-media printer write still requires separate explicit approval at that later boundary. End-to-end booth rehearsal and production hardening remain subsequent sessions.
+This is not production or printer readiness. The offline portion of Session 3 now generates exact JPEG/PLT files from verified bundle evidence and proves the protocol plan without a transport. Session 3 remains blocked at the physical boundary: USB access and one loaded-media printer write require separate explicit approval. End-to-end booth rehearsal and production hardening remain subsequent sessions.
 
 ```bash
 gcloud auth application-default login \
@@ -221,7 +236,7 @@ npm run emulators:test -- --only worker
 npm run test:e2e
 ```
 
-**Safety boundary:** the queue-first stack contains no printer job declaration, upload, print, cut, cancel, or property-mutation implementation. The simulated worker never imports the USB protocol or opens the printer. The existing hardware bridge remains read-only.
+**Safety boundary:** the queue-first worker contains no printer transport or mutation executor. The new pure printer package can generate files, declaration data, and upload frames offline, but it has no I/O transport and does not implement `PhysicalExecutor`; the simulated worker never imports it. The existing USB bridge remains read-only.
 
 ## Run the read-only bridge
 
