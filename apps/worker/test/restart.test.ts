@@ -1,6 +1,6 @@
 import { artifactReader, claimFixture, submission, verifiedClaim } from './fixtures/submission.ts';
 import { describe, expect, it, vi } from 'vitest';
-import { JobStore, recoverInterruptedJobs, startWorker, type LocalJobState } from '../src/index.ts';
+import { JobStore, recoverInterruptedJobs, SimulatedPrinter, startWorker, type LocalJobState } from '../src/index.ts';
 
 async function insertInState(store: JobStore, state: LocalJobState) {
   const claim = claimFixture('submission-' + state);
@@ -50,12 +50,13 @@ describe('restart recovery', () => {
     const claim = { submission: { ...submission('submission-validating'), publicStatus: 'next' as const }, workerId: 'mac-1', claimedAt: '2026-11-23T12:00:01.000Z' };
     store.insertClaimed(await verifiedClaim(claim));
     store.transition(claim.submission.id, 'validating', claim.claimedAt);
-    const executor = { execute: vi.fn(async () => undefined) };
+    const simulator = new SimulatedPrinter();
+    const executor = { execute: vi.fn(simulator.execute.bind(simulator)) };
     const cloud = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim),
+      recoverClaim: vi.fn().mockResolvedValue(claim),
       claimNextSubmission: vi.fn(),
       beginExecution: vi.fn().mockResolvedValue('acquired'),
-      updatePublicStatus: vi.fn(),
+      completeExecution: vi.fn().mockResolvedValue('committed'),
     };
     const result = await startWorker({
       workerId: 'mac-1', artifactReader, cloud, store, executor, now: () => '2026-11-23T12:05:00.000Z',
@@ -63,6 +64,43 @@ describe('restart recovery', () => {
     expect(executor.execute).toHaveBeenCalledTimes(1);
     expect(cloud.claimNextSubmission).not.toHaveBeenCalled();
     expect(result).toEqual({ kind: 'completed', submissionId: 'submission-validating' });
+    expect(store.getState('submission-validating')).toBe('ready');
+    store.close();
+  });
+
+  it('reconciles when an executor returns without an acknowledged ready transition', async () => {
+    const store = new JobStore(':memory:');
+    const claim = claimFixture('submission-incomplete-executor');
+    const cloud = {
+      recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(),
+      beginExecution: vi.fn().mockResolvedValue('acquired'), completeExecution: vi.fn(),
+    };
+    const result = await startWorker({
+      workerId: claim.workerId, artifactReader, cloud, store, executor: { execute: vi.fn(async () => undefined) },
+    });
+    expect(result).toEqual({ kind: 'needs_reconciliation', submissionId: claim.submission.id });
+    expect(store.getState(claim.submission.id)).toBe('needs_reconciliation');
+    expect(cloud.completeExecution).not.toHaveBeenCalled();
+    store.close();
+  });
+
+  it('keeps an orphaned reconciliation journal ahead of the next cloud ticket', async () => {
+    const store = new JobStore(':memory:');
+    const orphan = claimFixture('submission-orphan');
+    store.insertClaimed(await verifiedClaim(orphan));
+    store.transition(orphan.submission.id, 'needs_reconciliation', orphan.claimedAt, 'Ambiguous execution.');
+    const following = claimFixture('submission-following');
+    const cloud = {
+      recoverClaim: vi.fn().mockResolvedValue(null),
+      claimNextSubmission: vi.fn().mockResolvedValue(following),
+      beginExecution: vi.fn(), completeExecution: vi.fn(),
+    };
+    const result = await startWorker({
+      workerId: 'mac-1', artifactReader, cloud, store, executor: { execute: vi.fn() },
+      now: () => '2026-11-23T12:05:00.000Z',
+    });
+    expect(result).toEqual({ kind: 'needs_reconciliation', submissionId: orphan.submission.id });
+    expect(cloud.claimNextSubmission).not.toHaveBeenCalled();
     store.close();
   });
 });

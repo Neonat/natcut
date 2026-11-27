@@ -18,6 +18,7 @@ export type UploadPhase = 'none' | 'cut' | 'image' | 'complete';
 export type LocalPrintJob = {
   id: string;
   submissionId: string;
+  eventId: string | null;
   queueNumber: number;
   manifestHash: string;
   rasterHash: string;
@@ -27,6 +28,7 @@ export type LocalPrintJob = {
   colorSha256: string | null;
   cutMaskSha256: string | null;
   bundleSha256: string | null;
+  completionAcknowledgedAt: string | null;
   printProfileSnapshotJson: string;
   geometryReportJson: string;
   jpegPath: string;
@@ -54,8 +56,9 @@ export type PendingPublicStatus = {
 };
 
 const columns = [
-  'id', 'submissionId', 'queueNumber', 'manifestHash', 'rasterHash',
+  'id', 'submissionId', 'eventId', 'queueNumber', 'manifestHash', 'rasterHash',
   'artifactReceiptJson', 'artifactBytes', 'artifactVerifiedAt', 'colorSha256', 'cutMaskSha256', 'bundleSha256',
+  'completionAcknowledgedAt',
   'printProfileSnapshotJson', 'geometryReportJson', 'jpegPath', 'jpegSha256', 'jpegBytes',
   'pltPath', 'pltSha256', 'pltBytes', 'state', 'printerJobId', 'uploadPhase',
   'lastPrinterState', 'lastPrinterSubState', 'lastAlertsJson', 'acceptedAt', 'stateChangedAt', 'lastError',
@@ -106,10 +109,10 @@ export class JobStore {
   }
 
   private migrate() {
-    const version = this.database.pragma('user_version', { simple: true });
-    if (version === 1) return;
-    if (version !== 0) throw new Error('Unsupported worker journal version.');
-    this.database.exec(`
+    let version = this.database.pragma('user_version', { simple: true }) as number;
+    if (version === 3) return;
+    if (version !== 0 && version !== 1 && version !== 2) throw new Error('Unsupported worker journal version.');
+    if (version === 0) this.database.exec(`
       CREATE TABLE IF NOT EXISTS local_print_jobs (
         id TEXT PRIMARY KEY,
         submissionId TEXT NOT NULL UNIQUE,
@@ -160,10 +163,20 @@ export class JobStore {
       CREATE TABLE artifact_holds (submissionId TEXT PRIMARY KEY, heldAt TEXT NOT NULL, reason TEXT NOT NULL);
       PRAGMA user_version = 1;
     `);
+    if (version === 0) version = 1;
     const guardColumns = this.database.pragma('table_info(execution_guard)') as Array<{ name: string }>;
     if (!guardColumns.some((column) => column.name === 'processIdentity')) {
       this.database.exec("ALTER TABLE execution_guard ADD COLUMN processIdentity TEXT NOT NULL DEFAULT ''");
     }
+    if (version === 1) this.database.exec(`
+      ALTER TABLE local_print_jobs ADD COLUMN eventId TEXT;
+      PRAGMA user_version = 2;
+    `);
+    if (version === 1) version = 2;
+    if (version === 2) this.database.exec(`
+      ALTER TABLE local_print_jobs ADD COLUMN completionAcknowledgedAt TEXT;
+      PRAGMA user_version = 3;
+    `);
   }
 
   private insert(job: LocalPrintJob) {
@@ -178,6 +191,7 @@ export class JobStore {
     this.insert({
       id: `local-${submission.id}`,
       submissionId: submission.id,
+      eventId: submission.eventId,
       queueNumber: submission.queueNumber,
       manifestHash: submission.manifestHash,
       rasterHash: submission.validation.rasterHash,
@@ -187,6 +201,7 @@ export class JobStore {
       colorSha256: descriptor.colorSha256,
       cutMaskSha256: descriptor.maskSha256,
       bundleSha256: descriptor.bundleSha256,
+      completionAcknowledgedAt: null,
       printProfileSnapshotJson: JSON.stringify(descriptor.profile),
       geometryReportJson: JSON.stringify(submission.validation),
       jpegPath: '', jpegSha256: '', jpegBytes: 0,
@@ -216,6 +231,18 @@ export class JobStore {
     }).immediate();
   }
 
+  holdArtifactWhileGuarded(submissionId: string, heldAt: string, reason: string, ownerToken: string): 'needs_reconciliation' {
+    return this.database.transaction(() => {
+      const ownsGuard = this.database.prepare(
+        'SELECT 1 FROM execution_guard WHERE singleton = 1 AND ownerToken = ?',
+      ).get(ownerToken);
+      if (!ownsGuard) throw new Error('Completion recovery no longer owns the execution guard.');
+      this.database.prepare('INSERT OR IGNORE INTO artifact_holds VALUES (?, ?, ?)').run(submissionId, heldAt, reason);
+      if (this.getState(submissionId)) this.transition(submissionId, 'needs_reconciliation', heldAt, reason);
+      return 'needs_reconciliation' as const;
+    }).immediate();
+  }
+
   ensureClaimed(claim: VerifiedClaim): 'available' | 'busy' | 'needs_reconciliation' {
     return this.database.transaction(() => {
       // Observe ownership and classify the journal in the same SQLite transaction.
@@ -236,7 +263,8 @@ export class JobStore {
         return 'available';
       }
       const { receipt, bytes } = claim.artifact;
-      if (existing.manifestHash !== claim.submission.manifestHash || existing.queueNumber !== claim.submission.queueNumber ||
+      if (existing.eventId !== claim.submission.eventId || existing.manifestHash !== claim.submission.manifestHash ||
+          existing.queueNumber !== claim.submission.queueNumber ||
           existing.artifactReceiptJson !== JSON.stringify(receipt) || !existing.artifactVerifiedAt ||
           !Buffer.isBuffer(existing.artifactBytes) || !existing.artifactBytes.equals(bytes) ||
           existing.colorSha256 !== receipt.descriptor.colorSha256 || existing.cutMaskSha256 !== receipt.descriptor.maskSha256 ||
@@ -310,6 +338,23 @@ export class JobStore {
     return this.database.prepare('SELECT * FROM local_print_jobs ORDER BY queueNumber, acceptedAt').all() as LocalPrintJob[];
   }
 
+  firstUnresolvedLocalJob(): LocalPrintJob | null {
+    return (this.database.prepare(`SELECT * FROM local_print_jobs
+      WHERE NOT (state = 'ready' AND completionAcknowledgedAt IS NOT NULL)
+      ORDER BY queueNumber, acceptedAt LIMIT 1`).get() as LocalPrintJob | undefined) ?? null;
+  }
+
+  listBlockingSubmissionIds(): string[] {
+    return this.database.prepare(`
+      SELECT submissionId FROM artifact_holds
+      UNION
+      SELECT submissionId FROM public_status_outbox
+      UNION
+      SELECT submissionId FROM local_print_jobs WHERE state IN ('failed', 'needs_reconciliation')
+      ORDER BY submissionId
+    `).pluck().all() as string[];
+  }
+
   stagePublicStatus(submissionId: string, status: 'printing' | 'ready', updatedAt: string) {
     this.database.prepare(`
       INSERT INTO public_status_outbox (submissionId, status, updatedAt)
@@ -322,9 +367,19 @@ export class JobStore {
     return this.database.prepare('SELECT * FROM public_status_outbox ORDER BY id').all() as PendingPublicStatus[];
   }
 
-  clearPendingPublicStatus(pending: PendingPublicStatus) {
-    this.database.prepare(`DELETE FROM public_status_outbox
-      WHERE id = @id AND submissionId = @submissionId AND status = @status AND updatedAt = @updatedAt`).run(pending);
+  acknowledgeCompletion(pending: PendingPublicStatus): boolean {
+    return this.database.transaction(() => {
+      const job = this.getBySubmissionId(pending.submissionId);
+      if (!job || job.state !== 'ready' || job.stateChangedAt !== pending.updatedAt || job.completionAcknowledgedAt) return false;
+      const cleared = this.database.prepare(`DELETE FROM public_status_outbox
+        WHERE id = @id AND submissionId = @submissionId AND status = 'ready' AND updatedAt = @updatedAt`).run(pending);
+      if (cleared.changes !== 1) return false;
+      const acknowledged = this.database.prepare(`UPDATE local_print_jobs SET completionAcknowledgedAt = ?
+        WHERE submissionId = ? AND state = 'ready' AND stateChangedAt = ? AND completionAcknowledgedAt IS NULL`
+      ).run(pending.updatedAt, pending.submissionId, pending.updatedAt);
+      if (acknowledged.changes !== 1) throw new Error('Completion acknowledgement lost its journal transition.');
+      return true;
+    }).immediate();
   }
 
   transitionAndStagePublicStatus(
@@ -364,7 +419,7 @@ export class JobStore {
     this.database.prepare('DELETE FROM execution_guard WHERE singleton = 1 AND ownerToken = ?').run(ownerToken);
   }
 
-  private getExecutionToken(submissionId: string): string | undefined {
+  getExecutionToken(submissionId: string): string | undefined {
     return this.database.prepare('SELECT executionToken FROM job_execution_identity WHERE submissionId = ?').pluck().get(submissionId) as string | undefined;
   }
 

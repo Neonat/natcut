@@ -1,7 +1,7 @@
 import type { Firestore, Transaction } from 'firebase-admin/firestore';
 import { localJobStates, type JobStore, type LocalJobState } from './job-store.ts';
 
-type DeskStatus = 'queued' | 'next' | 'printing' | 'ready';
+type DeskStatus = 'queued' | 'next' | 'printing' | 'ready' | 'blocked';
 export type QueueCursors = { queued: number; ready: number };
 export type OperatorQueueRow = {
   submissionId: string;
@@ -13,6 +13,7 @@ export type OperatorQueueRow = {
 };
 
 function notice(state: LocalJobState | null, status: DeskStatus, hasWarning: boolean) {
+  if (status === 'blocked') return 'Local completion evidence needs reconciliation. This ticket is on hold.';
   if (state === 'failed') return 'Simulation failed. This ticket is on hold.';
   if (state === 'needs_reconciliation') return 'Execution needs reconciliation. This ticket is on hold.';
   if (state === 'ready' && status === 'printing') return 'Simulation complete. Ready status is waiting to publish.';
@@ -58,8 +59,27 @@ export function createOperatorQueue(firestore: Firestore, eventId: string, store
           page(transaction, 'queued', cursors.queued), page(transaction, 'next', 0),
           page(transaction, 'printing', 0), page(transaction, 'ready', cursors.ready),
         ]);
+        const rows = [...queued.rows, ...next.rows, ...printing.rows, ...ready.rows];
+        const visible = new Set(rows.map((row) => row.submissionId));
+        const blockingIds = store.listBlockingSubmissionIds().filter((submissionId) => !visible.has(submissionId));
+        const blockers = await Promise.all(blockingIds.map(async (submissionId): Promise<OperatorQueueRow> => {
+          const snapshot = await transaction.get(submissions.doc(submissionId));
+          const local = store.getBySubmissionId(submissionId);
+          const value = snapshot.exists ? snapshot.get('queueNumber') : local?.queueNumber;
+          const queueNumber = Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
+          const state = store.hasArtifactHold(submissionId) ? 'needs_reconciliation' : local?.state;
+          const localState = state && localJobStates.includes(state) ? state : null;
+          return {
+            submissionId,
+            queueNumber,
+            publicStatus: 'blocked',
+            localState,
+            onHold: true,
+            notice: notice(localState, 'blocked', false),
+          };
+        }));
         return {
-          rows: [...queued.rows, ...next.rows, ...printing.rows, ...ready.rows].sort((a, b) => (a.queueNumber ?? 0) - (b.queueNumber ?? 0)),
+          rows: [...rows, ...blockers].sort((a, b) => (a.queueNumber ?? 0) - (b.queueNumber ?? 0)),
           next: { queued: queued.next, ready: ready.next },
         };
       }, { readOnly: true });

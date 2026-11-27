@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ArtifactIntegrityError, type ArtifactReader } from '@natcut/artifacts';
 import { verifyClaim, verifyJournalArtifact } from './artifact-verification.ts';
-import { InvalidClaimError, type CloudQueue } from './cloud-queue.ts';
+import { InvalidClaimError, type CloudQueue, type CompletionEvidence } from './cloud-queue.ts';
 import { safelyExecutableStates, type JobStore, type LocalJobState, type LocalPrintJob } from './job-store.ts';
 import type { PhysicalExecutor } from './simulated-printer.ts';
 
@@ -23,7 +23,7 @@ export type WorkerDependencies = {
   now?: () => string;
 };
 
-export type PreparedJob = Pick<LocalPrintJob, 'submissionId' | 'queueNumber' | 'manifestHash' | 'geometryReportJson' | 'artifactReceiptJson'>;
+export type PreparedJob = Pick<LocalPrintJob, 'submissionId' | 'eventId' | 'queueNumber' | 'manifestHash' | 'geometryReportJson' | 'artifactReceiptJson'>;
 
 class ExecutionFenceError extends Error {
   constructor(readonly outcome: 'waiting_for_cloud' | 'needs_reconciliation') {
@@ -33,22 +33,98 @@ class ExecutionFenceError extends Error {
   }
 }
 
-function pendingConflict(store: JobStore, allowedReadyFor?: string): WorkerResult | null {
+function pendingConflict(
+  store: JobStore,
+  allowedReadyFor?: string,
+): { kind: 'needs_reconciliation'; submissionId: string } | null {
   const conflict = store.listPendingPublicStatuses().find(intent =>
     intent.submissionId !== allowedReadyFor || intent.status !== 'ready');
   return conflict ? { kind: 'needs_reconciliation', submissionId: conflict.submissionId } : null;
 }
 
-// Called only after this execution acquired the printing fence, or recovery
-// verified the current worker's printing claim, local token, receipt and bytes.
-async function publishVerifiedReady(store: JobStore, cloud: CloudQueue, submissionId: string): Promise<WorkerResult | null> {
+// Rebuild completion proof only from the durable ready transition, verified
+// journal bytes and the token created before this execution began.
+async function completionEvidence(
+  store: JobStore,
+  workerId: string,
+  pending: ReturnType<JobStore['listPendingPublicStatuses']>[number],
+): Promise<CompletionEvidence | null> {
+  const { submissionId } = pending;
+  const job = store.getBySubmissionId(submissionId);
+  const executionToken = store.getExecutionToken(submissionId);
+  if (!job || job.state !== 'ready' || job.completionAcknowledgedAt || job.stateChangedAt !== pending.updatedAt ||
+      !isIsoTimestamp(pending.updatedAt) || !job.eventId || !executionToken) return null;
+  try {
+    return {
+      submissionId,
+      eventId: job.eventId,
+      workerId,
+      executionToken,
+      ...await verifyJournalArtifact(job, job.artifactReceiptJson),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isIsoTimestamp(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString() === value;
+}
+
+function markCompletionReconciliation(
+  store: JobStore,
+  submissionId: string,
+  changedAt: string,
+  reason: string,
+  guardToken?: string,
+) {
+  if (store.getBySubmissionId(submissionId)) {
+    store.transition(submissionId, 'needs_reconciliation', changedAt, reason);
+  } else {
+    if (guardToken) store.holdArtifactWhileGuarded(submissionId, changedAt, reason, guardToken);
+    else store.holdArtifact(submissionId, changedAt, reason);
+  }
+}
+
+async function publishVerifiedReady(
+  store: JobStore,
+  cloud: CloudQueue,
+  workerId: string,
+  submissionId: string,
+  guardToken?: string,
+): Promise<WorkerResult | null> {
   const conflict = pendingConflict(store, submissionId);
-  if (conflict) return conflict;
+  if (conflict) {
+    const blocked = store.listPendingPublicStatuses().find(intent => intent.submissionId === conflict.submissionId);
+    if (!blocked) throw new Error('Pending completion conflict disappeared from the durable outbox.');
+    markCompletionReconciliation(
+      store,
+      conflict.submissionId,
+      blocked.updatedAt,
+      'Multiple unresolved completion intents require operator reconciliation.',
+      guardToken,
+    );
+    return conflict;
+  }
   const pending = store.listPendingPublicStatuses().find(intent => intent.submissionId === submissionId && intent.status === 'ready');
   if (!pending) return null;
+  const evidence = await completionEvidence(store, workerId, pending);
+  if (!evidence) {
+    markCompletionReconciliation(store, submissionId, pending.updatedAt, 'Completion intent lacks exact verified execution evidence.', guardToken);
+    return { kind: 'needs_reconciliation', submissionId };
+  }
   try {
-    await cloud.updatePublicStatus(submissionId, 'ready', pending.updatedAt);
-    store.clearPendingPublicStatus(pending);
+    const outcome = await cloud.completeExecution(evidence, pending.updatedAt);
+    if (outcome !== 'committed' && outcome !== 'confirmed') {
+      markCompletionReconciliation(store, submissionId, pending.updatedAt, 'Cloud completion fence rejected the local execution evidence.', guardToken);
+      return { kind: 'needs_reconciliation', submissionId };
+    }
+    if (!store.acknowledgeCompletion(pending)) {
+      markCompletionReconciliation(store, submissionId, pending.updatedAt, 'Completion acknowledgement did not match the durable ready transition.', guardToken);
+      return { kind: 'needs_reconciliation', submissionId };
+    }
     return null;
   } catch {
     return { kind: 'waiting_for_cloud', submissionId };
@@ -72,22 +148,51 @@ export async function prepareNextWorkerJob(
 ): Promise<{ kind: 'prepared'; job: PreparedJob } | WorkerResult> {
   const now = deps.now ?? (() => new Date().toISOString());
   try {
-    // A ready write may commit and release the slot before its response reaches the worker.
-    // A terminal cloud observation permits clearing only that local delivery intent.
-    for (const pending of deps.store.listPendingPublicStatuses()) {
-      if (pending.status !== 'ready') continue;
-      let acknowledged;
-      try {
-        acknowledged = await deps.cloud.isReadyAcknowledged(pending.submissionId);
-      } catch {
-        return { kind: 'waiting_for_cloud', submissionId: pending.submissionId };
+    // Completion retries carry the same verified journal and execution identity. A committed
+    // response may be lost, but only the exact persisted cloud completion fence confirms it.
+    const pendingIntents = deps.store.listPendingPublicStatuses();
+    if (pendingIntents.length > 0) {
+      const recoveryToken = randomUUID();
+      if (!deps.store.tryAcquireExecutionGuard(recoveryToken, process.pid)) {
+        return { kind: 'busy', submissionId: pendingIntents[0]!.submissionId };
       }
-      if (acknowledged) deps.store.clearPendingPublicStatus(pending);
+      try {
+        for (const pending of pendingIntents) {
+          if (pending.status !== 'ready') {
+            markCompletionReconciliation(
+              deps.store,
+              pending.submissionId,
+              pending.updatedAt,
+              'Unsupported legacy status intent requires operator reconciliation.',
+              recoveryToken,
+            );
+            return { kind: 'needs_reconciliation', submissionId: pending.submissionId };
+          }
+          const result = await publishVerifiedReady(deps.store, deps.cloud, deps.workerId, pending.submissionId, recoveryToken);
+          if (result) return result;
+        }
+      } finally {
+        deps.store.releaseExecutionGuard(recoveryToken);
+      }
     }
     for (const method of ['recoverClaim', 'claimNextSubmission'] as const) {
       if (method === 'claimNextSubmission') {
         const conflict = pendingConflict(deps.store);
         if (conflict) return conflict;
+        const unresolved = deps.store.firstUnresolvedLocalJob();
+        if (unresolved) {
+          if (unresolved.state !== 'needs_reconciliation' && unresolved.state !== 'failed') {
+            deps.store.transition(
+              unresolved.submissionId,
+              'needs_reconciliation',
+              now(),
+              'Local journal has no matching cloud slot and blocks the next claim.',
+            );
+          }
+          return { kind: 'needs_reconciliation', submissionId: unresolved.submissionId };
+        }
+        const held = deps.store.listBlockingSubmissionIds()[0];
+        if (held) return { kind: 'needs_reconciliation', submissionId: held };
       }
       const claim = await deps.cloud[method](deps.workerId);
       if (!claim) continue;
@@ -114,13 +219,13 @@ export async function prepareNextWorkerJob(
       if (safelyExecutableStates.has(job.state)) {
         const pending = pendingConflict(deps.store);
         if (pending) return pending;
-        const { queueNumber, manifestHash, geometryReportJson, artifactReceiptJson } = job;
-        return { kind: 'prepared', job: { submissionId, queueNumber, manifestHash, geometryReportJson, artifactReceiptJson } };
+        const { eventId, queueNumber, manifestHash, geometryReportJson, artifactReceiptJson } = job;
+        return { kind: 'prepared', job: { submissionId, eventId, queueNumber, manifestHash, geometryReportJson, artifactReceiptJson } };
       }
       if (method !== 'recoverClaim' || job.state !== 'ready') return { kind: 'needs_reconciliation', submissionId };
       if (claim.submission.publicStatus !== 'printing') return { kind: 'needs_reconciliation', submissionId };
       deps.store.stagePublicStatus(submissionId, 'ready', job.stateChangedAt);
-      const unpublished = await publishVerifiedReady(deps.store, deps.cloud, submissionId);
+      const unpublished = await publishVerifiedReady(deps.store, deps.cloud, deps.workerId, submissionId);
       if (unpublished) return unpublished;
     }
     return { kind: 'idle' };
@@ -146,7 +251,10 @@ export async function runLocalJob(
       return { kind: 'needs_reconciliation', submissionId: job.submissionId };
     }
     if (authoritativeJob.state === 'ready') {
-      return { kind: 'completed', submissionId: job.submissionId };
+      if (authoritativeJob.completionAcknowledgedAt) return { kind: 'completed', submissionId: job.submissionId };
+      return deps.store.listPendingPublicStatuses().some(intent => intent.submissionId === job.submissionId && intent.status === 'ready')
+        ? { kind: 'waiting_for_cloud', submissionId: job.submissionId }
+        : { kind: 'needs_reconciliation', submissionId: job.submissionId };
     }
     if (!safelyExecutableStates.has(authoritativeJob.state)) {
       return { kind: 'needs_reconciliation', submissionId: job.submissionId };
@@ -155,7 +263,8 @@ export async function runLocalJob(
     if (pending) return pending;
     let evidence;
     try {
-      if (job.manifestHash !== authoritativeJob.manifestHash || job.queueNumber !== authoritativeJob.queueNumber ||
+      if (job.eventId !== authoritativeJob.eventId || job.manifestHash !== authoritativeJob.manifestHash ||
+          job.queueNumber !== authoritativeJob.queueNumber ||
           job.geometryReportJson !== authoritativeJob.geometryReportJson) throw new ArtifactIntegrityError('Prepared journal changed.');
       evidence = await verifyJournalArtifact(authoritativeJob, job.artifactReceiptJson);
     } catch {
@@ -164,6 +273,7 @@ export async function runLocalJob(
     }
     if (deps.signal?.aborted) return { kind: 'waiting_for_cloud', submissionId: job.submissionId };
     let staged = publicStatusFor(authoritativeJob.state);
+    let completionPending: WorkerResult | null = null;
     try {
       await deps.executor.execute(authoritativeJob, async (state, changedAt) => {
         const nextPublic = publicStatusFor(state);
@@ -192,12 +302,27 @@ export async function runLocalJob(
           if (staged !== 'printing') throw new ExecutionFenceError('needs_reconciliation');
           deps.store.transitionAndStagePublicStatus(job.submissionId, state, changedAt, 'ready');
           staged = 'ready';
-          await publishVerifiedReady(deps.store, deps.cloud, job.submissionId);
+          const completion = await publishVerifiedReady(deps.store, deps.cloud, deps.workerId, job.submissionId);
+          if (completion?.kind === 'needs_reconciliation') throw new ExecutionFenceError('needs_reconciliation');
+          if (completion?.kind === 'waiting_for_cloud') completionPending = completion;
         } else {
           deps.store.transition(job.submissionId, state, changedAt);
         }
       });
-      return { kind: 'completed', submissionId: job.submissionId };
+      if (completionPending) return completionPending;
+      const finished = deps.store.getBySubmissionId(job.submissionId);
+      if (finished?.state === 'ready' && finished.completionAcknowledgedAt) {
+        return { kind: 'completed', submissionId: job.submissionId };
+      }
+      if (finished?.state !== 'needs_reconciliation') {
+        deps.store.transition(
+          job.submissionId,
+          'needs_reconciliation',
+          now(),
+          'Executor returned without an acknowledged ready completion.',
+        );
+      }
+      return { kind: 'needs_reconciliation', submissionId: job.submissionId };
     } catch (cause) {
       if (cause instanceof ExecutionFenceError) {
         if (cause.outcome === 'needs_reconciliation') {

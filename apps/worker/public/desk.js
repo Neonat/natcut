@@ -1,5 +1,5 @@
 const byId = (id) => document.getElementById(id);
-const labels = { queued: 'Queued', next: 'Next', printing: 'Simulating', ready: 'Ready for simulated pickup' };
+const labels = { queued: 'Queued', next: 'Next', printing: 'Simulating', ready: 'Ready for simulated pickup', blocked: 'On hold' };
 const errors = {
   SIMULATOR_BUSY: 'A worker command is in progress.',
   JOB_ALREADY_CLAIMED: 'A ticket is already claimed.',

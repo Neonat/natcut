@@ -120,7 +120,7 @@ No matches is the expected result.
 
 ## Configure the V2 Mac simulator for an authorized rollout
 
-Keep production consumption stopped until the authorized storage smoke, token-fenced completion and reconciliation rollout. The dedicated worker service account needs `storage.objects.get` on the isolated artifact bucket. The booth Mac uses local ADC impersonation.
+Keep production consumption stopped until Session 2 completes the authorized bucket/IAM and named-index verification, isolated deployment, pinned-generation smoke, simulator smoke, and rollback proof. The dedicated worker service account needs `storage.objects.get` on the isolated artifact bucket. The booth Mac uses local ADC impersonation.
 
 ```bash
 gcloud auth application-default login \
@@ -136,7 +136,11 @@ npm run worker:cloud:sim
 
 The worker runs the simulator only. It verifies new and recovered V2 claims against the exact pinned object and persists verified bytes in the journal. Storage authentication, network and deadline failures leave the same claim waiting. Legacy claims, unknown versions and missing or corrupt evidence hold the queue head for reconciliation. Stop with `Ctrl-C` and retain `.local/natcut-worker.sqlite` across restarts.
 
-Restart with the same worker ID. Publishing a pending ready update requires the matching cloud printing claim, verified journal and execution token. If the update committed before its response was lost, the worker confirms that the ticket is already ready or collected and that its slot was released, then clears that local intent. An unresolved intent for a different worker or a completed journal whose cloud ticket is still next requires reconciliation before the queue can advance.
+Restart with the same worker ID and the same durable SQLite journal. Completion carries the submission, event, worker, durable execution token, manifest, validation, and exact artifact receipt/profile. The transaction advances only the matching current `printing` execution, stores those facts as `completionFence`, and releases the slot atomically.
+
+If that transaction committed before its response was lost, the worker reports `waiting_for_cloud` and retries the same evidence. It clears the local intent and records its durable local acknowledgement only when Firestore returns `committed` or `confirmed` for an identical `ready` or `collected` completion whose slot is absent or validly belongs to a different ticket. A stale worker or token, changed receipt generation/profile, mismatched validation, malformed timestamp or slot, missing legacy journal evidence, local ready with cloud `next`, or any other fenced outcome remains `needs_reconciliation`; do not delete the journal, edit Firestore, or start the following ticket.
+
+Restart boundaries are deliberate: a crash before begin may resume from a verified `next` claim; a crash after begin but before the local phase commit, during any simulated physical phase, or before a provable completion remains held. A transport failure before completion commit retries the same outbox intent. A lost response after commit confirms the stored fence and never re-executes simulation. Unresolved local journals, holds, and legacy intents block later tickets even if the cloud slot is missing, and they remain visible as on-hold rows on the operator desk.
 
 ## Smoke checks
 

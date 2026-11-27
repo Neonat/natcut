@@ -15,7 +15,7 @@ This design does not define JPEG, PLT, registration, printer commands, or physic
 5. The first tranche uses a create-only local artifact store with bounded, verified reads. It proves the artifact contract without pretending that local files are accepted cloud evidence.
 6. New acceptances publish a create-only object, verify the returned generation and then commit its receipt with the submission, counter and idempotency binding in one Firestore transaction.
 7. Version 2 records require an artifact receipt. Unversioned records remain readable as legacy records. An unknown version or inconsistent receipt fails decoding.
-8. Worker execution, token-fenced finish writes, operator holds, and simulation-only reconciliation form a later migration-tested tranche. No uncertain operation may be retried automatically.
+8. Worker execution and completion are separate token-fenced transactions. Completion stores immutable evidence and releases the slot only from the exact current `printing` execution. No uncertain physical outcome may be retried automatically.
 9. `firebase.json` stays Hosting-only. A pure offline checker validates the checked-in index specification and an explicitly supplied named-database inventory. It performs no deployment or account access.
 
 ## Logical bundle V1
@@ -64,14 +64,26 @@ The local emulator runtime uses its private local create-only store, whose sole 
 
 The simulator validates each new or recovered V2 submission and recomputes its canonical manifest hash. Its read-only storage adapter requests the receipt's exact generation at the digest-derived path. The cloud request has a 15-second deadline and the worker verification attempt has a 30-second deadline. The worker retains the cloud slot during a retryable storage failure. Missing, inconsistent, unsupported or legacy evidence leaves the head held for reconciliation.
 
-The worker journals the receipt, logical bytes, component and bundle hashes, verification time and immutable profile snapshot in one SQLite insert. Migration preserves historical rows and leaves their new evidence columns null. Recovery compares the journal to freshly verified cloud evidence. Immediately before simulation the worker rehashes the local payload against the prepared receipt under its execution guard. The cloud begin transaction compares the receipt, validation and canonical manifest identity again before marking the ticket printing.
+The worker journals the event, receipt, logical bytes, component and bundle hashes, verification time and immutable profile snapshot in one SQLite insert. Migration preserves historical rows and leaves their new evidence columns null. Recovery compares the journal to freshly verified cloud evidence. Immediately before simulation the worker rehashes the local payload against the prepared receipt under its execution guard. The cloud begin transaction rejects any prior execution/completion metadata, compares the receipt, validation and canonical manifest identity again, and stores that exact evidence in the execution lease before marking the ticket printing.
+
+## Completion fencing and reconciliation
+
+The worker has no generic ready/status writer and no terminal-status acknowledgement shortcut. Its only completion operation carries the submission ID, event ID, worker ID, durable execution token, canonical manifest hash, complete geometry validation, and exact artifact receipt including generation and immutable print-profile snapshot.
+
+The Firestore completion transaction advances `printing` to `ready` only when all of that evidence matches the current V2 submission, its recomputed manifest hash, the evidence captured by its execution lease, and the event's active worker slot. It also rejects malformed completion timestamps. In the same transaction it stores a `completionFence` containing that evidence and deletes the slot. Any missing, malformed, stale-worker, stale-token, different-generation, different-profile, or different-validation evidence returns `fenced` without changing the submission or slot.
+
+Completion is idempotent across a committed write whose response was lost. An identical retry against `ready` or `collected` returns `confirmed` only when the stored submission identity and `completionFence` still match and the completed submission no longer owns the event slot. The slot must be absent or a complete, valid slot for a different submission. The retry does not rewrite timestamps or delete another execution's slot. Different evidence is fenced.
+
+The SQLite outbox and verified journal are the durable retry boundary. A transport failure returns `waiting_for_cloud` and leaves the exact ready intent pending; it is never reported as completed. Only a committed or confirmed completion atomically clears that intent and records `completionAcknowledgedAt` against the same local ready transition. A `fenced` result, malformed or legacy outbox entry, an outbox entry without a V2 journal, missing event or token evidence, a recovered printing lease with a different token, a crash after begin but before its local phase commit, an executor that returns without ready, or a restart from a simulated physical phase enters `needs_reconciliation`.
+
+Unacknowledged local work and artifact holds block every later cloud claim even if the cloud slot is missing. Ready-intent recovery is serialized by the same SQLite execution guard as simulation, so a stale worker cannot rewrite an active executor's journal. The operator desk adds local blocker rows even when the corresponding cloud ticket is collected or missing from the paginated queue. Safe pre-begin phases may resume only while cloud state remains `next`; local execution is never inferred from a terminal public status alone.
 
 ## Later tranches
 
 1. Verify the production bucket, IAM and pinned upload/read behavior during an authorized storage smoke.
-2. Narrow begin/finish cloud writes around event, slot, claim, and execution token.
-3. Run one clearly labelled simulator scheduler with a loopback operator desk. Add a simulation-only terminal reconciliation decision only after finish-versus-close and crash recovery tests pass.
-4. After explicit authorization, provision IAM and indexes, verify production readiness, and deploy. Physical artifact generation and USB execution remain separate.
+2. During an authorized rollout, verify the named-database indexes, isolated deployment, pinned-generation storage behavior, simulator smoke, and rollback path without printer access.
+3. Define an operator-authorized resolution command for truly ambiguous physical outcomes only after a physical adapter can report printer evidence. It must never synthesize success from public status alone.
+4. Physical artifact generation and USB execution remain separately approved work after cloud readiness.
 
 ## Safety and rollout invariants
 
@@ -79,6 +91,9 @@ The worker journals the receipt, logical bytes, component and bundle hashes, ver
 - No production resource is created, changed, or deleted.
 - An accepted queue record must never point at an unverified or incomplete object.
 - A digest mismatch is corruption, not a reason to regenerate accepted evidence.
+- Only the exact printing execution may publish ready and release its event slot.
+- An identical completion retry may confirm ready or collected; stale or different evidence never releases a slot.
+- Ambiguous local/cloud outcomes hold the queue head for operator reconciliation.
 - Old mask hashes are never relabelled as color hashes.
 - Emulator success is not evidence that a production composite index is ready.
 - Existing Sprout Hosting, databases, and other resources remain out of scope.

@@ -18,8 +18,8 @@ describe('simulated worker', () => {
     delete claim.submission.recordVersion;
     delete claim.submission.artifact;
     const cloud = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(),
-      beginExecution: vi.fn(), updatePublicStatus: vi.fn(),
+      recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(),
+      beginExecution: vi.fn(), completeExecution: vi.fn(),
     };
     const store = new JobStore(':memory:');
     const executor = { execute: vi.fn() };
@@ -50,8 +50,8 @@ describe('simulated worker', () => {
         return { receipt, bytes: new Uint8Array(1) };
       });
       const cloud = {
-        isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValueOnce(null).mockResolvedValue(claim), claimNextSubmission: vi.fn().mockResolvedValue(claim),
-        beginExecution: vi.fn(), updatePublicStatus: vi.fn(),
+        recoverClaim: vi.fn().mockResolvedValueOnce(null).mockResolvedValue(claim), claimNextSubmission: vi.fn().mockResolvedValue(claim),
+        beginExecution: vi.fn(), completeExecution: vi.fn(),
       };
       const store = new JobStore(':memory:');
       const executor = { execute: vi.fn() };
@@ -73,8 +73,8 @@ describe('simulated worker', () => {
   it('retries the same cloud claim after an unavailable artifact read', async () => {
     const claim = claimed();
     const cloud = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValueOnce(null).mockResolvedValue(claim), claimNextSubmission: vi.fn().mockResolvedValue(claim),
-      beginExecution: vi.fn().mockResolvedValue('acquired'), updatePublicStatus: vi.fn(),
+      recoverClaim: vi.fn().mockResolvedValueOnce(null).mockResolvedValue(claim), claimNextSubmission: vi.fn().mockResolvedValue(claim),
+      beginExecution: vi.fn().mockResolvedValue('acquired'), completeExecution: vi.fn().mockResolvedValue('committed'),
     };
     const store = new JobStore(':memory:');
     const execute = vi.fn(new SimulatedPrinter().execute.bind(new SimulatedPrinter()));
@@ -95,10 +95,10 @@ describe('simulated worker', () => {
   it('persists the exact phase order and publishes only visitor-facing states', async () => {
     const claim = claimed();
     const cloud: CloudQueue = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(null),
+      recoverClaim: vi.fn().mockResolvedValue(null),
       claimNextSubmission: vi.fn().mockResolvedValueOnce(claim),
       beginExecution: vi.fn().mockResolvedValue('acquired'),
-      updatePublicStatus: vi.fn().mockResolvedValue(undefined),
+      completeExecution: vi.fn().mockResolvedValue('committed'),
     };
     const store = new JobStore(':memory:');
     let tick = 0;
@@ -127,7 +127,10 @@ describe('simulated worker', () => {
     expect(cloud.beginExecution).toHaveBeenCalledWith('submission-1', 'mac-1', expect.any(String), expect.any(String), {
       receipt: claim.submission.artifact, manifestHash: claim.submission.manifestHash, validation: claim.submission.validation,
     });
-    expect(cloud.updatePublicStatus).toHaveBeenCalledWith('submission-1', 'ready', expect.any(String));
+    expect(cloud.completeExecution).toHaveBeenCalledWith({
+      submissionId: 'submission-1', eventId: claim.submission.eventId, workerId: 'mac-1', executionToken: expect.any(String),
+      receipt: claim.submission.artifact, manifestHash: claim.submission.manifestHash, validation: claim.submission.validation,
+    }, expect.any(String));
     expect(store.getBySubmissionId('submission-1')?.state).toBe('ready');
     store.close();
   });
@@ -136,7 +139,7 @@ describe('simulated worker', () => {
     const store = new JobStore(':memory:');
     const result = await runWorkerOnce({
       workerId: 'mac-1', artifactReader,
-      cloud: { isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(null), claimNextSubmission: vi.fn().mockResolvedValue(null), beginExecution: vi.fn(), updatePublicStatus: vi.fn() },
+      cloud: { recoverClaim: vi.fn().mockResolvedValue(null), claimNextSubmission: vi.fn().mockResolvedValue(null), beginExecution: vi.fn(), completeExecution: vi.fn() },
       store,
       executor: new SimulatedPrinter(),
       now: () => '2026-11-23T12:00:00.000Z',
@@ -149,10 +152,10 @@ describe('simulated worker', () => {
   it('recreates the durable local row when a crash happened immediately after the cloud claim', async () => {
     const claim = claimed();
     const cloud: CloudQueue = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim),
+      recoverClaim: vi.fn().mockResolvedValue(claim),
       claimNextSubmission: vi.fn(),
       beginExecution: vi.fn().mockResolvedValue('acquired'),
-      updatePublicStatus: vi.fn().mockResolvedValue(undefined),
+      completeExecution: vi.fn().mockResolvedValue('committed'),
     };
     const store = new JobStore(':memory:');
     const result = await runWorkerOnce({
@@ -167,15 +170,19 @@ describe('simulated worker', () => {
   it('fences overlapping invocations that recover the same worker lease', async () => {
     const claim = claimed();
     const cloud: CloudQueue = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim),
+      recoverClaim: vi.fn().mockResolvedValue(claim),
       claimNextSubmission: vi.fn(),
       beginExecution: vi.fn().mockResolvedValue('acquired'),
-      updatePublicStatus: vi.fn().mockResolvedValue(undefined),
+      completeExecution: vi.fn().mockResolvedValue('committed'),
     };
     const store = new JobStore(':memory:');
     let releaseExecution!: () => void;
     const blocked = new Promise<void>((resolve) => { releaseExecution = resolve; });
-    const executor = { execute: vi.fn(async () => blocked) };
+    const simulator = new SimulatedPrinter();
+    const executor = { execute: vi.fn(async (job, transition) => {
+      await blocked;
+      return simulator.execute(job, transition);
+    }) };
 
     const first = runWorkerOnce({ workerId: 'mac-1', artifactReader, cloud, store, executor });
     await vi.waitFor(() => expect(executor.execute).toHaveBeenCalledTimes(1));
@@ -191,10 +198,10 @@ describe('simulated worker', () => {
     const claim = claimed();
     claim.submission.publicStatus = 'printing';
     const cloud: CloudQueue = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim),
+      recoverClaim: vi.fn().mockResolvedValue(claim),
       claimNextSubmission: vi.fn(),
       beginExecution: vi.fn(),
-      updatePublicStatus: vi.fn(),
+      completeExecution: vi.fn(),
     };
     const store = new JobStore(':memory:');
     const executor = { execute: vi.fn() };
@@ -208,10 +215,10 @@ describe('simulated worker', () => {
   it('publishes a recovered ready journal and releases it without re-executing', async () => {
     const claim = claimed();
     const cloud: CloudQueue = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValueOnce(claim).mockResolvedValue(null),
+      recoverClaim: vi.fn().mockResolvedValueOnce(claim).mockResolvedValue(null),
       claimNextSubmission: vi.fn().mockResolvedValue(null),
       beginExecution: vi.fn(),
-      updatePublicStatus: vi.fn().mockResolvedValue(undefined),
+      completeExecution: vi.fn().mockResolvedValue('committed'),
     };
     const store = new JobStore(':memory:');
     store.insertClaimed(await verifiedClaim(claim));
@@ -221,7 +228,10 @@ describe('simulated worker', () => {
     const executor = { execute: vi.fn() };
     const result = await runWorkerOnce({ workerId: 'mac-1', artifactReader, cloud, store, executor });
     expect(result).toEqual({ kind: 'idle' });
-    expect(cloud.updatePublicStatus).toHaveBeenCalledExactlyOnceWith('submission-1', 'ready', '2026-11-23T12:00:10.000Z');
+    expect(cloud.completeExecution).toHaveBeenCalledExactlyOnceWith({
+      submissionId: 'submission-1', eventId: claim.submission.eventId, workerId: 'mac-1', executionToken: claim.executionToken,
+      receipt: claim.submission.artifact, manifestHash: claim.submission.manifestHash, validation: claim.submission.validation,
+    }, '2026-11-23T12:00:10.000Z');
     expect(store.listPendingPublicStatuses()).toEqual([]);
     expect(executor.execute).not.toHaveBeenCalled();
     store.close();
@@ -230,10 +240,10 @@ describe('simulated worker', () => {
   it('waits for cloud recovery instead of pinning a recovered ready job for execution', async () => {
     const claim = claimed();
     const cloud: CloudQueue = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim),
+      recoverClaim: vi.fn().mockResolvedValue(claim),
       claimNextSubmission: vi.fn(),
       beginExecution: vi.fn(),
-      updatePublicStatus: vi.fn().mockRejectedValue(new Error('offline')),
+      completeExecution: vi.fn().mockRejectedValue(new Error('offline')),
     };
     const store = new JobStore(':memory:');
     store.insertClaimed(await verifiedClaim(claim));
@@ -250,7 +260,8 @@ describe('simulated worker', () => {
   it.each([false, true])('holds local ready with cloud next without changing the outbox (ready intent present: %s)', async hasIntent => {
     const claim = claimed();
     const store = new JobStore(':memory:');
-    const cloud = { isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(), beginExecution: vi.fn(), updatePublicStatus: vi.fn() };
+    const cloud = { recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(), beginExecution: vi.fn(),
+      completeExecution: vi.fn().mockResolvedValue('fenced') };
     const executor = { execute: vi.fn() };
     try {
       store.insertClaimed(await verifiedClaim(claim));
@@ -262,7 +273,7 @@ describe('simulated worker', () => {
       });
       expect(store.getState(claim.submission.id)).toBe('needs_reconciliation');
       expect(store.listPendingPublicStatuses()).toEqual(pending);
-      expect(cloud.updatePublicStatus).not.toHaveBeenCalled();
+      expect(cloud.completeExecution).not.toHaveBeenCalled();
       expect(cloud.claimNextSubmission).not.toHaveBeenCalled();
       expect(cloud.beginExecution).not.toHaveBeenCalled();
       expect(executor.execute).not.toHaveBeenCalled();
@@ -272,8 +283,8 @@ describe('simulated worker', () => {
   it.each([false, true])('blocks a pending legacy ready intent when the current worker recovers a different claim: %s', async recoverDifferent => {
     const claim = claimed();
     const store = new JobStore(':memory:');
-    const cloud = { isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(recoverDifferent ? claim : null), claimNextSubmission: vi.fn(),
-      beginExecution: vi.fn(), updatePublicStatus: vi.fn() };
+    const cloud = { recoverClaim: vi.fn().mockResolvedValue(recoverDifferent ? claim : null), claimNextSubmission: vi.fn(),
+      beginExecution: vi.fn(), completeExecution: vi.fn() };
     const executor = { execute: vi.fn() };
     try {
       store.holdArtifact('legacy-head', claim.claimedAt, 'Legacy evidence.');
@@ -282,7 +293,7 @@ describe('simulated worker', () => {
       const result = await runWorkerOnce({ workerId: claim.workerId, artifactReader, store, cloud, executor });
       expect(result).toEqual({ kind: 'needs_reconciliation', submissionId: 'legacy-head' });
       expect(store.listPendingPublicStatuses()).toEqual(pending);
-      expect(cloud.updatePublicStatus).not.toHaveBeenCalled();
+      expect(cloud.completeExecution).not.toHaveBeenCalled();
       expect(cloud.claimNextSubmission).not.toHaveBeenCalled();
       expect(cloud.beginExecution).not.toHaveBeenCalled();
       expect(executor.execute).not.toHaveBeenCalled();
@@ -293,7 +304,8 @@ describe('simulated worker', () => {
     const claim = claimed();
     claim.submission.publicStatus = 'printing';
     claim.executionToken = executionToken;
-    const cloud = { isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(), beginExecution: vi.fn(), updatePublicStatus: vi.fn() };
+    const cloud = { recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(), beginExecution: vi.fn(),
+      completeExecution: vi.fn().mockResolvedValue('fenced') };
     const store = new JobStore(':memory:');
     const executor = { execute: vi.fn() };
     try {
@@ -305,38 +317,74 @@ describe('simulated worker', () => {
         kind: 'needs_reconciliation', submissionId: claim.submission.id,
       });
       expect(store.listPendingPublicStatuses()).toEqual(pending);
-      expect(cloud.updatePublicStatus).not.toHaveBeenCalled();
+      expect(cloud.completeExecution).toHaveBeenCalledTimes(1);
       expect(executor.execute).not.toHaveBeenCalled();
     } finally { store.close(); }
   });
 
   it('retains completed local state when ready publication fails after the execution marker', async () => {
     const claim = claimed();
-    const updatePublicStatus = vi.fn().mockRejectedValue(new Error('offline'));
+    const completeExecution = vi.fn().mockRejectedValue(new Error('offline'));
     const cloud: CloudQueue = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(null),
+      recoverClaim: vi.fn().mockResolvedValue(null),
       claimNextSubmission: vi.fn().mockResolvedValueOnce(claim),
       beginExecution: vi.fn().mockResolvedValue('acquired'),
-      updatePublicStatus,
+      completeExecution,
     };
     const store = new JobStore(':memory:');
     const result = await runWorkerOnce({
       workerId: 'mac-1', artifactReader, cloud, store, executor: new SimulatedPrinter(),
       now: () => '2026-11-23T12:00:10.000Z',
     });
-    expect(result.kind).toBe('completed');
+    expect(result).toEqual({ kind: 'waiting_for_cloud', submissionId: claim.submission.id });
     expect(store.getBySubmissionId('submission-1')?.state).toBe('ready');
     expect(store.listPendingPublicStatuses().map((entry) => entry.status)).toEqual(['ready']);
     store.close();
   });
 
+  it('holds a malformed completion timestamp without calling the cloud fence', async () => {
+    const claim = claimed();
+    const store = new JobStore(':memory:');
+    store.insertClaimed(await verifiedClaim(claim));
+    store.getOrCreateExecutionToken(claim.submission.id);
+    store.transitionAndStagePublicStatus(claim.submission.id, 'ready', claim.claimedAt, 'ready');
+    store.stagePublicStatus(claim.submission.id, 'ready', 'not-an-iso-timestamp');
+    const cloud = {
+      recoverClaim: vi.fn(), claimNextSubmission: vi.fn(), beginExecution: vi.fn(), completeExecution: vi.fn(),
+    };
+    expect(await runWorkerOnce({ workerId: claim.workerId, artifactReader, cloud, store, executor: { execute: vi.fn() } })).toEqual({
+      kind: 'needs_reconciliation', submissionId: claim.submission.id,
+    });
+    expect(cloud.completeExecution).not.toHaveBeenCalled();
+    expect(store.listPendingPublicStatuses()).toMatchObject([{ updatedAt: 'not-an-iso-timestamp' }]);
+    store.close();
+  });
+
+  it('holds a completed local execution when the cloud completion fence rejects its evidence', async () => {
+    const claim = claimed();
+    const cloud: CloudQueue = {
+      recoverClaim: vi.fn().mockResolvedValue(null),
+      claimNextSubmission: vi.fn().mockResolvedValueOnce(claim),
+      beginExecution: vi.fn().mockResolvedValue('acquired'),
+      completeExecution: vi.fn().mockResolvedValue('fenced'),
+    };
+    const store = new JobStore(':memory:');
+    const result = await runWorkerOnce({
+      workerId: 'mac-1', artifactReader, cloud, store, executor: new SimulatedPrinter(),
+      now: () => '2026-11-23T12:00:10.000Z',
+    });
+    expect(result).toEqual({ kind: 'needs_reconciliation', submissionId: claim.submission.id });
+    expect(store.getBySubmissionId(claim.submission.id)?.state).toBe('needs_reconciliation');
+    expect(store.listPendingPublicStatuses()).toMatchObject([{ submissionId: claim.submission.id, status: 'ready' }]);
+  });
+
   it('stops before physical execution when the cloud execution marker cannot be published', async () => {
     const claim = claimed();
     const cloud: CloudQueue = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(null),
+      recoverClaim: vi.fn().mockResolvedValue(null),
       claimNextSubmission: vi.fn().mockResolvedValueOnce(claim),
       beginExecution: vi.fn().mockRejectedValue(new Error('offline')),
-      updatePublicStatus: vi.fn().mockRejectedValue(new Error('offline')),
+      completeExecution: vi.fn().mockRejectedValue(new Error('offline')),
     };
     const phases: string[] = [];
     const store = new JobStore(':memory:');
@@ -355,7 +403,7 @@ describe('simulated worker', () => {
   it('does not execute a stale prepared snapshot after another invocation completed it', async () => {
     const claim = claimed();
     const cloud: CloudQueue = {
-      isReadyAcknowledged: async () => false, recoverClaim: vi.fn(), claimNextSubmission: vi.fn(), beginExecution: vi.fn().mockResolvedValue('acquired'), updatePublicStatus: vi.fn().mockResolvedValue(undefined),
+      recoverClaim: vi.fn(), claimNextSubmission: vi.fn(), beginExecution: vi.fn().mockResolvedValue('acquired'), completeExecution: vi.fn().mockResolvedValue('committed'),
     };
     const store = new JobStore(':memory:');
     store.insertClaimed(await verifiedClaim(claim));

@@ -18,9 +18,9 @@ async function desk(
   const server = createOperatorServer({
     workerId: 'test', store, artifactReader, executor: new SimulatedPrinter(),
     cloud: {
-      isReadyAcknowledged: async () => false, recoverClaim, claimNextSubmission: async () => null,
+      recoverClaim, claimNextSubmission: async () => null,
       beginExecution: async () => { throw Error('unexpected execution'); },
-      updatePublicStatus: async () => { throw Error('unexpected status publication'); },
+      completeExecution: async () => { throw Error('unexpected status publication'); },
     },
   }, {
     list,

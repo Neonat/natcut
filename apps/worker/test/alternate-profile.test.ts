@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { expect, it, vi } from 'vitest';
 import { encodeLogicalSourceBundle, resolvePrintProfile } from '@natcut/domain';
 import { verifyArtifactBytes } from '@natcut/artifacts';
-import { JobStore, runWorkerOnce } from '../src/index.ts';
+import { JobStore, runWorkerOnce, SimulatedPrinter } from '../src/index.ts';
 import { claimFixture } from './fixtures/submission.ts';
 
 // Extend only this test's registry. Production currently publishes one profile.
@@ -32,9 +32,10 @@ it('journals the accepted profile snapshot and source dimensions for another reg
   ticket.printSpec = { ...ticket.printSpec, profileId: profile.id, profileVersion: profile.version };
   ticket.validation.rasterHash = bundle.descriptor.maskSha256;
   const store = new JobStore(':memory:');
-  const cloud = { isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(), beginExecution: vi.fn(), updatePublicStatus: vi.fn() };
+  const cloud = { recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(),
+    beginExecution: vi.fn().mockResolvedValue('acquired'), completeExecution: vi.fn().mockResolvedValue('committed') };
   try {
-    const result = await runWorkerOnce({ store, cloud, workerId: claim.workerId, executor: { execute: vi.fn() },
+    const result = await runWorkerOnce({ store, cloud, workerId: claim.workerId, executor: new SimulatedPrinter(),
       artifactReader: { read: receipt => verifyArtifactBytes(bundle.bytes, receipt) } });
     expect(result.kind).toBe('completed');
     const job = store.getBySubmissionId(ticket.id)!;

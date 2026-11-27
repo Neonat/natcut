@@ -192,7 +192,9 @@ Do not run bare `firebase deploy` in this project. The cloud provisioning and re
 
 **Stop every legacy cloud worker before deploying the version 2 submission API.** This simulator verifies the canonical manifest, profile, exact storage generation and logical color and cut-mask bytes before starting any phase. It journals the receipt and payload together in SQLite and rehashes the stored bytes at execution. A missing or inconsistent artifact holds the queue head. A temporary storage failure retries the same claim.
 
-Keep production queue consumption stopped pending an authorized bucket and IAM smoke, token-fenced completion, and reconciliation. The booth Mac simulator configuration for a future rollout follows the [cloud preview runbook](docs/runbooks/cloud-preview.md).
+Begin and completion are now fenced to the exact submission, event, worker, durable execution token, manifest, validation, artifact generation, and immutable profile. The begin lease captures that evidence; completion must match it. The same evidence can confirm a committed `ready` or later `collected` outcome after a lost response. Until that commit or confirmation is durably acknowledged, the worker reports cloud waiting rather than success. Stale, malformed, legacy, or different evidence keeps the queue head on an operator-visible reconciliation hold and cannot release or bypass another slot.
+
+Keep production queue consumption stopped. The remaining rollout blocker is Session 2: authorized bucket/IAM and named-index verification, isolated deployment, pinned-generation storage and simulator smoke, and rollback proof. That session remains cloud-only and must not touch the printer. The booth Mac simulator configuration for that future rollout follows the [cloud preview runbook](docs/runbooks/cloud-preview.md).
 
 ```bash
 gcloud auth application-default login \

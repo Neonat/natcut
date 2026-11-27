@@ -20,11 +20,13 @@ function job(overrides: Partial<LocalPrintJob> = {}): LocalPrintJob {
   return {
     id: 'local-1',
     submissionId: 'submission-1',
+    eventId: null,
     queueNumber: 1,
     manifestHash: 'a'.repeat(64),
     rasterHash: 'b'.repeat(64),
     artifactReceiptJson: null, artifactBytes: null, artifactVerifiedAt: null,
     colorSha256: null, cutMaskSha256: null, bundleSha256: null,
+    completionAcknowledgedAt: null,
     printProfileSnapshotJson: JSON.stringify({ id: 'devfest-sg-v1', knifePressure: 42 }),
     geometryReportJson: JSON.stringify({ valid: true, severity: 'ok' }),
     jpegPath: '/tmp/submission-1.jpg',
@@ -66,6 +68,8 @@ describe('JobStore', () => {
     const stored = store.getBySubmissionId('submission-1')!;
     expect(stored.state).toBe('rendering');
     expect(stored.stateChangedAt).toBe('2026-11-23T12:00:05.000Z');
+    expect(stored.eventId).toBe(verified.submission.eventId);
+    expect(stored.completionAcknowledgedAt).toBeNull();
     expect(stored.printProfileSnapshotJson).toContain('knifePressure');
     expect(stored.geometryReportJson).toContain('severity');
     expect(stored.jpegBytes).toBe(0);
@@ -99,7 +103,7 @@ describe('JobStore', () => {
       const migrated = store.getBySubmissionId('submission-1')!;
       expect(migrated).toEqual(job());
       const claim = claimFixture('submission-1');
-      const cloud = { isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(), beginExecution: vi.fn(), updatePublicStatus: vi.fn() };
+      const cloud = { recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(), beginExecution: vi.fn(), completeExecution: vi.fn() };
       const executor = { execute: vi.fn() };
       const deps = { store, cloud, artifactReader, workerId: 'mac-1', executor };
       expect(await runLocalJob(deps, migrated)).toEqual({ kind: 'needs_reconciliation', submissionId: 'submission-1' });
@@ -110,10 +114,10 @@ describe('JobStore', () => {
     } finally { store.close(); }
   });
 
-  it.each(['blob', 'generation', 'profile', 'color'] as const)('holds a changed persisted %s after preparation and restart', async variant => {
+  it.each(['blob', 'generation', 'profile', 'color', 'event'] as const)('holds a changed persisted %s after preparation and restart', async variant => {
     const databasePath = temporaryJournal();
     const claim = claimFixture('submission-1');
-    const cloud = { isReadyAcknowledged: async () => false, recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(), beginExecution: vi.fn(), updatePublicStatus: vi.fn() };
+    const cloud = { recoverClaim: vi.fn().mockResolvedValue(claim), claimNextSubmission: vi.fn(), beginExecution: vi.fn(), completeExecution: vi.fn() };
     const executor = { execute: vi.fn() };
     const original = new JobStore(databasePath);
     const deps = { store: original, cloud, artifactReader, workerId: 'mac-1', executor };
@@ -130,8 +134,10 @@ describe('JobStore', () => {
       disk.prepare('UPDATE local_print_jobs SET artifactReceiptJson = ?').run(JSON.stringify({ ...claim.submission.artifact, generation: '2' }));
     } else if (variant === 'profile') {
       disk.exec("UPDATE local_print_jobs SET printProfileSnapshotJson = '{}'");
-    } else {
+    } else if (variant === 'color') {
       disk.exec("UPDATE local_print_jobs SET colorSha256 = rasterHash");
+    } else {
+      disk.exec("UPDATE local_print_jobs SET eventId = 'different-event'");
     }
     disk.close();
     const store = new JobStore(databasePath);

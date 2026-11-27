@@ -53,12 +53,12 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     const cloud = createFirestoreCloudQueue(firestore, undefined, eventId);
     const result = await runWorkerOnce({ workerId: 'dev-mac', store, artifactReader, executor: new SimulatedPrinter(), cloud: {
       ...cloud,
-      async updatePublicStatus(...args) {
-        await cloud.updatePublicStatus(...args);
+      async completeExecution(...args) {
+        await cloud.completeExecution(...args);
         throw Error('Lost committed response');
       },
     } });
-    expect(result.kind).toBe('completed');
+    expect(result).toEqual({ kind: 'waiting_for_cloud', submissionId: ticket.id });
     expect(store.listPendingPublicStatuses()).toMatchObject([{ submissionId: ticket.id, status: 'ready' }]);
     const slot = firestore.doc('workerSlots/' + eventId);
     expect((await slot.get()).exists).toBe(false);
@@ -66,18 +66,22 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     const ref = firestore.doc('submissions/' + ticket.id);
     const before = await ref.get();
     expect(before.get('publicStatus')).toBe(terminal);
+    await seed(2, 'queued');
+    expect((await cloud.claimNextSubmission('next-worker'))?.submission.queueNumber).toBe(2);
+    const nextSlot = await slot.get();
     const reopened = new JobStore(journal);
     const execute = vi.fn();
-    const updatePublicStatus = vi.fn();
+    const completeExecution = vi.fn(cloud.completeExecution);
     const beginExecution = vi.fn();
     try {
       expect(await runWorkerOnce({ workerId: 'dev-mac', store: reopened, artifactReader, executor: { execute },
-        cloud: { ...cloud, updatePublicStatus, beginExecution } })).toEqual({ kind: 'idle' });
+        cloud: { ...cloud, completeExecution, beginExecution } })).toEqual({ kind: 'idle' });
       expect(reopened.listPendingPublicStatuses()).toEqual([]);
       expect((await ref.get()).updateTime).toEqual(before.updateTime);
-      expect((await slot.get()).exists).toBe(false);
+      expect((await slot.get()).updateTime).toEqual(nextSlot.updateTime);
+      expect((await slot.get()).get('workerId')).toBe('next-worker');
       expect(execute).not.toHaveBeenCalled();
-      expect(updatePublicStatus).not.toHaveBeenCalled();
+      expect(completeExecution).toHaveBeenCalledTimes(1);
       expect(beginExecution).not.toHaveBeenCalled();
     } finally { reopened.close(); }
   });
@@ -98,7 +102,7 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     },
   );
 
-  it('acknowledges only the completed ticket while a different worker still owns another pending ticket', async () => {
+  it('keeps journal-less completion intents on hold even when one cloud ticket is already ready', async () => {
     const complete = await seed(1, 'ready');
     const active = await seed(2, 'printing');
     const slot = firestore.doc('workerSlots/' + eventId);
@@ -106,10 +110,20 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
     const before = await slot.get();
     store.stagePublicStatus(active.id, 'ready', active.updatedAt);
     store.stagePublicStatus(complete.id, 'ready', complete.updatedAt);
+    const pendingBefore = store.listPendingPublicStatuses();
     const result = await runWorkerOnce({ workerId: 'replacement', store, cloud: createFirestoreCloudQueue(firestore, undefined, eventId),
       artifactReader, executor: { execute: vi.fn() } });
-    expect(result).toEqual({ kind: 'needs_reconciliation', submissionId: active.id });
-    expect(store.listPendingPublicStatuses()).toMatchObject([{ submissionId: active.id, status: 'ready' }]);
+    expect(result.kind).toBe('needs_reconciliation');
+    if (result.kind !== 'needs_reconciliation') throw Error('expected reconciliation hold');
+    expect(pendingBefore.map((entry) => entry.submissionId)).toContain(result.submissionId);
+    expect(store.listPendingPublicStatuses()).toMatchObject([
+      { submissionId: active.id, status: 'ready' },
+      { submissionId: complete.id, status: 'ready' },
+    ]);
+    const visible = await (await fetch(origin + '/queue')).json();
+    expect(visible.rows.find((row: {submissionId: string}) => row.submissionId === complete.id)).toMatchObject({
+      onHold: true, notice: expect.stringMatching(/reconciliation/i),
+    });
     expect((await slot.get()).updateTime).toEqual(before.updateTime);
     expect((await firestore.doc('submissions/' + active.id).get()).get('publicStatus')).toBe('printing');
   });
@@ -290,6 +304,85 @@ describe.skipIf(!emulator)('operator desk with Firestore and its journal', () =>
       owner.close();
     }
     expect(store.getBySubmissionId(ticket.id)?.state).toBe('ready');
+  });
+
+  it('serializes ready recovery behind a live executor on the same journal', async () => {
+    const ticket = await seed(1, 'queued');
+    const cloud = createFirestoreCloudQueue(firestore, undefined, eventId);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const owner = new JobStore(journal);
+    const running = runWorkerOnce({
+      workerId: 'dev-mac', artifactReader, store: owner, executor: new SimulatedPrinter(),
+      cloud: {
+        ...cloud,
+        async completeExecution(...args) {
+          entered.resolve();
+          await release.promise;
+          return cloud.completeExecution(...args);
+        },
+      },
+    });
+    try {
+      await entered.promise;
+      expect(store.getState(ticket.id)).toBe('ready');
+      expect(await runWorkerOnce({
+        workerId: 'stale-worker', artifactReader, store, cloud, executor: { execute: vi.fn() },
+      })).toEqual({ kind: 'busy', submissionId: ticket.id });
+      expect(store.getState(ticket.id)).toBe('ready');
+      expect(store.listPendingPublicStatuses()).toHaveLength(1);
+    } finally {
+      release.resolve();
+      await expect(running).resolves.toEqual({ kind: 'completed', submissionId: ticket.id });
+      owner.close();
+    }
+    expect(store.getBySubmissionId(ticket.id)).toMatchObject({ state: 'ready', completionAcknowledgedAt: expect.any(String) });
+    expect(store.listPendingPublicStatuses()).toEqual([]);
+  });
+
+  it('retries a pre-commit completion outage after restart without re-executing', async () => {
+    const ticket = await seed(1, 'queued');
+    const cloud = createFirestoreCloudQueue(firestore, undefined, eventId);
+    const owner = new JobStore(journal);
+    const execute = vi.fn(new SimulatedPrinter().execute.bind(new SimulatedPrinter()));
+    try {
+      expect(await runWorkerOnce({
+        workerId: 'dev-mac', artifactReader, store: owner, executor: { execute },
+        cloud: { ...cloud, completeExecution: vi.fn().mockRejectedValue(new Error('offline before commit')) },
+      })).toEqual({ kind: 'waiting_for_cloud', submissionId: ticket.id });
+      expect((await firestore.doc('submissions/' + ticket.id).get()).get('publicStatus')).toBe('printing');
+      expect((await firestore.doc('workerSlots/' + eventId).get()).exists).toBe(true);
+    } finally { owner.close(); }
+
+    const reopened = new JobStore(journal);
+    try {
+      expect(await runWorkerOnce({
+        workerId: 'dev-mac', artifactReader, store: reopened, executor: { execute }, cloud,
+      })).toEqual({ kind: 'idle' });
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect((await firestore.doc('submissions/' + ticket.id).get()).get('publicStatus')).toBe('ready');
+      expect((await firestore.doc('workerSlots/' + eventId).get()).exists).toBe(false);
+      expect(reopened.listPendingPublicStatuses()).toEqual([]);
+    } finally { reopened.close(); }
+  });
+
+  it('shows legacy, collected, and missing local blockers independently of cloud pagination', async () => {
+    const collected = await seed(1, 'collected');
+    const next = await seed(2, 'queued');
+    store.stagePublicStatus(collected.id, 'printing', collected.updatedAt);
+    store.stagePublicStatus('missing-local-intent', 'ready', collected.updatedAt);
+
+    const initial = await (await fetch(origin + '/queue')).json();
+    expect(initial.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ submissionId: collected.id, publicStatus: 'blocked', onHold: true }),
+      expect.objectContaining({ submissionId: 'missing-local-intent', publicStatus: 'blocked', onHold: true }),
+      expect.objectContaining({ submissionId: next.id, publicStatus: 'queued' }),
+    ]));
+    const claim = await post('/claim');
+    expect(claim.status).toBe(409);
+    expect(await claim.json()).toMatchObject({ error: 'JOB_NEEDS_RECONCILIATION', submissionId: collected.id });
+    expect(store.hasArtifactHold(collected.id)).toBe(true);
+    expect((await firestore.doc('submissions/' + next.id).get()).get('publicStatus')).toBe('queued');
   });
 
   it('holds a recovered claim when the cloud execution fence advanced before the local phase was saved', async () => {

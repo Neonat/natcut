@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { submission, verifiedClaim } from './fixtures/submission.ts';
 import { JobStore, createFirestoreCloudQueue } from '../src/index.ts';
@@ -50,6 +50,25 @@ emulatorDescribe('cloud claim race', () => {
     expect((await head.get()).get('publicStatus')).toBe('next');
     await head.update({ 'artifact.generation': evidence.receipt.generation });
 
+    await head.update({ executionLease: { workerId: winners[0]!.workerId, token: 'old-token', startedAt: '2026-11-23T11:59:00.000Z' } });
+    expect(await cloud.beginExecution(
+      winners[0]!.submission.id,
+      winners[0]!.workerId,
+      'journal-a',
+      '2026-11-23T12:00:02.000Z',
+      evidence,
+    )).toBe('fenced');
+    await head.update({ executionLease: FieldValue.delete() });
+    await head.update({ completionFence: { submissionId: winners[0]!.submission.id } });
+    expect(await cloud.beginExecution(
+      winners[0]!.submission.id,
+      winners[0]!.workerId,
+      'journal-a',
+      '2026-11-23T12:00:02.000Z',
+      evidence,
+    )).toBe('fenced');
+    await head.update({ completionFence: FieldValue.delete() });
+
     expect(await cloud.beginExecution(
       winners[0]!.submission.id,
       winners[0]!.workerId,
@@ -79,11 +98,49 @@ emulatorDescribe('cloud claim race', () => {
     expect(store.list()).toHaveLength(1);
     store.close();
 
-    await cloud.updatePublicStatus(winners[0]!.submission.id, 'ready', '2026-11-23T12:00:05.000Z');
-    await expect(cloud.updatePublicStatus(
-      winners[0]!.submission.id,
-      'printing',
-      '2026-11-23T12:00:06.000Z',
-    )).resolves.toBeUndefined();
+    const completion = {
+      submissionId: winners[0]!.submission.id,
+      eventId: winners[0]!.submission.eventId,
+      workerId: winners[0]!.workerId,
+      executionToken: 'journal-a',
+      ...evidence,
+    };
+    const slot = firestore.doc('workerSlots/devfest-sg');
+    await head.update({ 'artifact.generation': '2' });
+    expect(await cloud.completeExecution(completion, '2026-11-23T12:00:05.000Z')).toBe('fenced');
+    expect(await cloud.completeExecution({
+      ...completion,
+      receipt: { ...completion.receipt, generation: '2' },
+    }, '2026-11-23T12:00:05.000Z')).toBe('fenced');
+    expect((await head.get()).get('publicStatus')).toBe('printing');
+    expect((await slot.get()).exists).toBe(true);
+    await head.update({ 'artifact.generation': evidence.receipt.generation });
+    expect(await cloud.completeExecution({ ...completion, workerId: 'stale-worker' }, '2026-11-23T12:00:05.000Z')).toBe('fenced');
+    expect(await cloud.completeExecution({ ...completion, executionToken: 'stale-token' }, '2026-11-23T12:00:05.000Z')).toBe('fenced');
+    expect(await cloud.completeExecution(completion, 'not-an-iso-timestamp')).toBe('fenced');
+    expect((await slot.get()).exists).toBe(true);
+
+    expect(await cloud.completeExecution(completion, '2026-11-23T12:00:05.000Z')).toBe('committed');
+    const completed = await head.get();
+    expect(completed.get('publicStatus')).toBe('ready');
+    expect(completed.get('completionFence')).toEqual({ ...completion, completedAt: '2026-11-23T12:00:05.000Z' });
+    expect((await slot.get()).exists).toBe(false);
+    expect(await cloud.completeExecution(completion, '2026-11-23T12:00:06.000Z')).toBe('confirmed');
+
+    await slot.set({ workerId: 'malformed-worker' });
+    expect(await cloud.completeExecution(completion, '2026-11-23T12:00:06.000Z')).toBe('fenced');
+    expect((await slot.get()).data()).toEqual({ workerId: 'malformed-worker' });
+    await slot.set({ submissionId: 'different-ticket' });
+    expect(await cloud.completeExecution(completion, '2026-11-23T12:00:06.000Z')).toBe('fenced');
+    expect((await slot.get()).data()).toEqual({ submissionId: 'different-ticket' });
+    await slot.delete();
+
+    await head.update({ publicStatus: 'collected', updatedAt: '2026-11-23T12:00:07.000Z' });
+    expect(await cloud.completeExecution(completion, '2026-11-23T12:00:08.000Z')).toBe('confirmed');
+    expect(await cloud.completeExecution({
+      ...completion,
+      receipt: { ...completion.receipt, generation: '2' },
+    }, '2026-11-23T12:00:08.000Z')).toBe('fenced');
+    expect((await head.get()).get('publicStatus')).toBe('collected');
   }, 20_000);
 });

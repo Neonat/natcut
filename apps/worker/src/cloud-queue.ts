@@ -1,8 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
-import { SubmissionSchema, canTransitionPublicStatus, manifestHash, type ArtifactReceipt, type PublicStatus, type Submission } from '@natcut/domain';
+import { SubmissionSchema, manifestHash, type ArtifactReceipt, type Submission } from '@natcut/domain';
 import type { Firestore } from 'firebase-admin/firestore';
-
-const StoredSubmissionSchema = SubmissionSchema.strip();
 
 export class InvalidClaimError extends Error {
   readonly submissionId: string;
@@ -13,7 +11,7 @@ export class InvalidClaimError extends Error {
 }
 
 function readClaimRecord(id: string, data: FirebaseFirestore.DocumentData | undefined, eventId: string) {
-  const { workerLease: _claim, executionLease: _execution, ...record } = data ?? {};
+  const { workerLease: _claim, executionLease: _execution, completionFence: _completion, ...record } = data ?? {};
   const parsed = SubmissionSchema.safeParse(record);
   return parsed.success && parsed.data.id === id && parsed.data.eventId === eventId ? parsed.data : null;
 }
@@ -57,8 +55,22 @@ export type ClaimedSubmission = {
 
 export type ExecutionEvidence = Pick<Submission, 'manifestHash' | 'validation'> & { receipt: ArtifactReceipt };
 
+export type CompletionEvidence = ExecutionEvidence & {
+  submissionId: string;
+  eventId: string;
+  workerId: string;
+  executionToken: string;
+};
+
+export type CompletionOutcome = 'committed' | 'confirmed' | 'fenced';
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString() === value;
+}
+
 export interface CloudQueue {
-  isReadyAcknowledged(submissionId: string): Promise<boolean>;
   recoverClaim(workerId: string): Promise<ClaimedSubmission | null>;
   claimNextSubmission(workerId: string): Promise<ClaimedSubmission | null>;
   beginExecution(
@@ -68,7 +80,7 @@ export interface CloudQueue {
     updatedAt: string,
     evidence: ExecutionEvidence,
   ): Promise<'acquired' | 'fenced'>;
-  updatePublicStatus(submissionId: string, status: PublicStatus, updatedAt: string): Promise<void>;
+  completeExecution(evidence: CompletionEvidence, updatedAt: string): Promise<CompletionOutcome>;
 }
 
 export function createFirestoreCloudQueue(
@@ -79,17 +91,6 @@ export function createFirestoreCloudQueue(
   const submissions = firestore.collection('submissions');
   const slot = firestore.collection('workerSlots').doc(eventId);
   return {
-    async isReadyAcknowledged(submissionId) {
-      return firestore.runTransaction(async transaction => {
-        const [ticket, active] = await Promise.all([transaction.get(submissions.doc(submissionId)), transaction.get(slot)]);
-        const status = ticket.get('publicStatus');
-        const activeId = active.get('submissionId');
-        return ticket.get('id') === submissionId && ticket.get('eventId') === eventId &&
-          (status === 'ready' || status === 'collected') &&
-          (!active.exists || (typeof activeId === 'string' && activeId.length > 0 && activeId !== submissionId));
-      }, { readOnly: true });
-    },
-
     async recoverClaim(workerId) {
       return firestore.runTransaction(async (transaction) => {
         const slotSnapshot = await transaction.get(slot);
@@ -155,7 +156,8 @@ export function createFirestoreCloudQueue(
           slotData?.workerId !== workerId
         ) return 'fenced';
         const submission = readClaimRecord(submissionId, snapshot.data(), eventId);
-        if (!submission || submission.publicStatus !== 'next' || submission.recordVersion !== 2 ||
+        if (!isIsoTimestamp(updatedAt) || !submission || submission.publicStatus !== 'next' || submission.recordVersion !== 2 ||
+            snapshot.get('executionLease') !== undefined || snapshot.get('completionFence') !== undefined ||
             !isDeepStrictEqual(submission.artifact, evidence.receipt) || !isDeepStrictEqual(submission.validation, evidence.validation) ||
             submission.manifestHash !== evidence.manifestHash || await manifestHash(submission.manifest) !== evidence.manifestHash) {
           return 'fenced';
@@ -163,35 +165,66 @@ export function createFirestoreCloudQueue(
         transaction.update(ref, {
           publicStatus: 'printing',
           updatedAt,
-          executionLease: { workerId, token: executionToken, startedAt: updatedAt },
+          executionLease: { workerId, token: executionToken, startedAt: updatedAt, evidence },
         });
         return 'acquired';
       });
     },
 
-    async updatePublicStatus(submissionId, status, updatedAt) {
-      const ref = submissions.doc(submissionId);
-      await firestore.runTransaction(async (transaction) => {
-        const snapshot = await transaction.get(ref);
-        if (!snapshot.exists) throw new Error(`Missing cloud submission ${submissionId}`);
-        const submission = StoredSubmissionSchema.parse(snapshot.data());
-        const slotSnapshot = await transaction.get(slot);
-        if (submission.publicStatus === status) {
-          if (status === 'ready' && slotSnapshot.data()?.submissionId === submissionId) transaction.delete(slot);
-          return;
+    async completeExecution(evidence, updatedAt) {
+      const ref = submissions.doc(evidence.submissionId);
+      return firestore.runTransaction(async (transaction): Promise<CompletionOutcome> => {
+        const [snapshot, slotSnapshot] = await Promise.all([transaction.get(ref), transaction.get(slot)]);
+        const submission = readClaimRecord(snapshot.id, snapshot.data(), eventId);
+        if (!isIsoTimestamp(updatedAt) || !submission || evidence.eventId !== eventId || submission.id !== evidence.submissionId ||
+            submission.eventId !== evidence.eventId || submission.recordVersion !== 2 ||
+            !isDeepStrictEqual(submission.artifact, evidence.receipt) ||
+            !isDeepStrictEqual(submission.validation, evidence.validation) ||
+            submission.manifestHash !== evidence.manifestHash ||
+            await manifestHash(submission.manifest) !== evidence.manifestHash) {
+          return 'fenced';
         }
-        const superseded =
-          (status === 'printing' && ['ready', 'collected'].includes(submission.publicStatus)) ||
-          (status === 'ready' && submission.publicStatus === 'collected');
-        if (superseded) {
-          if (slotSnapshot.data()?.submissionId === submissionId) transaction.delete(slot);
-          return;
+
+        const persistedFence = snapshot.get('completionFence');
+        if (submission.publicStatus === 'ready' || submission.publicStatus === 'collected') {
+          const terminalSlot = slotSnapshot.data();
+          const slotReleased = !slotSnapshot.exists ||
+            (typeof terminalSlot?.submissionId === 'string' && terminalSlot.submissionId.length > 0 &&
+             terminalSlot.submissionId !== evidence.submissionId &&
+             typeof terminalSlot.workerId === 'string' && terminalSlot.workerId.length > 0 &&
+             isIsoTimestamp(terminalSlot.claimedAt));
+          if (!slotReleased ||
+              !persistedFence || !isDeepStrictEqual({
+                submissionId: persistedFence.submissionId,
+                eventId: persistedFence.eventId,
+                workerId: persistedFence.workerId,
+                executionToken: persistedFence.executionToken,
+                receipt: persistedFence.receipt,
+                manifestHash: persistedFence.manifestHash,
+                validation: persistedFence.validation,
+              }, evidence)) return 'fenced';
+          return 'confirmed';
         }
-        if (!canTransitionPublicStatus(submission.publicStatus, status)) {
-          throw new Error(`Invalid public status transition ${submission.publicStatus} -> ${status}`);
-        }
-        transaction.update(ref, { publicStatus: status, updatedAt });
-        if (status === 'ready' && slotSnapshot.data()?.submissionId === submissionId) transaction.delete(slot);
+
+        const slotData = slotSnapshot.data();
+        const executionLease = snapshot.get('executionLease');
+        if (submission.publicStatus !== 'printing' || persistedFence !== undefined ||
+            !slotSnapshot.exists || slotData?.submissionId !== evidence.submissionId ||
+            slotData?.workerId !== evidence.workerId || executionLease?.workerId !== evidence.workerId ||
+            executionLease?.token !== evidence.executionToken ||
+            !isDeepStrictEqual(executionLease?.evidence, {
+              receipt: evidence.receipt,
+              manifestHash: evidence.manifestHash,
+              validation: evidence.validation,
+            })) return 'fenced';
+
+        transaction.update(ref, {
+          publicStatus: 'ready',
+          updatedAt,
+          completionFence: { ...evidence, completedAt: updatedAt },
+        });
+        transaction.delete(slot);
+        return 'committed';
       });
     },
   };
