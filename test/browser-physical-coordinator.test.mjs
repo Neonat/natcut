@@ -23,6 +23,7 @@ test('checkpoints one browser-owned declaration and every frame before completin
   const coordinator = createBrowserPhysicalCoordinator({
     approvalFingerprint: proof.summary.approvalFingerprint,
     journalPath: '/tmp/browser-proof.sqlite',
+    getPhysicalAttemptEvidence: () => null,
     createJournal: () => journalDouble(events),
   });
   const approval = { approvalFingerprint: proof.summary.approvalFingerprint, confirmation: 'SEND ONE SHEET' };
@@ -53,6 +54,7 @@ test('rejects mismatched approval before creating or reserving a journal', () =>
   const coordinator = createBrowserPhysicalCoordinator({
     approvalFingerprint: proof.summary.approvalFingerprint,
     journalPath: '/tmp/browser-proof.sqlite',
+    getPhysicalAttemptEvidence: () => null,
     createJournal: () => { journals += 1; return journalDouble([]); },
   });
   assert.throws(() => coordinator.begin({
@@ -65,6 +67,7 @@ test('does not expose another frame until the current frame acknowledgement is d
   const coordinator = createBrowserPhysicalCoordinator({
     approvalFingerprint: proof.summary.approvalFingerprint,
     journalPath: '/tmp/browser-proof.sqlite',
+    getPhysicalAttemptEvidence: () => null,
     createJournal: () => journalDouble([]),
   });
   const begun = coordinator.begin({
@@ -74,4 +77,22 @@ test('does not expose another frame until the current frame acknowledgement is d
   coordinator.nextFrame({ attemptId: begun.attemptId, sequence: 0 });
   assert.throws(() => coordinator.nextFrame({ attemptId: begun.attemptId, sequence: 1 }), /acknowledgement/i);
   assert.throws(() => coordinator.acknowledgeFrame({ attemptId: begun.attemptId, sequence: 1 }), /sequence/i);
+});
+
+test('a stale coordinator cannot return frames or touch its retained journal after the outcome is sealed', () => {
+  let sealed = false;
+  const events = [];
+  const coordinator = createBrowserPhysicalCoordinator({
+    approvalFingerprint: proof.summary.approvalFingerprint,
+    getPhysicalAttemptEvidence: () => sealed ? { outcome: { disposition: 'locked_no_resend' } } : null,
+    createJournal: () => journalDouble(events),
+  });
+  const approval = { approvalFingerprint: proof.summary.approvalFingerprint, confirmation: 'SEND ONE SHEET' };
+  const { attemptId } = coordinator.begin(approval, proof);
+  sealed = true;
+  assert.throws(() => coordinator.begin(approval, proof), { code: 'ATTEMPT_LOCKED' });
+  for (const action of ['recordJobId', 'nextFrame', 'acknowledgeFrame', 'finish', 'hold']) {
+    assert.throws(() => coordinator[action]({ attemptId, jobId: 1, sequence: 0, reason: 'pacing_outcome_unknown' }), { code: 'ATTEMPT_LOCKED' });
+  }
+  assert.deepEqual(events, ['reserve']);
 });

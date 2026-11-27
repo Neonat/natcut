@@ -1,10 +1,10 @@
 # Physical adapter proof
 
-This runbook covers only the offline portion of Session 3. It creates the exact JPEG and PLT and a reviewable protocol transcript from an immutable verified logical bundle. It must not enumerate USB, open the printer, claim an interface, send a command, change a cloud ticket, or mark a sticker ready.
+Use this runbook to inspect generation offline or reconcile the completed physical proof from its original journal. All inspection and observation steps run without USB or printer commands. The completed attempt is permanently locked.
 
 ## Inputs
 
-Use these two files from the same accepted submission:
+Physical generation requires a version 2 logical descriptor carrying sRGB evidence. Version 1 receipts remain readable for historical verification. Use these two files from the same accepted submission:
 
 - `receipt.json`: the exact `{ descriptor, generation }` artifact receipt stored on the submission.
 - `logical-bundle.bin`: the bytes read from that receipt's exact object generation.
@@ -64,7 +64,7 @@ The encoder white-composites every transparent logical pixel and constructs ever
 
 ## Inert transport-attempt proof
 
-Tests drive the transport-attempt module through `declareCombo` and `sendFrameAndWaitForAck` mocks. The module has no concrete printer transport, worker integration, or CLI. A dedicated journal record binds the submission, event, worker, durable execution token, manifest, full artifact receipt and generation, profile, and exact JPEG and PLT byte counts and digests.
+Tests drive the transport-attempt module through `declareCombo` and `sendFrameAndWaitForAck` mocks. The local proof adapter exercises the same journal. The queue worker continues to run simulated jobs. A dedicated journal record binds the submission, event, worker, durable execution token, manifest, full artifact receipt and generation, profile, and exact JPEG and PLT byte counts and digests.
 
 The following invariants are automated:
 
@@ -86,8 +86,28 @@ The transport contract was audited against BrenCut commit `e62f2d66a3dc1cc65891e
 
 The vendored tracer comments describe `KP` as `0–3`, but the current device-level sources use `1–100`; BrenCut records that `KP1` did not lower its blade and that the official Liene sticker-paper setting is `42`. NatCut therefore validates `1–100` at its wrapper and preserves the published `devfest-sg-v1` value `42` without modifying vendored code.
 
-## Stop boundary
+## Software generation QC
 
-Stop after inspecting this packet. It does not prove media loading, print placement, cut registration, cut depth, USB recovery, or physical completion.
+For a reviewed sprite, retain the preview PNG, `roster.json` and its original tagged PNG under `sources/`. Import re-verifies the original digest and normalization. Unknown ICC profiles, conflicting declarations and untagged external artwork fail. Recognized Display P3 and CMYK inputs convert to sRGB. Existing packaged artwork is accepted through its digest-addressed normalized catalog. The v2 receipt includes the canonical set of source spaces, ICC digests and preserve/convert actions from all composed layers.
 
-A controlled sheet procedure needs a concrete transport and evidence tied to the declared job ID. Confirm the correct media is loaded and obtain separate explicit approval before USB access or a printer write. The operator clear flow is still missing. Preserve any held journal and keep the token-fenced queue slot held until the printer evidence can resolve the attempt.
+Inspect `outputs.jpeg.colorEvidence` and `outputs.jpeg.generationQc` in `evidence.json`. Only trusted RGBA8 enters the print raster. Only the verified binary mask enters the PLT. The red overlay is created for display from these two finished artifacts. A standalone uploaded PNG cannot be used in the physical proof.
+
+The generation reference is the white-composited, centered and padded sRGB RGB8 raster. Its SHA-256 and the measured errors accompany the decoded final JPEG. The inclusive limits for `natcut-jpeg-qc-v1` are 19,313 thousandths per-channel mean absolute error, p99 of 96, 201,249 ppm of pixels whose largest channel error exceeds 32, and 9 levels of signed channel bias in a 16 × 16 tile. For a failed comparison inspect the reason codes, worst pixel with expected and actual RGB, and the worst tile’s origin, channel and signed bias. Check source tags and the print-only composition against the reference before accepting new artwork. [Calibration corpus, margins and examples](../../packages/printer/test/jpeg-qc-calibration.md)
+
+```sh
+npx vitest run --project printer test/qc-calibration.test.ts test/generation-qc.test.ts
+```
+
+## Physical attempt and ribbon registration
+
+The owner reported the completed sheet on 28 November 2026. Transport, cut alignment and kiss cut passed. Print quality failed due to printer ribbon registration. The attempt is permanently locked against resend. No channel-specific observation, photo, exact observation time or journal identity accompanied the report. The checked-in source records cyan, magenta and yellow as uncertain. [Owner observation](../evidence/physical-attempt-2026-11-28.json)
+
+The recording workflow requires the **original transport journal** at the existing absolute path configured in `NATCUT_TRANSPORT_JOURNAL`. Preserve its WAL and evidence. The repository contains no such journal. While binding is unavailable, retain the owner report and the reconciliation hold. Never substitute a new journal, a guessed timestamp, another sheet, or a generated fingerprint.
+
+1. Open the local operator dashboard with the journal configured. The page reads `GET /api/physical-proof/evidence` without a printer connection. An inconsistent or unavailable journal returns 503. A checkpoint shows the exact submission ID, evidence hash and printer job ID. The execution token and raw journal JSON stay private.
+2. Verify the displayed identity matches this observation and independently confirm the actual observation time. **Record completed attempt** appears only at `needs_reconciliation / physical_observation_required` with a positive job ID, no pending frame and exactly every PLT and JPEG frame acknowledged. Supply the actual UTC observation timestamp. The page posts the fixed owner-reported outcome to `/api/physical-proof/record-completed`.
+3. The dashboard restores **Attempt locked. No resend.** from the journal on every load. The outcome seals the transport row, including writes from already-open SQLite connections. Every direct send and browser mutation checks the journal before transport. No public status, queue slot or receipt changes.
+4. In **Post-print ribbon registration QC**, choose pass, fail or uncertain independently for cyan, magenta and yellow. Leave a channel uncertain if evidence is missing. Supply an evidence reference and notes where available. The form posts to `/api/physical-proof/physical-qc`. The API accepts up to eight references of at most 512 characters each and up to 2,000 note characters. Overall is fail if any channel fails, uncertain if any remaining channel is uncertain, otherwise pass.
+5. Identical POST retries return the original record. A different timestamp, QC result or evidence binding returns 409. Malformed inputs return 400. If an acknowledgement is lost, reload to read the committed record. No append operation calls WebUSB or transport.
+
+These software thresholds cover image encoding only. Cyan, magenta and yellow ribbon-registration artifacts arise inside the printer and require post-print physical QC. They are not an image-generation failure and cannot be prevented by generation QC. This runbook ends with the evidence and its binding status.

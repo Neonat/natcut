@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { connect } from 'node:net';
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { JSDOM } from 'jsdom';
+import { DEVFEST_SG_V1 as profile, printProfileHashSync } from '@natcut/domain';
+import { SqliteTransportAttemptJournal } from '@natcut/printer/transport-attempt';
+import { createPhysicalProofRuntime } from '../src/physical-proof-runtime.mjs';
 import { test } from 'node:test';
 
 import { createServer } from '../src/server.mjs';
 
 async function withServer(getSnapshot, run, options = {}) {
-  const server = createServer({ getSnapshot, ...options });
+  const server = createServer({ getSnapshot, getPhysicalAttemptEvidence: () => null, ...options });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const { port } = server.address();
@@ -276,4 +284,180 @@ test('checkpoints a browser WebUSB attempt through begin, job id, frame, acknowl
     physicalSendEnabled: true,
   });
   assert.deepEqual(calls.map(([name]) => name), ['begin', 'job-id', 'frame', 'ack', 'finish']);
+});
+
+const stamp = '2026-03-04T05:06:07.000Z';
+const digest = value => createHash('sha256').update(value).digest('hex');
+const submissionId = 'synthetic-proof';
+const printerJobId = 32;
+const width = profile.sheetWidthPx;
+const height = profile.sheetHeightPx;
+const pixels = width * height;
+const fixtureEvidence = {
+  submissionId, eventId: 'synthetic-event', workerId: 'synthetic-worker', executionToken: 'private-test-token',
+  manifestHash: digest('manifest'), receipt: { generation: '1', descriptor: {
+    formatVersion: 1, width, height, profile, renderVersion: 'test', geometryVersion: 'test',
+    colorByteLength: pixels * 4, maskByteLength: pixels, byteLength: pixels * 5,
+    colorSha256: digest('color'), maskSha256: digest('mask'), bundleSha256: digest('bundle'),
+    profileSha256: printProfileHashSync(profile),
+  } }, plt: { byteLength: 100, sha256: digest('plot') }, jpeg: { byteLength: 200, sha256: digest('jpeg') },
+};
+const evidenceHash = digest(JSON.stringify(fixtureEvidence));
+const completed = {
+  recordVersion: 1, evidenceHash, submissionId, printerJobId, observedAt: stamp,
+  transport: 'passed', cutAlignment: 'passed', kissCut: 'passed',
+  printQuality: { status: 'failed', cause: 'printer_ribbon_registration' }, disposition: 'locked_no_resend',
+};
+const registration = {
+  recordVersion: 1, evidenceHash, recordedAt: stamp,
+  channels: { cyan: 'uncertain', magenta: 'fail', yellow: 'pass' },
+  evidence: [{ kind: 'photo_reference', reference: 'fixture-receipt' }], notes: 'Synthetic inspection',
+};
+
+async function physicalFixture(t, frames = 2) {
+  const dir = await mkdtemp(join(tmpdir(), 'natcut-http-qc-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const journalPath = join(dir, 'synthetic.sqlite');
+  const legacy = new SqliteTransportAttemptJournal(journalPath);
+  try {
+    assert.equal(legacy.reserve(fixtureEvidence, evidenceHash), true);
+    legacy.recordPrinterJobId(submissionId, evidenceHash, printerJobId);
+    for (let i = 0; i < frames; i++) {
+      legacy.recordFrameIntent(submissionId, evidenceHash, i, i === 0 ? 'plt' : 'jpeg', 0);
+      legacy.recordFrameAcknowledged(submissionId, evidenceHash, i);
+    }
+    legacy.markReconciliation(submissionId, evidenceHash, 'physical_observation_required');
+  } finally { legacy.close(); }
+  return journalPath;
+}
+
+const post = (base, path, input) => fetch(base + '/api/physical-proof/' + path, {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: typeof input === 'string' ? input : JSON.stringify(input),
+});
+const readEvidence = base => fetch(base + '/api/physical-proof/evidence');
+
+test('QC routes retain exact private-journal evidence across server restarts and block every mutation before dependencies', async t => {
+  const journalPath = await physicalFixture(t);
+  const calls = [];
+  const forbidden = () => { calls.push('printer'); throw new Error('Unexpected printer dependency'); };
+  const options = () => ({
+    ...createPhysicalProofRuntime({ journalPath, approvalFingerprint: 'b'.repeat(64), buildProof: forbidden, openSession: forbidden }),
+    browserPhysicalCoordinator: new Proxy({}, { get: () => forbidden }),
+  });
+  await withServer(forbidden, async base => {
+    const original = await readEvidence(base);
+    assert.equal(original.status, 200);
+    const { evidence } = await original.json();
+    assert.equal(evidence.outcome, null);
+    assert.equal(evidence.attempt.fullyUploaded, true);
+    assert.equal((await post(base, 'physical-qc', registration)).status, 409);
+    assert.equal((await post(base, 'record-completed', { ...completed, printerJobId: 33 })).status, 409);
+    assert.equal((await post(base, 'record-completed', { ...completed, transport: 'failed' })).status, 400);
+    assert.equal((await post(base, 'record-completed', { ...completed, executionToken: 'extra' })).status, 400);
+    assert.equal((await post(base, 'record-completed', '{"invalid"')).status, 400);
+    assert.equal((await post(base, 'record-completed', JSON.stringify(completed).replace('"printerJobId":32', '"printerJobId":31,"printerJobId":32'))).status, 400);
+    // A stale tab may try to replace the completed upload reason before the owner records it.
+    assert.equal((await post(base, 'browser/hold', { attemptId: evidenceHash, reason: 'pacing_outcome_unknown' })).status, 409);
+    const uploaded = await post(base, 'record-completed', completed);
+    assert.equal(uploaded.status, 200);
+    assert.deepEqual((await uploaded.json()).record, completed);
+    assert.equal((await post(base, 'physical-qc', { ...registration, channels: { ...registration.channels, cyan: 'other' } })).status, 400);
+    assert.equal((await post(base, 'physical-qc', { ...registration, notes: 'X'.repeat(2001) })).status, 400);
+    assert.equal((await post(base, 'physical-qc', { ...registration, notes: 'X'.repeat(70000) })).status, 400);
+    assert.equal((await post(base, 'physical-qc', { ...registration, evidenceHash: digest('stale') })).status, 409);
+    assert.equal((await post(base, 'physical-qc', registration)).status, 200);
+  }, options());
+  await withServer(forbidden, async base => {
+    assert.deepEqual((await (await post(base, 'record-completed', completed)).json()).record, completed);
+    assert.deepEqual((await (await post(base, 'physical-qc', registration)).json()).record, registration);
+    assert.equal((await post(base, 'record-completed', { ...completed, observedAt: '2026-05-06T00:00:00.000Z' })).status, 409);
+    assert.equal((await post(base, 'physical-qc', { ...registration, notes: null })).status, 409);
+    for (const path of ['send', ...['begin','job-id','frame','ack','finish','hold'].map(action => 'browser/' + action)]) {
+      const response = await post(base, path, {});
+      assert.equal(response.status, 409, path);
+      assert.equal((await response.json()).error.code, 'ATTEMPT_LOCKED', path);
+    }
+    const body = await (await readEvidence(base)).json();
+    assert.deepEqual(body.evidence.outcome, completed);
+    assert.deepEqual(body.evidence.ribbonRegistrationQc, registration);
+    assert.equal(body.ribbonOverall, 'fail');
+    assert.doesNotMatch(JSON.stringify(body), /executionToken|private-test-token|evidenceJson/);
+  }, options());
+  assert.deepEqual(calls, []);
+});
+
+test('unavailable journals fail closed and incomplete uploads stay visible without a completion action', async t => {
+  const journalPath = await physicalFixture(t, 1);
+  for (const file of [undefined, 'relative.sqlite', journalPath + '.missing']) {
+    await withServer(assert.fail, async base => {
+      for (const response of [await readEvidence(base), await post(base, 'record-completed', completed),
+        await post(base, 'physical-qc', registration), await post(base, 'send', {}), await post(base, 'browser/begin', {})]) {
+        assert.equal(response.status, 503);
+        assert.equal((await response.json()).error.code, 'JOURNAL_UNAVAILABLE');
+      }
+    }, createPhysicalProofRuntime({ journalPath: file, approvalFingerprint: 'b'.repeat(64), buildProof: assert.fail, openSession: assert.fail }));
+  }
+  await withServer(assert.fail, async base => {
+    assert.equal((await (await readEvidence(base)).json()).evidence.attempt.fullyUploaded, false);
+    assert.equal((await post(base, 'record-completed', completed)).status, 409);
+  }, createPhysicalProofRuntime({ journalPath }));
+});
+
+test('operator records a known observation, reloads the locked UI, and records CMY without printer calls', async t => {
+  const journalPath = await physicalFixture(t);
+  const requests = [];
+  const usbCalls = [];
+  const unexpectedUsb = () => { usbCalls.push('webusb'); assert.fail('Unexpected WebUSB call'); };
+  const mount = async base => {
+    const dom = new JSDOM(await (await fetch(base)).text(), { url: base, runScripts: 'outside-only' });
+    t.after(() => dom.window.close());
+    const { window } = dom;
+    window.fetch = async (path, init) => {
+      requests.push(path);
+      assert.ok(['/api/physical-proof/evidence','/api/physical-proof/record-completed','/api/physical-proof/physical-qc'].includes(path), path);
+      return fetch(base + path, init);
+    };
+    window.connectWebUsbPrinter = window.supportsWebUsb = unexpectedUsb;
+    const script = window.document.querySelector('script[type="module"]').textContent;
+    window.eval(script.replace(/^\s*import .*?from '\/webusb-client\.js';/m, ''));
+    const byId = id => window.document.getElementById(id);
+    const wait = async predicate => {
+      for (let i = 0; i < 100 && !predicate(); i++) await new Promise(resolve => setTimeout(resolve, 10));
+      assert.ok(predicate(), 'expected UI state');
+    };
+    return { byId, wait, window };
+  };
+  const options = () => createPhysicalProofRuntime({ journalPath, buildProof: assert.fail, openSession: unexpectedUsb });
+  await withServer(assert.fail, async base => {
+    const { byId, wait } = await mount(base);
+    await wait(() => byId('record-outcome')?.hidden === false);
+    byId('observed-at').value = stamp;
+    byId('record-completed').click();
+    await wait(() => byId('locked-heading')?.textContent === 'Attempt locked. No resend.' && !byId('locked-result').hidden);
+    assert.equal(byId('proof-controls').hidden, true);
+    assert.equal(byId('connect-webusb').disabled, true);
+    assert.equal(byId('send-proof').disabled, true);
+    assert.equal(byId('record-outcome').hidden, true);
+  }, options());
+  await withServer(assert.fail, async base => {
+    const { byId, wait } = await mount(base);
+    await wait(() => byId('physical-qc-form')?.hidden === false);
+    const result = byId('locked-result').textContent;
+    for (const field of [/Transport\s*passed/i, /Cut alignment\s*passed/i, /Kiss cut\s*passed/i, /Print quality\s*failed.*ribbon registration/i]) {
+      assert.match(result, field);
+    }
+    byId('magenta').value = 'fail';
+    byId('qc-reference').value = 'synthetic physical inspection';
+    byId('qc-notes').value = 'slight magenta offset';
+    byId('record-qc').click();
+    await wait(() => byId('qc-history')?.hidden === false);
+    assert.match(byId('qc-history').textContent, /magenta.*fail/i);
+    assert.match(byId('qc-history').textContent, /overall.*fail/i);
+    assert.match(byId('qc-history').textContent, /slight magenta offset/);
+    assert.equal(byId('physical-qc-form').hidden, true);
+    assert.equal(byId('send-proof').disabled, true);
+  }, options());
+  assert.deepEqual(usbCalls, []);
+  assert.deepEqual(requests, ['evidence','record-completed','evidence','evidence','physical-qc','evidence'].map(path => '/api/physical-proof/' + path));
 });

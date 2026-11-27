@@ -119,7 +119,7 @@ describe('physical observations on the durable, one-attempt journal', () => {
     try {
       expect(original).toEqual({
         attempt: {
-          evidenceHash, submissionId, printerJobId, acknowledgedFrames: 4,
+          evidenceHash, submissionId, printerJobId, fullyUploaded: true, acknowledgedFrames: 4,
           phase: 'needs_reconciliation', pendingKind: null, pendingIndex: null, reason: 'physical_observation_required',
         },
         outcome: null, ribbonRegistrationQc: null,

@@ -1,0 +1,22 @@
+{
+  "source": "owner_observation",
+  "reportedDate": "2026-11-28",
+  "observedAt": null,
+  "transport": "passed",
+  "cutAlignment": "passed",
+  "kissCut": "passed",
+  "printQuality": { "status": "failed", "cause": "printer_ribbon_registration" },
+  "disposition": "locked_no_resend",
+  "ribbonRegistrationQc": {
+    "channels": { "cyan": "uncertain", "magenta": "uncertain", "yellow": "uncertain" },
+    "notes": "The owner supplied no channel-specific evidence.",
+    "recordedAt": null,
+    "photoReference": null
+  },
+  "journalBinding": {
+    "status": "unavailable_in_repository",
+    "evidenceHash": null,
+    "submissionId": null,
+    "printerJobId": null
+  }
+}

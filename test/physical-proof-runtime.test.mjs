@@ -36,6 +36,7 @@ test('runs one exact approved attempt and closes both journal and USB session', 
     journalPath: '/tmp/proof.sqlite',
     buildProof: async () => proof,
     openSession: async () => { events.push('session:open'); return session; },
+    createQcJournal: () => ({ getPhysicalAttemptEvidence: () => null, close() {} }),
     createJournal(path) { assert.equal(path, '/tmp/proof.sqlite'); events.push('journal:open'); return journal; },
     createTransport(io) { assert.equal(io, session.io); events.push('transport:create'); return {}; },
     runAttempt: async (artifacts, binding, dependencies) => {
@@ -80,4 +81,22 @@ test('the old arbitrary PNG setting cannot replace trusted diagnostic print pixe
     buildProof: async () => proof,
   });
   assert.equal(await runtime.preparePhysicalProof(), proof);
+});
+
+test('a fresh direct runtime refuses a locked journal before opening the mutation journal or USB', async () => {
+  const calls = [];
+  const runtime = createPhysicalProofRuntime({
+    approvalFingerprint: fingerprint, journalPath: '/synthetic/locked.sqlite',
+    createQcJournal() {
+      return {
+        getPhysicalAttemptEvidence: () => ({ outcome: { disposition: 'locked_no_resend' } }),
+        close() { calls.push('evidence:close'); },
+      };
+    },
+    createJournal() { calls.push('transport:journal'); },
+    openSession() { calls.push('usb:open'); },
+  });
+  await assert.rejects(runtime.sendPhysicalProof({ approvalFingerprint: fingerprint, confirmation: 'SEND ONE SHEET' }, proof),
+    { code: 'ATTEMPT_LOCKED' });
+  assert.deepEqual(calls, ['evidence:close']);
 });

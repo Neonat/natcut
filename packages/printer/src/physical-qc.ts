@@ -35,8 +35,24 @@ export type PhysicalAttemptOutcome = z.infer<typeof completedAttempt>;
 export type RibbonRegistrationQc = z.infer<typeof ribbonQc>;
 export type PhysicalQcStatus = z.infer<typeof channel>;
 
-function publicCheckpoint(row: TransportAttemptRecord) {
+export class ObservationConflict extends Error {}
+export class InvalidObservation extends Error {}
+
+function parseInput<T>(schema: z.ZodType<T>, input: unknown): T {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) throw new InvalidObservation('Invalid physical observation fields.');
+  return parsed.data;
+}
+
+function fullyUploaded(row: TransportAttemptRecord, expectedFrames: number) {
+  return row.phase === 'needs_reconciliation' && row.reason === 'physical_observation_required' &&
+    row.printerJobId !== null && row.pendingKind === null && row.pendingIndex === null &&
+    row.acknowledgedFrames === expectedFrames;
+}
+
+function publicCheckpoint(row: TransportAttemptRecord, expectedFrames: number) {
   return Object.freeze({
+    fullyUploaded: fullyUploaded(row, expectedFrames),
     submissionId: row.submissionId,
     evidenceHash: row.evidenceHash,
     phase: row.phase,
@@ -75,21 +91,13 @@ function parseObservation<T>(rows: unknown[], submissionId: string | undefined, 
   return schema.parse(parseStoredJournalJson(stored.recordJson));
 }
 
-function requireCompletedUpload(attempt: PhysicalAttemptEvidence['attempt'], expectedFrames: number) {
-  if (attempt.phase !== 'needs_reconciliation' || attempt.reason !== 'physical_observation_required' ||
-      attempt.printerJobId === null || attempt.pendingKind !== null || attempt.pendingIndex !== null ||
-      attempt.acknowledgedFrames !== expectedFrames) {
-    throw new Error('A fully acknowledged physical upload is required to record its observation.');
-  }
-}
-
-function requireExactOutcome(record: PhysicalAttemptOutcome, attempt: PhysicalAttemptEvidence['attempt']) {
-  if (record.evidenceHash !== attempt.evidenceHash || record.submissionId !== attempt.submissionId ||
-      record.printerJobId !== attempt.printerJobId) throw new Error('Completed observation does not match the transport identity.');
+function matchesIdentity(record: PhysicalAttemptOutcome, attempt: PhysicalAttemptEvidence['attempt']) {
+  return record.evidenceHash === attempt.evidenceHash && record.submissionId === attempt.submissionId &&
+    record.printerJobId === attempt.printerJobId;
 }
 
 function identicalRetry<T>(stored: T, incoming: T): T {
-  if (!isDeepStrictEqual(stored, incoming)) throw new Error('A different immutable observation already exists.');
+  if (!isDeepStrictEqual(stored, incoming)) throw new ObservationConflict('A different immutable observation already exists.');
   return stored;
 }
 
@@ -149,28 +157,29 @@ export class SqlitePhysicalQcJournal {
       submissionId, ribbonQc);
     if (!transport) return null;
     const { attempt, expectedFrames } = transport;
-    if (outcome) {
-      requireCompletedUpload(attempt, expectedFrames);
-      requireExactOutcome(outcome, attempt);
+    const checkpoint = publicCheckpoint(attempt, expectedFrames);
+    if (outcome && (!checkpoint.fullyUploaded || !matchesIdentity(outcome, checkpoint))) {
+      throw new Error('Stored observation does not match a completed upload.');
     }
     if (ribbonRegistrationQc && (!outcome || ribbonRegistrationQc.evidenceHash !== attempt.evidenceHash)) {
       throw new Error('Ribbon registration QC has no matching completed observation.');
     }
-    return { evidence: { attempt: publicCheckpoint(attempt), outcome, ribbonRegistrationQc }, expectedFrames };
+    return { attempt: checkpoint, outcome, ribbonRegistrationQc };
   }
 
   getPhysicalAttemptEvidence(): PhysicalAttemptEvidence | null {
-    return this.database.transaction(() => this.readSnapshot()?.evidence ?? null)();
+    return this.database.transaction(() => this.readSnapshot())();
   }
 
   recordCompletedAttempt(input: unknown): PhysicalAttemptOutcome {
-    const record = completedAttempt.parse(input);
+    const record = parseInput(completedAttempt, input);
     return this.database.transaction(() => {
       const snapshot = this.readSnapshot();
-      if (!snapshot) throw new Error('Transport attempt is missing.');
-      const { attempt, outcome } = snapshot.evidence;
-      requireCompletedUpload(attempt, snapshot.expectedFrames);
-      requireExactOutcome(record, attempt);
+      if (!snapshot) throw new ObservationConflict('Transport attempt is missing.');
+      const { attempt, outcome } = snapshot;
+      if (!attempt.fullyUploaded || !matchesIdentity(record, attempt)) {
+        throw new ObservationConflict('Observation requires the exact fully acknowledged attempt.');
+      }
       if (outcome) return identicalRetry(outcome, record);
       this.database.prepare('INSERT INTO physical_attempt_outcomes (submissionId, recordJson) VALUES (?, ?)')
         .run(attempt.submissionId, JSON.stringify(record));
@@ -179,11 +188,11 @@ export class SqlitePhysicalQcJournal {
   }
 
   recordRibbonRegistrationQc(input: unknown): RibbonRegistrationQc {
-    const record = ribbonQc.parse(input);
+    const record = parseInput(ribbonQc, input);
     return this.database.transaction(() => {
-      const evidence = this.readSnapshot()?.evidence;
+      const evidence = this.readSnapshot();
       if (!evidence?.outcome || evidence.attempt.evidenceHash !== record.evidenceHash) {
-        throw new Error('Ribbon registration QC requires the exact completed observation.');
+        throw new ObservationConflict('Ribbon registration QC requires the exact completed observation.');
       }
       if (evidence.ribbonRegistrationQc) return identicalRetry(evidence.ribbonRegistrationQc, record);
       this.database.prepare('INSERT INTO ribbon_registration_qc (submissionId, recordJson) VALUES (?, ?)')

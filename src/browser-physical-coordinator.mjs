@@ -2,19 +2,23 @@ import {
   prepareTransportAttempt,
   SqliteTransportAttemptJournal,
 } from '../packages/printer/src/transport-attempt.ts';
+import { createPhysicalEvidenceRuntime, requireMutableAttempt } from './physical-evidence.mjs';
 import { frameUploadPayload } from '../packages/printer/src/protocol-plan.ts';
 
-function exactAttempt(state, attemptId) {
-  if (!state || attemptId !== state.evidenceHash) throw new Error('Browser physical attempt does not match.');
-  return state;
-}
 export function createBrowserPhysicalCoordinator({
   approvalFingerprint,
   journalPath,
+  getPhysicalAttemptEvidence = createPhysicalEvidenceRuntime({ journalPath }).getPhysicalAttemptEvidence,
   createJournal = (file) => new SqliteTransportAttemptJournal(file),
 }) {
   let state = null;
   let started = false;
+
+  function activeAttempt(attemptId) {
+    requireMutableAttempt(getPhysicalAttemptEvidence, false);
+    if (!state || attemptId !== state.evidenceHash) throw new Error('Browser physical attempt does not match.');
+    return state;
+  }
 
   return {
     get enabled() {
@@ -26,6 +30,7 @@ export function createBrowserPhysicalCoordinator({
           proof?.summary?.approvalFingerprint !== approvalFingerprint || input?.confirmation !== 'SEND ONE SHEET') {
         throw new Error('The browser physical approval does not match this exact job.');
       }
+      requireMutableAttempt(getPhysicalAttemptEvidence, true);
       if (started) throw new Error('A browser physical attempt has already started.');
       const prepared = prepareTransportAttempt(proof.artifacts, proof.binding);
       if (!prepared) throw new Error('Physical proof evidence mismatch.');
@@ -59,7 +64,7 @@ export function createBrowserPhysicalCoordinator({
     },
 
     recordJobId({ attemptId, jobId }) {
-      const current = exactAttempt(state, attemptId);
+      const current = activeAttempt(attemptId);
       if (!Number.isSafeInteger(jobId) || jobId <= 0 || jobId > 0xffff_ffff) {
         current.journal.markReconciliation(current.evidence.submissionId, current.evidenceHash, 'printer_job_id_invalid');
         throw new Error('Printer job ID is invalid.');
@@ -72,7 +77,7 @@ export function createBrowserPhysicalCoordinator({
     },
 
     nextFrame({ attemptId, sequence }) {
-      const current = exactAttempt(state, attemptId);
+      const current = activeAttempt(attemptId);
       if (current.jobId === null) throw new Error('Printer job ID must be durable before upload.');
       if (current.pending !== null) throw new Error('The pending frame acknowledgement is not durable.');
       if (sequence !== current.sequence || sequence >= current.totalFrames) throw new Error('Frame sequence mismatch.');
@@ -98,7 +103,7 @@ export function createBrowserPhysicalCoordinator({
     },
 
     acknowledgeFrame({ attemptId, sequence }) {
-      const current = exactAttempt(state, attemptId);
+      const current = activeAttempt(attemptId);
       if (sequence !== current.sequence || current.pending !== sequence) throw new Error('Frame acknowledgement sequence mismatch.');
       current.journal.recordFrameAcknowledged(current.evidence.submissionId, current.evidenceHash, sequence);
       current.pending = null;
@@ -107,7 +112,7 @@ export function createBrowserPhysicalCoordinator({
     },
 
     finish({ attemptId }) {
-      const current = exactAttempt(state, attemptId);
+      const current = activeAttempt(attemptId);
       if (current.pending !== null || current.sequence !== current.totalFrames) throw new Error('Physical upload is incomplete.');
       current.journal.markReconciliation(
         current.evidence.submissionId,
@@ -118,7 +123,7 @@ export function createBrowserPhysicalCoordinator({
     },
 
     hold({ attemptId, reason }) {
-      const current = exactAttempt(state, attemptId);
+      const current = activeAttempt(attemptId);
       const allowed = new Set([
         'declaration_outcome_unknown', 'printer_job_id_invalid', 'frame_acknowledgement_unknown',
         'pacing_outcome_unknown', 'physical_observation_required',

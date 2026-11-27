@@ -4,7 +4,7 @@
 
 NatCut will preserve the exact logical color raster and expanded cut mask produced by trusted server code, bind both to an immutable print-profile version, and let later worker code verify those bytes before execution. Cloud operations will gain a narrow, read-only index readiness boundary without changing Hosting or touching production resources.
 
-This design does not define JPEG, PLT, registration, printer commands, or physical recovery. Those remain a separately authorized hardware milestone.
+The original cloud tranche ended at the verified logical artifact. The later local generation and physical observation boundary is recorded below.
 
 ## Decisions
 
@@ -56,7 +56,7 @@ The submission API allows 30 seconds for storage publication. Each GCS HTTP requ
 
 An authenticated retry first looks up the owner, event and idempotency key. Its canonical manifest hash and requeue source must match the binding. A hit returns the accepted ticket and token even during a rendering or storage outage. A miss prepares one bundle, checks any warning acknowledgement against the expanded mask hash, publishes and then enters the queue transaction. The transaction repeats the binding check to resolve concurrent requests and requires a cancelled requeue source owned by the same visitor in the same event.
 
-The private bucket selection is fixed to `NATCUT_ARTIFACT_BUCKET=sprout-dev-66f08-natcut-artifacts`. The object key is `logical/v1/<bundleSha256>`. GCS creation uses `ifGenerationMatch=0`. Verification reads only the pinned decimal-string generation and compares its bytes with the locally verified payload within the profile-derived size limit. Firestore stores `recordVersion: 2` and `artifact: { descriptor, generation }`. The storage path is derived from the digest. Storage failure returns HTTP 503 before ticket allocation. An upload followed by a lost Firestore race or failure may leave a reusable immutable object.
+The private bucket selection is fixed to `NATCUT_ARTIFACT_BUCKET=sprout-dev-66f08-natcut-artifacts`. The object key is `logical/v1/<bundleSha256>` for an existing v1 descriptor and `logical/v2/<bundleSha256>` for a new v2 descriptor. GCS creation uses `ifGenerationMatch=0`. Verification reads only the pinned decimal-string generation and compares its bytes with the locally verified payload within the profile-derived size limit. Firestore stores `recordVersion: 2` and `artifact: { descriptor, generation }`. The storage path is derived from the digest. Storage failure returns HTTP 503 before ticket allocation. An upload followed by a lost Firestore race or failure may leave a reusable immutable object.
 
 The local emulator runtime uses its private local create-only store, whose sole generation is `1`. Session 2 later verified production bucket ownership, runtime storage IAM, end-to-end create-only GCS behavior, and the verification-capable simulated worker rollout. Autonomous queue consumption remains stopped outside an explicitly supervised smoke or rehearsal.
 
@@ -94,14 +94,19 @@ Session 3's non-printer tranche now re-verifies an exact receipt and bundle befo
 
 The dry-run packet records the combo declaration, file sizes and hashes, PLT-first upload order, and 4071-byte payload chunks. It documents the little-endian positive job-ID field, per-frame acknowledgement, and 120 ms pacing. The create-only packet uses an incomplete sentinel and records `transport: disabled-dry-run` without a job ID.
 
-The separate transport-attempt module exercises declaration and upload through a mock port. An absolute-path SQLite WAL journal commits the exact submission and artifact evidence before declaration. The attempt commits the returned job ID before upload and checkpoints each frame intent and acknowledgement. Any existing row blocks new attempts on that journal after restart. A fully acknowledged upload requires physical observation and cannot advance cloud status. The module has no concrete printer transport or worker wiring. See the [physical adapter proof design](2026-11-28-physical-adapter-proof-design.md) for the exact invariants.
+The separate transport-attempt module exercises declaration and upload through a mock port. An absolute-path SQLite WAL journal commits the exact submission and artifact evidence before declaration. The attempt commits the returned job ID before upload and checkpoints each frame intent and acknowledgement. Any existing row blocks new attempts on that journal after restart. A fully acknowledged upload requires physical observation and cannot advance cloud status. The local browser physical-proof workflow uses the journal outside the simulated worker. See the [physical adapter proof design](2026-11-28-physical-adapter-proof-design.md) for the exact invariants.
+
+## Generation and physical QC
+
+Format version 2 adds a canonical deduplicated set of source space, ICC digest and action for each composed layer. Recognized tagged input is preserved or converted to sRGB. Ambiguous external input is rejected. Reviewed packets retain the original tagged files in `sources/` so that import can verify the selected preview’s normalization. Existing version 1 receipts and object paths remain readable. Physical generation requires a verified v2 source.
+
+The padded sRGB RGB8 print preview feeds only the JPEG encoder. The binary mask feeds only the typed PLT output. The operator overlay consumes both finished outputs for display. The final sRGB JPEG is decoded and compared with the canonical preview under `natcut-jpeg-qc-v1`. Limits and the exact calibration rerun are in the [generation design](2026-11-28-generation-qc-design.md#deterministic-generation-qc).
+
+Transport, cut alignment and kiss cut passed on the completed proof reported on 28 November. Print quality failed due to ribbon registration inside the printer. The attempt is permanently locked. A separate append-only CMY physical observation accepts pass, fail or uncertain per channel. Its status does not change a ticket, its artifacts, or the no-resend fence. Generation QC addresses software encoding only and cannot prevent this physical defect. The original journal identity and actual observation time are unavailable in the repository. The owner report remains unbound. [Historical evidence](../../evidence/physical-attempt-2026-11-28.json)
 
 ## Remaining tranches
 
-1. Add a concrete printer transport and verify device acceptance and job-specific physical evidence. USB access and one loaded-sheet printer write require separate explicit approval at execution time.
-2. Define an operator-authorized resolution procedure for held physical attempts once job-specific printer evidence is available. Public status alone cannot prove fulfillment.
-3. Rehearse the full booth path and failure injection only after the physical adapter proof.
-4. Complete production hardening, retention/privacy decisions, observability, cost controls, and final release audit after rehearsal.
+Reconciliation requires the original transport checkpoint before binding the owner observation. The physical print-quality failure remains open. A full booth rehearsal, production hardening, retention/privacy decisions, observability, cost controls and a release audit are separate work.
 
 ## Safety and rollout invariants
 

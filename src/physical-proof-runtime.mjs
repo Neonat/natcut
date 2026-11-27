@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path';
+import { createPhysicalEvidenceRuntime, requireMutableAttempt } from './physical-evidence.mjs';
 import { buildPhysicalProof } from '../packages/printer/src/physical-proof.ts';
 import {
   runTransportAttempt,
@@ -12,11 +12,14 @@ export function createPhysicalProofRuntime({
   openSession,
   buildProof = buildPhysicalProof,
   createJournal = (file) => new SqliteTransportAttemptJournal(file),
+  createQcJournal,
   createTransport = createUsbTransportMutationPort,
   runAttempt = runTransportAttempt,
 }) {
   const physicalSendEnabled = typeof approvalFingerprint === 'string' && /^[a-f0-9]{64}$/.test(approvalFingerprint);
+  const evidence = createPhysicalEvidenceRuntime({ journalPath, createQcJournal });
   return {
+    ...evidence,
     physicalSendEnabled,
     preparePhysicalProof: buildProof,
     async sendPhysicalProof(input, proof) {
@@ -26,9 +29,7 @@ export function createPhysicalProofRuntime({
           input?.confirmation !== 'SEND ONE SHEET') {
         throw new Error('The approved fingerprint does not match this exact physical proof.');
       }
-      if (typeof journalPath !== 'string' || !isAbsolute(journalPath)) {
-        throw new Error('An absolute transport journal path is required.');
-      }
+      requireMutableAttempt(evidence.getPhysicalAttemptEvidence, true);
       if (typeof openSession !== 'function') throw new Error('The USB session opener is unavailable.');
 
       const journal = createJournal(journalPath);
