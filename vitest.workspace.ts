@@ -33,6 +33,14 @@ export const projects = [
   },
   {
     test: {
+      name: 'pipeline',
+      root: './packages/pipeline',
+      include: ['test/**/*.test.ts'],
+      environment: 'node',
+    },
+  },
+  {
+    test: {
       name: 'render',
       root: './packages/render',
       include: ['test/**/*.test.ts'],
