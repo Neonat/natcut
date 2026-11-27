@@ -147,7 +147,7 @@ describe('submission routes', () => {
 
   it('accepts packaged sprites and rejects unsupported versions, roles and catalog combinations before writing tickets', async () => {
     const index = (await import('../../../packages/render/catalog/index.json', { with: { type: 'json' } })).default;
-    const selected = { ...manifest, renderVersion: 'catalog-v1', spriteAssetId: index.sprites[1]!.id };
+    const selected = { ...manifest, renderVersion: 'catalog-v1', spriteAssetId: index.sprites[0]!.id };
     const server = buildSubmissionServer({
       eventId: 'devfest-sg', statusTokenSecret: 'test-secret-at-least-32-bytes-long', repository,
       verifyBearerToken: async () => ({ uid: 'visitor' }),

@@ -13,7 +13,8 @@ export type SpriteEntry = Readonly<{
 }>;
 
 export const sprites: readonly SpriteEntry[] = Object.freeze(index.sprites.map((entry) => Object.freeze(entry)));
-const byId = new Map<string, SpriteEntry>([...sprites, ...index.archived].map((entry) => [entry.id, entry]));
+const archivedSprites: readonly SpriteEntry[] = Object.freeze(index.archived.map((entry) => Object.freeze(entry)));
+const byId = new Map<string, SpriteEntry>([...sprites, ...archivedSprites].map((entry) => [entry.id, entry]));
 const legacySprite = 'sprite/monstera-v1';
 const legacyTrainer = 'trainer/friend-v1';
 const legacySpritePng = '95edfb98885bc6df75799ea892270ff06c1d90b469cf627f7d304286ed2503df';
@@ -36,6 +37,15 @@ export const legacyManifest: CompositionManifest = {
 export const catalogManifest: CompositionManifest = {
   ...legacyManifest, spriteAssetId: sprites[0]!.id, renderVersion: 'catalog-v1',
 };
+
+export function spriteChoices(
+  selectedId: string,
+  active: readonly SpriteEntry[] = sprites,
+  archived: readonly SpriteEntry[] = archivedSprites,
+): readonly SpriteEntry[] {
+  const selected = [...active, ...archived].find((entry) => entry.id === selectedId);
+  return selected && !active.some((entry) => entry.id === selectedId) ? Object.freeze([...active, selected]) : active;
+}
 
 export function assertSupportedRecipe(manifest: CompositionManifest): void {
   if (manifest.renderVersion === 'fixture-v1') {

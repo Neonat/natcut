@@ -10,9 +10,12 @@ import {
   planComposition,
   renderCutGroupMasks,
   renderServerRaster,
+  spriteChoices,
+  sprites,
   type AssetCatalog,
   type PlannedComposition,
   type RgbaAsset,
+  type SpriteEntry,
 } from '../src/index.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -51,6 +54,18 @@ const assets: AssetCatalog = new Map([
 ]);
 
 describe('planComposition', () => {
+  it('keeps an archived selection visible without offering other archived artwork', () => {
+    const archived: SpriteEntry[] = [
+      { id: 'sprite/selected-old', name: 'Selected old', pngSha256: 'a'.repeat(64), width: 1, height: 1 },
+      { id: 'sprite/other-old', name: 'Other old', pngSha256: 'b'.repeat(64), width: 1, height: 1 },
+    ];
+    expect(spriteChoices('sprite/selected-old', sprites, archived).map((entry) => entry.id)).toEqual([
+      ...sprites.map((entry) => entry.id),
+      'sprite/selected-old',
+    ]);
+    expect(spriteChoices(sprites[0]!.id, sprites, archived)).toBe(sprites);
+  });
+
   it.each([
     { renderVersion: 'unknown-v2' },
     { spriteAssetId: 'branding/logo' },

@@ -8,7 +8,7 @@ import test from 'node:test';
 import sharp from 'sharp';
 import { CompositionManifestSchema, DEVFEST_SG_V1, canonicalManifestJson } from '../packages/domain/src/index.ts';
 import { evaluateCutGeometry } from '../packages/cut-geometry/src/index.ts';
-import { loadPackagedAssets, planComposition, renderCutGroupMasks, renderServerRaster } from '../packages/render/src/index.ts';
+import { catalogManifest, loadPackagedAssets, planComposition, renderCutGroupMasks, renderServerRaster } from '../packages/render/src/index.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 
@@ -140,7 +140,7 @@ test('proof:sheet rejects an unsupported manifest supplied on the command line',
   const parent = await mkdtemp(path.join(tmpdir(), 'natcut-proof-invalid-'));
   try {
     const source = path.join(parent, 'manifest.json');
-    await writeFile(source, JSON.stringify({ renderVersion: 'future' }));
+    await writeFile(source, JSON.stringify({ ...catalogManifest, renderVersion: 'future' }));
     const result = runProof(path.join(parent, 'proof'), '--manifest', source);
     assert.notEqual(result.status, 0);
     assert.deepEqual(await readdir(parent), ['manifest.json']);

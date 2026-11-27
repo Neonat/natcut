@@ -46,6 +46,8 @@ export function EditorPage(props: EditorPageProps) {
   const [custom, setCustom] = useState(() => ![1, 1.5, 2].includes(initialManifest.cutMarginMm));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [artworkState, setArtworkState] = useState<'loading' | 'ready' | 'error'>(props.previewReportOverride ? 'ready' : 'loading');
+  const [assetReload, setAssetReload] = useState(0);
   const preview = useCutPreview();
   const current = preview.result?.manifestFingerprint === canonicalManifestJson(manifest) ? preview.result : null;
   const report = props.previewReportOverride ?? current?.report;
@@ -55,6 +57,7 @@ export function EditorPage(props: EditorPageProps) {
 
   const update = (next: CompositionManifest, immediate: boolean) => {
     if (canonicalManifestJson(next) !== canonicalManifestJson(manifest)) {
+      if (next.spriteAssetId !== manifest.spriteAssetId) setArtworkState('loading');
       idempotencyKey.current = requestId();
       setManifest(next);
       setError(null);
@@ -101,6 +104,12 @@ export function EditorPage(props: EditorPageProps) {
   };
 
   const structuralError = report?.severity === 'error';
+  const previewFailed = Boolean(current?.error) || artworkState === 'error';
+  const retryPreview = () => {
+    setArtworkState('loading');
+    setAssetReload((value) => value + 1);
+    preview.release(manifest);
+  };
   return (
     <main className="editor-page">
       <header className="brand-bar"><span className="brand-mark">sprout</span><span>Sticker studio</span></header>
@@ -109,10 +118,11 @@ export function EditorPage(props: EditorPageProps) {
       </div>
       <fieldset className="studio-layout" disabled={submitting} aria-label="Sticker design">
         {manifest.renderVersion === 'catalog-v1' && (
-          <SpritePicker selected={manifest.spriteAssetId}
+          <SpritePicker selected={manifest.spriteAssetId} reloadKey={assetReload}
             onChange={(spriteAssetId) => update({ ...manifest, spriteAssetId }, true)} />
         )}
-        <CutPreview manifest={manifest} contours={current?.contours ?? []} unavailable={Boolean(current?.error)} />
+        <CutPreview manifest={manifest} contours={current?.contours ?? []} reloadKey={assetReload}
+          unavailable={previewFailed} onArtworkState={setArtworkState} />
         <CutBorderControl
           value={manifest.cutMarginMm}
           custom={custom}
@@ -130,9 +140,9 @@ export function EditorPage(props: EditorPageProps) {
       ) : null}
       {error ? <div className="notice error" role="alert">{error}</div> : null}
       <div className="sticky-action">
-        <button className="primary-action" type="button" disabled={submitting || structuralError || (!report && !current?.error)}
-          onClick={() => current?.error ? preview.release(manifest) : void submit()}>
-          {submitting ? 'Joining queue…' : current?.error ? 'Retry preview' : !report ? 'Checking cut…' : report.severity === 'warning' ? 'Print anyway' : 'Join print queue'}
+        <button className="primary-action" type="button" disabled={submitting || structuralError || (!report && !previewFailed) || artworkState === 'loading'}
+          onClick={() => previewFailed ? retryPreview() : void submit()}>
+          {submitting ? 'Joining queue…' : previewFailed ? 'Retry preview' : (!report || artworkState === 'loading') ? 'Checking cut…' : report.severity === 'warning' ? 'Print anyway' : 'Join print queue'}
         </button>
       </div>
     </main>

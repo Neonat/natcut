@@ -1,5 +1,6 @@
 import { DEVFEST_SG_V1, type CompositionManifest } from '@natcut/domain';
 import { assetPngFilename, planComposition } from '@natcut/render/browser';
+import { useEffect, useRef } from 'react';
 import type { ContourPreview } from './use-cut-preview.ts';
 
 function pathData(points: ContourPreview): string {
@@ -7,11 +8,32 @@ function pathData(points: ContourPreview): string {
   return `M ${points.map((point) => `${point.x} ${point.y}`).join(' L ')} Z`;
 }
 
-type PreviewProps = { manifest: CompositionManifest; contours: ContourPreview[]; unavailable?: boolean };
+type ArtworkState = 'loading' | 'ready' | 'error';
+type PreviewProps = {
+  manifest: CompositionManifest;
+  contours: ContourPreview[];
+  unavailable?: boolean;
+  reloadKey?: number;
+  onArtworkState?: (state: ArtworkState) => void;
+};
 
-export function CutPreview({ manifest, contours, unavailable }: PreviewProps) {
+export function CutPreview({ manifest, contours, unavailable, reloadKey = 0, onArtworkState }: PreviewProps) {
   const plan = planComposition(manifest, DEVFEST_SG_V1);
+  const artworkKey = `${plan.layers.map((layer) => assetPngFilename(layer.assetId)).join(':')}:${reloadKey}`;
+  const loadState = useRef({ key: artworkKey, layers: new Set<string>() });
+  if (loadState.current.key !== artworkKey) loadState.current = { key: artworkKey, layers: new Set() };
   const dilationPx = (manifest.cutMarginMm * 300) / 25.4;
+
+  useEffect(() => {
+    onArtworkState?.('loading');
+  }, [artworkKey, onArtworkState]);
+
+  const loaded = (layerId: string) => {
+    if (loadState.current.key !== artworkKey) return;
+    loadState.current.layers.add(layerId);
+    if (loadState.current.layers.size === plan.layers.length) onArtworkState?.('ready');
+  };
+
   return (
     <section className="preview-shell" aria-label="Sticker preview">
       <div className="preview-label"><span>Live preview</span><span>{manifest.cutMarginMm.toFixed(1)} mm border</span></div>
@@ -28,9 +50,9 @@ export function CutPreview({ manifest, contours, unavailable }: PreviewProps) {
         </defs>
         <rect width="1200" height="2100" rx="72" fill="#dceac7" />
         {plan.layers.map((layer) => (
-          <g key={layer.id} filter="url(#paper-shadow)">
+          <g key={`${layer.id}:${artworkKey}`} filter="url(#paper-shadow)">
             <image
-              href={'/' + assetPngFilename(layer.assetId)}
+              href={`/${assetPngFilename(layer.assetId)}?reload=${reloadKey}`}
               x={layer.x}
               y={layer.y}
               width={layer.width}
@@ -38,6 +60,8 @@ export function CutPreview({ manifest, contours, unavailable }: PreviewProps) {
               preserveAspectRatio="none"
               imageRendering="pixelated"
               filter="url(#cut-border)"
+              onLoad={() => loaded(layer.id)}
+              onError={() => loadState.current.key === artworkKey && onArtworkState?.('error')}
             />
           </g>
         ))}

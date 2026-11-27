@@ -7,8 +7,10 @@ test.use({ viewport: { width: 375, height: 812 }, isMobile: true, deviceScaleFac
 
 test('the selected rehearsal sprite survives a queue round trip and reproduces the worker contour offline', async ({ page, request }, info) => {
   await page.goto('/edit');
-  const first = page.getByRole('radio', { name: 'Monstera' });
-  const second = page.getByRole('radio', { name: 'Prickly pear' });
+  const choices = page.getByRole('radio');
+  test.skip(await choices.count() < 2, 'Selection round trip needs at least two active sprites.');
+  const first = choices.first();
+  const second = choices.nth(1);
   await expect(first).toBeChecked();
   const submit = page.getByRole('button', { name: 'Join print queue' });
   await expect(submit).toBeEnabled();
@@ -67,32 +69,35 @@ test('the selected rehearsal sprite survives a queue round trip and reproduces t
 });
 
 test('fetches only the planned artwork for geometry and can retry a failed image decode', async ({ page, context }) => {
-  let failPear = true;
+  let failSelected = true;
+  let selectedPath = '';
   const fetches: string[] = [];
-  await context.route(/\/[a-f0-9]{64}\.png$/, async (route) => {
+  await context.route(/\/[a-f0-9]{64}\.png(?:\?.*)?$/, async (route) => {
+    const path = new URL(route.request().url()).pathname;
     if (route.request().resourceType() === 'fetch') {
-      const url = new URL(route.request().url()).pathname;
-      fetches.push(url);
-      if (failPear && url === pearUrl) return route.fulfill({ contentType: 'image/png', body: 'broken PNG' });
+      fetches.push(path);
     }
+    if (failSelected && path === selectedPath) return route.fulfill({ status: 503, contentType: 'text/plain', body: 'temporary failure' });
     await route.continue();
   });
-  let pearUrl = '';
   await page.goto('/edit');
-  const pear = page.getByRole('radio', { name: 'Prickly pear' });
-  pearUrl = (await pear.locator('..').locator('img').getAttribute('src'))!;
+  const choices = page.getByRole('radio');
+  test.skip(await choices.count() < 2, 'Retry selection needs at least two active sprites.');
+  const selected = choices.nth(1);
+  selectedPath = new URL((await selected.locator('..').locator('img').getAttribute('src'))!, page.url()).pathname;
   const submit = page.getByRole('button', { name: 'Join print queue' });
   await expect(submit).toBeEnabled();
   expect(fetches).toHaveLength(2);
-  expect(fetches).not.toContain(pearUrl);
+  expect(fetches).not.toContain(selectedPath);
   await page.getByRole('button', { name: /Tight/ }).click();
   await expect(submit).toBeEnabled();
   expect(fetches).toHaveLength(2);
-  await pear.check();
+  await selected.check();
   await expect(page.getByRole('alert')).toContainText(/preview/i);
   await expect(submit).toHaveCount(0);
-  failPear = false;
+  failSelected = false;
   await page.getByRole('button', { name: /Retry preview/i }).click();
   await expect(submit).toBeEnabled();
-  expect(fetches.filter((url) => url === pearUrl)).toHaveLength(2);
+  expect(await selected.locator('..').locator('img').evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
+  expect(fetches.filter((url) => url === selectedPath)).toHaveLength(2);
 });

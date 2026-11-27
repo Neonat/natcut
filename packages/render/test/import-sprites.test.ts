@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -26,7 +26,8 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
     for (let i = 0; i < 20; i++) {
       const file = `local-source-${i}.png`;
       rows.push({ name: `Plant ${i}`, file });
-      await sharp({ create: { width: i % 2 ? 4 : 8, height: i % 2 ? 8 : 4, channels: 4, background: { r: i, g: 100, b: 100, alpha: 1 } } }).png().toFile(path.join(dir, file));
+      const image = sharp({ create: { width: i % 2 ? 4 : 8, height: i % 2 ? 8 : 4, channels: 4, background: { r: i, g: 100, b: 100, alpha: 1 } } });
+      await (i === 19 ? image.withMetadata({ orientation: 6 }) : image).png().toFile(path.join(dir, file));
     }
     rows[0]!.scientificName = 'Example species';
     await importRows(rows);
@@ -43,6 +44,15 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
     const alpha = data.filter((_, i) => i % 4 === 3);
     expect(alpha[0]).toBe(0);
     expect(alpha.filter((a) => a === 255)).toHaveLength(info.width * info.height / 2);
+    const oriented = initial.sprites.find((entry) => entry.name === 'Plant 19')!;
+    const orientedPixels = await sharp(path.join(out, 'artwork', oriented.pngSha256 + '.png')).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const visible = [] as Array<{ x: number; y: number }>;
+    for (let pixel = 0; pixel < orientedPixels.data.length / 4; pixel++) {
+      if (orientedPixels.data[pixel * 4 + 3]! >= 128) visible.push({ x: pixel % orientedPixels.info.width, y: Math.floor(pixel / orientedPixels.info.width) });
+    }
+    expect(Math.max(...visible.map((p) => p.x)) - Math.min(...visible.map((p) => p.x))).toBeGreaterThan(
+      Math.max(...visible.map((p) => p.y)) - Math.min(...visible.map((p) => p.y)),
+    );
     await importRows(rows.toReversed());
     expect(await loadIndex()).toEqual(initial);
 
@@ -56,17 +66,24 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
     const files = await readdir(path.join(out, 'artwork'));
     await writeFile(path.join(dir, 'broken.png'), 'invalid');
     await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(path.join(dir, 'empty.png'));
+    await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 20, g: 80, b: 40, alpha: 0.4 } } }).png().toFile(path.join(dir, 'faint.png'));
     for (const bad of [
       { name: ' plant 0 ', file: rows[1]!.file },
       { name: 'Duplicate artwork', file: rows[0]!.file },
       { name: 'Broken', file: 'broken.png' },
       { name: 'Missing', file: 'missing.png' },
       { name: 'Empty', file: 'empty.png' },
+      { name: 'Faint', file: 'faint.png' },
     ]) {
       await expect(importRows([rows[0]!, bad])).rejects.toThrow();
       expect(await loadIndex()).toEqual(changed);
       expect(await readdir(path.join(out, 'artwork'))).toEqual(files);
     }
+
+    await mkdir(out + '.import-lock', { recursive: true });
+    await writeFile(path.join(out + '.import-lock', 'owner.json'), JSON.stringify({ pid: 999_999_999 }));
+    await importRows(rows);
+    expect(await loadIndex()).toEqual(changed);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
