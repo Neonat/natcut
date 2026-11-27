@@ -3,18 +3,22 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
+import { createGcsArtifactPublisher, NATCUT_ARTIFACT_BUCKET } from '@natcut/artifacts';
 import { loadPackagedAssets } from '@natcut/render';
 import { createFirebaseBearerVerifier } from './auth.ts';
 import { createSubmissionRepository, resolveSubmissionFirestoreSelection } from './repository.ts';
 import { createSurveyRepository } from './survey-repository.ts';
 import { buildSubmissionServer } from './routes.ts';
-import { createTrustedManifestValidator } from './validation.ts';
+import { createTrustedArtifactPreparer } from './validation.ts';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
+export { NATCUT_ARTIFACT_BUCKET };
 
 export type CloudRunConfig = {
   projectId: 'sprout-dev-66f08';
   databaseId: 'natcut';
+  artifactBucket: typeof NATCUT_ARTIFACT_BUCKET;
   statusTokenSecret: string;
   port: number;
   host: '0.0.0.0';
@@ -28,6 +32,12 @@ export function readCloudRunConfig(environment: RuntimeEnvironment): CloudRunCon
   if (selection.projectId !== 'sprout-dev-66f08' || selection.databaseId !== 'natcut') {
     throw new Error('Cloud Run requires the isolated NatCut production database.');
   }
+  if (environment.NATCUT_ARTIFACT_BUCKET !== NATCUT_ARTIFACT_BUCKET) {
+    throw new Error('Cloud Run requires NATCUT_ARTIFACT_BUCKET=' + NATCUT_ARTIFACT_BUCKET);
+  }
+  for (const name of ['STORAGE_EMULATOR_HOST', 'FIREBASE_STORAGE_EMULATOR_HOST']) {
+    if (environment[name] !== undefined) throw new Error('Production must not use ' + name);
+  }
   const statusTokenSecret = environment.NATCUT_STATUS_TOKEN_SECRET;
   if (!statusTokenSecret || Buffer.byteLength(statusTokenSecret) < 32) {
     throw new Error('NATCUT_STATUS_TOKEN_SECRET must contain at least 32 bytes.');
@@ -39,6 +49,7 @@ export function readCloudRunConfig(environment: RuntimeEnvironment): CloudRunCon
   return {
     projectId: selection.projectId,
     databaseId: selection.databaseId,
+    artifactBucket: NATCUT_ARTIFACT_BUCKET,
     statusTokenSecret,
     port,
     host: '0.0.0.0',
@@ -62,7 +73,8 @@ export async function createCloudRunSubmissionServer(
       repository: createSubmissionRepository(firestore),
       surveyRepository: createSurveyRepository(firestore),
       verifyBearerToken: createFirebaseBearerVerifier(getAuth(admin)),
-      validateManifest: createTrustedManifestValidator((plan) => loadPackagedAssets(plan, artwork)),
+      prepareArtifact: createTrustedArtifactPreparer((plan) => loadPackagedAssets(plan, artwork)),
+      publisher: createGcsArtifactPublisher(getStorage(admin).bucket(config.artifactBucket)),
       routePrefix: '/api',
     }),
   };

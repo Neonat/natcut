@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer, type ServerResponse } from 'node:http';
 import { safelyExecutableStates } from './job-store.ts';
 import type { OperatorQueue } from './operator-queue.ts';
-import { prepareNextWorkerJob, runLocalJob, type WorkerDependencies } from './worker.ts';
+import { prepareNextWorkerJob, runLocalJob, type PreparedJob, type WorkerDependencies } from './worker.ts';
 
 const assets = new Map<string, readonly [string, string]>([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -22,7 +22,7 @@ function cursor(search: URLSearchParams, name: string) {
 }
 
 export function createOperatorServer(deps: WorkerDependencies, queue: OperatorQueue) {
-  let currentSubmissionId: string | null = null;
+  let currentJob: PreparedJob | null = null;
   let claiming = false;
   let executing = false;
   const capability = randomBytes(32).toString('base64url');
@@ -62,10 +62,10 @@ export function createOperatorServer(deps: WorkerDependencies, queue: OperatorQu
         if (queued === null || ready === null) return send(response, 400, { error: 'INVALID_CURSOR' });
         const page = await queue.list({ queued, ready });
         const visibleClaim = page.rows.find((row) =>
-          row.submissionId === currentSubmissionId && row.publicStatus === 'next' && !row.onHold);
+          row.submissionId === currentJob?.submissionId && row.publicStatus === 'next' && !row.onHold);
         return send(response, 200, {
           ...page, claimedSubmissionId: visibleClaim?.submissionId ?? null,
-          busy: claiming || executing || (currentSubmissionId !== null && !visibleClaim),
+          busy: claiming || executing || (currentJob !== null && !visibleClaim),
         });
       }
       const pickup = /^\/collect\/([A-Za-z0-9_-]{1,128})$/.exec(url.pathname);
@@ -75,9 +75,32 @@ export function createOperatorServer(deps: WorkerDependencies, queue: OperatorQu
         if (result === 'not-ready') return send(response, 409, { error: 'TICKET_NOT_READY' });
         return send(response, 200, { publicStatus: result });
       }
+      const completionRetry = /^\/retry-completion\/([A-Za-z0-9_-]{1,128})$/.exec(url.pathname);
+      if (request.method === 'POST' && completionRetry) {
+        if (claiming || executing) return send(response, 409, { error: 'SIMULATOR_BUSY' });
+        if (currentJob) return send(response, 409, { error: 'JOB_ALREADY_CLAIMED' });
+        const submissionId = completionRetry[1]!;
+        claiming = true;
+        try {
+          const page = await queue.list({ queued: 0, ready: 0 });
+          if (page.completionRetrySubmissionId !== submissionId) {
+            return send(response, 409, { error: 'JOB_NEEDS_RECONCILIATION', submissionId });
+          }
+          const prepared = await prepareNextWorkerJob({ ...deps, expectedSubmissionId: submissionId });
+          const job = deps.store.getBySubmissionId(submissionId);
+          const acknowledged = job?.state === 'ready' && job.completionAcknowledgedAt !== null &&
+            !deps.store.listPendingPublicStatuses().some((pending) => pending.submissionId === submissionId);
+          if (acknowledged) return send(response, 200, { submissionId, completionAcknowledged: true });
+          if (prepared.kind === 'busy') return send(response, 409, { error: 'SIMULATOR_BUSY' });
+          if (prepared.kind === 'waiting_for_cloud') return send(response, 503, { error: 'STATUS_SYNC_PENDING' });
+          return send(response, 409, { error: 'JOB_NEEDS_RECONCILIATION', submissionId });
+        } finally {
+          claiming = false;
+        }
+      }
       if (request.method === 'POST' && request.url === '/claim') {
         if (claiming || executing) return send(response, 409, { error: 'SIMULATOR_BUSY' });
-        if (currentSubmissionId) return send(response, 409, { error: 'JOB_ALREADY_CLAIMED' });
+        if (currentJob) return send(response, 409, { error: 'JOB_ALREADY_CLAIMED' });
         claiming = true;
         try {
           const prepared = await prepareNextWorkerJob(deps);
@@ -87,31 +110,31 @@ export function createOperatorServer(deps: WorkerDependencies, queue: OperatorQu
           if (prepared.kind !== 'prepared') {
             return send(response, 409, { error: 'JOB_NEEDS_RECONCILIATION', submissionId: prepared.submissionId });
           }
-          currentSubmissionId = prepared.job.submissionId;
-          return send(response, 200, { submissionId: currentSubmissionId, publicStatus: 'next' });
+          currentJob = prepared.job;
+          return send(response, 200, { submissionId: currentJob.submissionId, publicStatus: 'next' });
         } finally {
           claiming = false;
         }
       }
       if (request.method === 'POST' && request.url === '/start') {
         if (claiming || executing) return send(response, 409, { error: 'SIMULATOR_BUSY' });
-        if (!currentSubmissionId) return send(response, 409, { error: 'NO_CLAIMED_JOB' });
+        if (!currentJob) return send(response, 409, { error: 'NO_CLAIMED_JOB' });
         const expectedId = request.headers['x-natcut-submission'];
-        if (expectedId !== undefined && expectedId !== currentSubmissionId) {
+        if (expectedId !== undefined && expectedId !== currentJob.submissionId) {
           return send(response, 409, { error: 'CLAIM_CHANGED' });
         }
-        const job = deps.store.getBySubmissionId(currentSubmissionId);
-        if (!job) return send(response, 404, { error: 'LOCAL_JOB_MISSING' });
-        if (!safelyExecutableStates.has(job.state)) {
+        const state = deps.store.getState(currentJob.submissionId);
+        if (!state) return send(response, 404, { error: 'LOCAL_JOB_MISSING' });
+        if (!safelyExecutableStates.has(state)) {
           return send(response, 409, { error: 'JOB_NOT_SAFE_TO_START' });
         }
-        const startedSubmissionId = currentSubmissionId;
+        const startedSubmissionId = currentJob.submissionId;
         executing = true;
-        void runLocalJob(deps, job).catch(() => {
+        void runLocalJob(deps, currentJob).catch(() => {
           // The durable worker fences determine whether this job can be claimed again.
         }).finally(() => {
           executing = false;
-          currentSubmissionId = null;
+          currentJob = null;
         });
         return send(response, 202, { submissionId: startedSubmissionId, started: true });
       }

@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
+import { LocalArtifactStore } from '@natcut/artifacts';
 import { cert, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -7,7 +8,7 @@ import {
   buildSubmissionServer,
   createSubmissionRepository,
   createSurveyRepository,
-  createTrustedManifestValidator,
+  createTrustedArtifactPreparer,
   resolveSubmissionFirestoreSelection,
 } from '../apps/submission/src/index.ts';
 import {
@@ -43,19 +44,21 @@ const admin = initializeApp({
   credential: cert({ projectId, clientEmail: 'emulator@demo-natcut.iam.gserviceaccount.com', privateKey }),
 });
 const firestore = getFirestore(admin);
+const artifacts = new LocalArtifactStore('.local/artifacts');
 const submission = buildSubmissionServer({
   eventId: 'devfest-sg',
   statusTokenSecret: 'local-demo-status-token-secret-32-bytes-minimum',
   repository: createSubmissionRepository(firestore),
   surveyRepository: createSurveyRepository(firestore),
   verifyBearerToken: createFirebaseBearerVerifier(getAuth(admin)),
-  validateManifest: createTrustedManifestValidator(),
+  prepareArtifact: createTrustedArtifactPreparer(),
+  publisher: artifacts,
   corsOrigin: allowedOrigin,
 });
 await submission.listen({ host: submissionHost, port: 8088 });
 
 const store = new JobStore(process.env.NATCUT_SQLITE_PATH ?? ':memory:');
-const control = await startSimulatorDesk({ firestore, store, eventId: 'devfest-sg' });
+const control = await startSimulatorDesk({ firestore, store, artifactReader: artifacts, eventId: 'devfest-sg' });
 process.send?.('natcut-runtime-ready');
 
 async function shutdown() {

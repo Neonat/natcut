@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { JobStore, SimulatedPrinter, type CloudQueue } from '../src/index.ts';
 import type { OperatorQueue } from '../src/operator-queue.ts';
-import { submission } from './fixtures/submission.ts';
+import { artifactReader, submission } from './fixtures/submission.ts';
 import { createOperatorServer } from '../src/operator-server.ts';
 
 const disposers: Array<() => void> = [];
@@ -16,11 +16,11 @@ async function desk(
 ) {
   const store = new JobStore(':memory:');
   const server = createOperatorServer({
-    workerId: 'test', store, executor: new SimulatedPrinter(),
+    workerId: 'test', store, artifactReader, executor: new SimulatedPrinter(),
     cloud: {
       recoverClaim, claimNextSubmission: async () => null,
       beginExecution: async () => { throw Error('unexpected execution'); },
-      updatePublicStatus: async () => { throw Error('unexpected status publication'); },
+      completeExecution: async () => { throw Error('unexpected status publication'); },
     },
   }, {
     list,
@@ -45,6 +45,17 @@ async function desk(
 }
 
 describe('loopback control boundary', () => {
+  it('serves a correlatable submission column and a non-sensitive reconciliation alert', async () => {
+    const { send } = await desk();
+    const [html, script] = await Promise.all([send('/'), send('/desk.js')]);
+    expect(html.body).toContain('<th>Submission ID</th>');
+    expect(html.body).toMatch(/id="hold" role="alert"/);
+    expect(html.body).toContain('require operator reconciliation');
+    expect(script.body).toContain('ticket.submissionId');
+    expect(script.body).toContain('Retry completion acknowledgement');
+    expect(html.body + script.body).not.toMatch(/lastError|executionToken|artifactReceiptJson|jpegPath/);
+  });
+
   it('issues a different capability for each listener, only to local clients', async () => {
     const a = await desk();
     const b = await desk();
@@ -106,10 +117,11 @@ describe('loopback control boundary', () => {
         await delayed.promise;
         return {
           rows: [
-            { submissionId: 'first', queueNumber: 1, publicStatus: 'next', localState: 'claimed', notice: null, onHold: false },
-            { submissionId: 'second', queueNumber: 2, publicStatus: 'queued', localState: null, notice: null, onHold: false },
+            { submissionId: 'first', queueNumber: 1, publicStatus: 'next', localState: 'claimed', notice: null, onHold: false, completionRetry: false },
+            { submissionId: 'second', queueNumber: 2, publicStatus: 'queued', localState: null, notice: null, onHold: false, completionRetry: false },
           ],
           next: { queued: null, ready: null },
+          completionRetrySubmissionId: null,
         };
       },
     );

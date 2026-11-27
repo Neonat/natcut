@@ -251,5 +251,9 @@ describe('stored record schemas', () => {
 
     expect(SubmissionSchema.parse(submission)).toEqual(submission);
     expect(() => SubmissionSchema.parse({ ...submission, physicalState: 'uploading_cut' })).toThrow();
+    const stored = SubmissionSchema.strip();
+    for (const fields of [{ recordVersion: 3 }, { recordVersion: 1 }, { recordVersion: 2 }, { artifact: {} }]) {
+      expect(stored.safeParse({ ...submission, ...fields }).success).toBe(false);
+    }
   });
 });

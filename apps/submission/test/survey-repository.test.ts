@@ -2,6 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { submissionInput } from './fixtures/artifact.ts';
 import {
   SurveyUnavailableError,
   createSurveyRepository,
@@ -32,7 +33,11 @@ emulatorDescribe('survey repository', () => {
   });
 
   async function seedSubmission(id: string, ownerUid: string, publicStatus = 'collected') {
-    await firestore.doc(`submissions/${id}`).set({ eventId, ownerUid, publicStatus });
+    const { artifact, ...legacy } = submissionInput(id);
+    await firestore.doc(`submissions/${id}`).set({
+      ...legacy, id, eventId, ownerUid, publicStatus, queueNumber: 1, jobsAhead: 0,
+      updatedAt: legacy.acceptedAt, cancelledAt: null,
+    });
   }
 
   beforeAll(async () => {

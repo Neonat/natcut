@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { SubmissionSchema } from '@natcut/domain';
 import type { Firestore } from 'firebase-admin/firestore';
 import { z } from 'zod';
 
@@ -43,12 +44,18 @@ function documentId(...parts: string[]): string {
   return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
 
+const StoredSubmissionSchema = SubmissionSchema.strip();
+function surveyEligible(record: unknown, input: Pick<SurveyInput, 'ownerUid' | 'eventId' | 'stickerSubmissionId'>) {
+  const parsed = StoredSubmissionSchema.safeParse(record);
+  return parsed.success && parsed.data.id === input.stickerSubmissionId && parsed.data.ownerUid === input.ownerUid
+    && parsed.data.eventId === input.eventId && parsed.data.publicStatus === 'collected';
+}
+
 export function createSurveyRepository(firestore: Firestore): SurveyRepository {
   return {
     async status(input) {
       const submission = (await firestore.collection('submissions').doc(input.stickerSubmissionId).get()).data();
-      const eligible = Boolean(submission && submission.ownerUid === input.ownerUid
-        && submission.eventId === input.eventId && submission.publicStatus === 'collected');
+      const eligible = surveyEligible(submission, input);
       if (!eligible) return { eligible: false, submitted: false };
       const surveyId = documentId(input.eventId, input.ownerUid);
       return { eligible: true, submitted: (await firestore.collection('surveys').doc(surveyId).get()).exists };
@@ -63,8 +70,7 @@ export function createSurveyRepository(firestore: Firestore): SurveyRepository {
       return firestore.runTransaction(async (transaction) => {
         const existing = await transaction.get(surveyRef);
         const submission = await transaction.get(submissionRef);
-        const data = submission.data();
-        if (!submission.exists || data?.ownerUid !== input.ownerUid || data.eventId !== input.eventId || data.publicStatus !== 'collected') {
+        if (!surveyEligible(submission.data(), input)) {
           throw new SurveyUnavailableError();
         }
         if (existing.exists) {

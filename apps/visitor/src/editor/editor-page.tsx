@@ -12,6 +12,13 @@ import type { SubmissionRequest, SubmissionResponse } from '../api.ts';
 import { CutBorderControl } from './cut-border-control.tsx';
 import { CutPreview } from './cut-preview.tsx';
 import { SpritePicker } from './sprite-picker.tsx';
+import {
+  acceptedSubmissionAttempt,
+  markSubmissionAttemptAccepted,
+  restoreOrCreateSubmissionAttempt,
+  submissionAttemptBinding,
+  type SubmissionAttempt,
+} from './submission-attempt.ts';
 import { useCutPreview } from './use-cut-preview.ts';
 
 export const fixtureManifest = legacyManifest;
@@ -51,14 +58,24 @@ export function EditorPage(props: EditorPageProps) {
   const preview = useCutPreview();
   const current = preview.result?.manifestFingerprint === canonicalManifestJson(manifest) ? preview.result : null;
   const report = props.previewReportOverride ?? current?.report;
-  const idempotencyKey = useRef(requestId());
+  const submissionAttempt = useRef<SubmissionAttempt | null>(null);
 
   useEffect(() => { preview.release(initialManifest); }, []);
+  useEffect(() => {
+    const accepted = acceptedSubmissionAttempt(submissionAttemptBinding(initialManifest, props.requeuedFrom));
+    if (!accepted) return;
+    let statusToken: string | null;
+    try { statusToken = sessionStorage.getItem(`natcut:status:${accepted.submissionId}`); }
+    catch { return; }
+    if (!statusToken) return;
+    const path = `/queue/${accepted.submissionId}#token=${statusToken}`;
+    if (props.onNavigate) props.onNavigate(path);
+    else window.location.assign(path);
+  }, []);
 
   const update = (next: CompositionManifest, immediate: boolean) => {
     if (canonicalManifestJson(next) !== canonicalManifestJson(manifest)) {
       if (next.spriteAssetId !== manifest.spriteAssetId) setArtworkState('loading');
-      idempotencyKey.current = requestId();
       setManifest(next);
       setError(null);
     }
@@ -74,22 +91,28 @@ export function EditorPage(props: EditorPageProps) {
   const submit = async () => {
     setSubmitting(true);
     setError(null);
-    const request: SubmissionRequest = {
-      manifest,
-      idempotencyKey: idempotencyKey.current,
-      ...(props.requeuedFrom ? { requeuedFrom: props.requeuedFrom } : {}),
-      ...(report?.severity === 'warning'
-        ? { warningAcknowledgement: {
-          geometryVersion: report.geometryVersion,
-          rasterHash: report.rasterHash,
-          manifestHash: await manifestHash(manifest),
-          issuesHash: await geometryIssuesHash(report.issues),
-        } }
-        : {}),
-    };
     try {
+      const binding = submissionAttemptBinding(manifest, props.requeuedFrom);
+      const attempt = submissionAttempt.current?.binding === binding
+        ? submissionAttempt.current
+        : restoreOrCreateSubmissionAttempt(binding, requestId);
+      submissionAttempt.current = attempt;
+      const request: SubmissionRequest = {
+        manifest,
+        idempotencyKey: attempt.idempotencyKey,
+        ...(props.requeuedFrom ? { requeuedFrom: props.requeuedFrom } : {}),
+        ...(report?.severity === 'warning'
+          ? { warningAcknowledgement: {
+            geometryVersion: report.geometryVersion,
+            rasterHash: report.rasterHash,
+            manifestHash: await manifestHash(manifest),
+            issuesHash: await geometryIssuesHash(report.issues),
+          } }
+          : {}),
+      };
       const accepted = await props.submitSubmission(request);
       sessionStorage.setItem(`natcut:status:${accepted.submissionId}`, accepted.statusToken);
+      markSubmissionAttemptAccepted(attempt, accepted.submissionId);
       if (manifest.renderVersion === 'catalog-v1') {
         try { sessionStorage.setItem(`natcut:draft:${accepted.submissionId}`, JSON.stringify(manifest)); }
         catch { /* A full tab store should still open the accepted ticket. */ }

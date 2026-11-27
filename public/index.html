@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Printer status | NatCut</title>
+  <title>Physical printer proof | NatCut</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -66,6 +66,8 @@
       margin-block-end: 2rem;
     }
 
+    .masthead-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+
     h1 {
       max-inline-size: 12ch;
       margin: 0;
@@ -98,6 +100,61 @@
       background: var(--surface);
       box-shadow: var(--shadow);
     }
+
+    .proof-panel { margin-block-start: 2rem; }
+
+    .proof-heading,
+    .proof-body {
+      padding: 1.25rem;
+    }
+
+    .proof-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      border-block-end: 1px solid var(--border);
+    }
+
+    .proof-heading h2,
+    .proof-heading p { margin: 0; }
+
+    .proof-heading p { margin-block-start: 0.35rem; color: var(--muted); font-size: 0.8125rem; }
+
+    .proof-body {
+      display: grid;
+      grid-template-columns: minmax(12rem, 0.7fr) minmax(0, 1.3fr);
+      gap: 1.25rem;
+    }
+
+    .preview-stack { display: grid; gap: 1rem; align-content: start; }
+    .preview-stack figure { margin: 0; }
+    .preview-stack figcaption {
+      margin-block-end: 0.4rem;
+      color: var(--muted);
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    #proof-preview,
+    #cut-overlay {
+      display: none;
+      inline-size: 100%;
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      background: white;
+    }
+
+    #proof-preview[data-ready="true"],
+    #cut-overlay[data-ready="true"] { display: block; }
+
+    .proof-evidence { min-inline-size: 0; }
+    .proof-evidence dl { grid-template-columns: 1fr; }
+    .proof-evidence .datum { padding-inline: 0; border-inline: 0; }
+    .proof-evidence code { overflow-wrap: anywhere; font-size: 0.75rem; }
+    .proof-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-block-start: 1rem; }
+    #proof-message { min-block-size: 2.5em; color: var(--muted); }
 
     .state-line {
       display: flex;
@@ -171,6 +228,8 @@
       dl { grid-template-columns: 1fr; }
       .datum:nth-child(odd) { border-inline-end: 0; }
       .datum:nth-last-child(2) { border-block-end: 1px solid var(--border); }
+      .proof-heading { align-items: flex-start; flex-direction: column; }
+      .proof-body { grid-template-columns: 1fr; }
     }
 
     @media (pointer: coarse) {
@@ -185,19 +244,22 @@
 <body>
   <header>
     <span class="wordmark">NatCut</span>
-    <span class="mode">Read-only bridge</span>
+    <span class="mode">One-sheet physical proof</span>
   </header>
   <main>
     <div class="masthead">
       <h1>Printer status</h1>
-      <button id="refresh" type="button">Refresh status</button>
+      <div class="masthead-actions">
+        <button id="connect-webusb" type="button">Connect printer in Chrome</button>
+        <button id="refresh" type="button">Refresh status</button>
+      </div>
     </div>
 
     <section class="panel" aria-labelledby="connection">
       <div class="state-line">
         <span class="indicator" id="indicator" aria-hidden="true"></span>
-        <h2 id="connection">Checking connection</h2>
-        <span id="message" role="status" aria-live="polite"></span>
+        <h2 id="connection">Not connected</h2>
+        <span id="message" role="status" aria-live="polite">Use Chrome to connect the PixCut S1.</span>
       </div>
       <dl aria-busy="true" id="details">
         <div class="datum"><dt>Model</dt><dd id="model">—</dd></div>
@@ -208,9 +270,47 @@
         <div class="datum"><dt>Active jobs</dt><dd id="active-jobs">—</dd></div>
       </dl>
     </section>
+
+    <section class="panel proof-panel" aria-labelledby="proof-title">
+      <div class="proof-heading">
+        <div>
+          <h2 id="proof-title">Physical cut test</h2>
+          <p>Build and inspect first. Sending stays locked until this exact job is separately approved.</p>
+        </div>
+        <button id="prepare-proof" type="button">Prepare proof</button>
+      </div>
+      <div class="proof-body">
+        <div class="preview-stack">
+          <figure>
+            <figcaption>Printed sheet</figcaption>
+            <img id="proof-preview" alt="Preview of the exact prepared 4 by 7 physical proof sheet">
+          </figure>
+          <figure>
+            <figcaption>Blade path — red line</figcaption>
+            <img id="cut-overlay" alt="Exact blade path over the prepared sticker sheet">
+          </figure>
+        </div>
+        <div class="proof-evidence">
+          <dl>
+            <div class="datum"><dt>Media</dt><dd id="proof-media">—</dd></div>
+            <div class="datum"><dt>Cut setting</dt><dd id="proof-cut">—</dd></div>
+            <div class="datum"><dt>Cut expansion</dt><dd id="proof-radius">—</dd></div>
+            <div class="datum"><dt>Print JPEG</dt><dd><code id="proof-jpeg">—</code></dd></div>
+            <div class="datum"><dt>Cut PLT</dt><dd><code id="proof-plt">—</code></dd></div>
+            <div class="datum"><dt>Approval fingerprint</dt><dd><code id="proof-fingerprint">—</code></dd></div>
+          </dl>
+          <p id="proof-message" role="status" aria-live="polite">Nothing has been sent to the printer.</p>
+          <div class="proof-actions">
+            <button id="send-proof" type="button" disabled>Send one sheet</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <script type="module">
+    import { connectWebUsbPrinter, supportsWebUsb } from '/webusb-client.js';
+
     const fields = {
       connection: document.querySelector('#connection'),
       message: document.querySelector('#message'),
@@ -224,34 +324,44 @@
       activeJobs: document.querySelector('#active-jobs'),
     };
     const refreshButton = document.querySelector('#refresh');
+    const connectButton = document.querySelector('#connect-webusb');
+    const prepareButton = document.querySelector('#prepare-proof');
+    const sendButton = document.querySelector('#send-proof');
+    const proofPreview = document.querySelector('#proof-preview');
+    const cutOverlay = document.querySelector('#cut-overlay');
+    const proofMessage = document.querySelector('#proof-message');
+    let preparedProof = null;
+    let webUsbSession = null;
+    let sendStarted = false;
 
     function setText(element, value) {
       element.textContent = value ?? '—';
     }
 
+    function renderSnapshot(snapshot) {
+      const { identity, status, activeJobs } = snapshot;
+      fields.connection.textContent = `${status.label} / ${status.subLabel}`;
+      fields.connection.classList.remove('error');
+      fields.indicator.dataset.state = status.alerts.length ? 'error' : 'ready';
+      setText(fields.model, identity.model);
+      setText(fields.sku, identity.sku);
+      setText(fields.firmware, identity['firmware-revision']);
+      setText(fields.hardware, identity['hardware-revision']);
+      setText(fields.printerState, `${status.state} / ${status.sub}`);
+      setText(fields.activeJobs, activeJobs.length ? activeJobs.join(', ') : 'None');
+      fields.message.textContent = status.alerts.length ? `Alerts: ${status.alerts.join(', ')}` : 'No alerts';
+    }
+
     async function refreshStatus() {
+      if (!webUsbSession) {
+        fields.message.textContent = 'Connect the printer in Chrome first.';
+        return;
+      }
       refreshButton.disabled = true;
       fields.details.setAttribute('aria-busy', 'true');
       fields.message.textContent = '';
       try {
-        const response = await fetch('/api/printer', {
-          cache: 'no-store',
-          signal: AbortSignal.timeout(35_000),
-        });
-        const body = await response.json();
-        if (!response.ok || !body.ok) throw new Error(body.error?.message ?? `Status request failed (${response.status})`);
-
-        const { identity, status, activeJobs } = body.snapshot;
-        fields.connection.textContent = `${status.label} / ${status.subLabel}`;
-        fields.connection.classList.remove('error');
-        fields.indicator.dataset.state = status.alerts.length ? 'error' : 'ready';
-        setText(fields.model, identity.model);
-        setText(fields.sku, identity.sku);
-        setText(fields.firmware, identity['firmware-revision']);
-        setText(fields.hardware, identity['hardware-revision']);
-        setText(fields.printerState, `${status.state} / ${status.sub}`);
-        setText(fields.activeJobs, activeJobs.length ? activeJobs.join(', ') : 'None');
-        fields.message.textContent = status.alerts.length ? `Alerts: ${status.alerts.join(', ')}` : 'No alerts';
+        renderSnapshot(await webUsbSession.protocol.snapshot());
       } catch (error) {
         const message = error.name === 'TimeoutError' ? 'Status request timed out. Try again.' : error.message;
         fields.connection.textContent = 'Unavailable';
@@ -264,8 +374,148 @@
       }
     }
 
+    async function connectPrinter() {
+      if (!supportsWebUsb()) {
+        fields.connection.textContent = 'Chrome required';
+        fields.connection.classList.add('error');
+        fields.message.textContent = 'This browser does not expose WebUSB.';
+        return;
+      }
+      connectButton.disabled = true;
+      fields.details.setAttribute('aria-busy', 'true');
+      fields.message.textContent = 'Choose the connected PixCut S1 in Chrome…';
+      try {
+        webUsbSession = await connectWebUsbPrinter();
+        renderSnapshot(await webUsbSession.protocol.snapshot());
+        connectButton.textContent = 'Printer connected';
+      } catch (error) {
+        try { await webUsbSession?.close(); } catch {
+        }
+        webUsbSession = null;
+        fields.connection.textContent = 'Not connected';
+        fields.connection.classList.add('error');
+        fields.indicator.dataset.state = 'error';
+        fields.message.textContent = error.message;
+        connectButton.disabled = false;
+      } finally {
+        fields.details.setAttribute('aria-busy', 'false');
+      }
+    }
+
+    async function prepareProof() {
+      prepareButton.disabled = true;
+      sendButton.disabled = true;
+      proofMessage.textContent = 'Building and verifying the exact JPEG and cut path…';
+      try {
+        const response = await fetch('/api/physical-proof/prepare', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+          signal: AbortSignal.timeout(35_000),
+        });
+        const body = await response.json();
+        if (!response.ok || !body.ok) throw new Error(body.error?.message ?? 'Proof preparation failed.');
+        preparedProof = body.proof;
+        setText(document.querySelector('#proof-title'), preparedProof.label);
+        setText(document.querySelector('#proof-media'), `${preparedProof.media} · ${preparedProof.raster.width}×${preparedProof.raster.height}`);
+        setText(document.querySelector('#proof-cut'), `${preparedProof.stickerCount} contours · KP${preparedProof.knifePressure} · ${preparedProof.copies} copy`);
+        setText(document.querySelector('#proof-radius'), `+${preparedProof.cutExpansion.millimeters} mm (${preparedProof.cutExpansion.pixels} px) beyond the detected border`);
+        setText(document.querySelector('#proof-jpeg'), `${preparedProof.jpeg.sha256} · ${preparedProof.jpeg.byteLength} bytes`);
+        setText(document.querySelector('#proof-plt'), `${preparedProof.plt.sha256} · ${preparedProof.plt.byteLength} bytes`);
+        setText(document.querySelector('#proof-fingerprint'), preparedProof.approvalFingerprint);
+        proofPreview.src = `/api/physical-proof/preview.jpg?fingerprint=${preparedProof.approvalFingerprint}`;
+        proofPreview.dataset.ready = 'true';
+        cutOverlay.src = `/api/physical-proof/cut-preview.svg?fingerprint=${preparedProof.approvalFingerprint}`;
+        cutOverlay.dataset.ready = 'true';
+        sendButton.disabled = !body.sendEnabled;
+        proofMessage.textContent = body.sendEnabled
+          ? 'Exact write approval is loaded. Review the preview, then click Send one sheet once.'
+          : 'Prepared only—nothing sent. The exact printer write still needs separate approval.';
+      } catch (error) {
+        proofMessage.textContent = error.name === 'TimeoutError' ? 'Proof preparation timed out.' : error.message;
+      } finally {
+        prepareButton.disabled = false;
+      }
+    }
+
+    async function postCheckpoint(path, body) {
+      const response = await fetch(`/api/physical-proof/browser/${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      return { response, result };
+    }
+
+    function decodeBase64(value) {
+      const binary = atob(value);
+      return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    }
+
+    async function sendProof() {
+      if (!preparedProof || !webUsbSession || sendStarted ||
+          !window.confirm('Send this exact one-sheet print-and-cut job now? It will not be retried automatically.')) return;
+      sendStarted = true;
+      sendButton.disabled = true;
+      prepareButton.disabled = true;
+      refreshButton.disabled = true;
+      connectButton.disabled = true;
+      proofMessage.textContent = 'Running final printer preflight. Do not refresh or resend.';
+      let attemptId = null;
+      let holdReason = 'declaration_outcome_unknown';
+      try {
+        const snapshot = await webUsbSession.protocol.snapshot();
+        renderSnapshot(snapshot);
+        if (snapshot.status.state === 40 || snapshot.status.state === 60 || snapshot.status.alerts.length || snapshot.activeJobs.length) {
+          throw new Error('Printer preflight is not clean: it is busy, in error, has an alert, or has an active job.');
+        }
+
+        const begun = await postCheckpoint('begin', {
+          approvalFingerprint: preparedProof.approvalFingerprint,
+          confirmation: 'SEND ONE SHEET',
+        });
+        if (!begun.response.ok || !begun.result.ok) throw new Error(begun.result.error?.message ?? 'Could not reserve the physical attempt.');
+        attemptId = begun.result.attempt.attemptId;
+
+        proofMessage.textContent = 'Declaring one printer job. Do not refresh or resend.';
+        const jobId = await webUsbSession.protocol.declare(begun.result.attempt.declaration);
+        const recorded = await postCheckpoint('job-id', { attemptId, jobId });
+        if (!recorded.response.ok || !recorded.result.ok) throw new Error(recorded.result.error?.message ?? 'Could not persist the printer job ID.');
+
+        holdReason = 'frame_acknowledgement_unknown';
+        for (let sequence = 0; sequence < begun.result.attempt.totalFrames; sequence += 1) {
+          const next = await postCheckpoint('frame', { attemptId, sequence });
+          if (!next.response.ok || !next.result.ok) throw new Error(next.result.error?.message ?? 'Could not persist frame intent.');
+          proofMessage.textContent = `Uploading frame ${sequence + 1} of ${begun.result.attempt.totalFrames}. Do not refresh or resend.`;
+          await webUsbSession.protocol.sendFrame(decodeBase64(next.result.frame.base64));
+          const acknowledged = await postCheckpoint('ack', { attemptId, sequence });
+          if (!acknowledged.response.ok || !acknowledged.result.ok) throw new Error(acknowledged.result.error?.message ?? 'Could not persist frame acknowledgement.');
+          holdReason = 'pacing_outcome_unknown';
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          holdReason = 'frame_acknowledgement_unknown';
+        }
+
+        const finished = await postCheckpoint('finish', { attemptId });
+        if (finished.result.result?.reason !== 'physical_observation_required') throw new Error('Upload did not reach the physical observation checkpoint.');
+        proofMessage.textContent = 'Upload finished. Inspect the physical sheet; this attempt remains locked and cannot be resent.';
+      } catch (error) {
+        if (attemptId) {
+          try { await postCheckpoint('hold', { attemptId, reason: holdReason }); } catch {
+          }
+        }
+        proofMessage.textContent = `${error.message} Do not resend; reconcile the attempt first.`;
+      }
+    }
+
+    connectButton.addEventListener('click', connectPrinter);
     refreshButton.addEventListener('click', refreshStatus);
-    refreshStatus();
+    prepareButton.addEventListener('click', prepareProof);
+    sendButton.addEventListener('click', sendProof);
+    if (!supportsWebUsb()) {
+      connectButton.disabled = true;
+      fields.message.textContent = 'Open this page in Chrome to connect with WebUSB.';
+    }
   </script>
 </body>
 </html>

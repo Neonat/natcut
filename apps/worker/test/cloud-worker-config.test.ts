@@ -5,6 +5,7 @@ import { readCloudWorkerConfig, runWorkerPollingLoop } from '../src/cloud-worker
 const validEnvironment = {
   NATCUT_PROJECT_ID: 'sprout-dev-66f08',
   NATCUT_DATABASE_ID: 'natcut',
+  NATCUT_ARTIFACT_BUCKET: 'sprout-dev-66f08-natcut-artifacts',
   NATCUT_SQLITE_PATH: path.join(path.sep, 'tmp', 'natcut-worker.sqlite'),
   NATCUT_WORKER_ID: 'devfest-macbook',
 };
@@ -14,6 +15,7 @@ describe('cloud worker configuration', () => {
     expect(readCloudWorkerConfig(validEnvironment)).toEqual({
       projectId: 'sprout-dev-66f08',
       databaseId: 'natcut',
+      artifactBucket: 'sprout-dev-66f08-natcut-artifacts',
       sqlitePath: path.join(path.sep, 'tmp', 'natcut-worker.sqlite'),
       workerId: 'devfest-macbook',
       pollIntervalMs: 2_000,
@@ -40,6 +42,15 @@ describe('cloud worker configuration', () => {
     expect(() => readCloudWorkerConfig({ ...validEnvironment, NATCUT_SQLITE_PATH: 'natcut.sqlite' })).toThrow(
       'durable absolute path',
     );
+  });
+
+  it('requires the isolated bucket and rejects storage emulator overrides', () => {
+    for (const NATCUT_ARTIFACT_BUCKET of [undefined, 'other-bucket', 'gs://sprout-dev-66f08-natcut-artifacts']) {
+      expect(() => readCloudWorkerConfig({ ...validEnvironment, NATCUT_ARTIFACT_BUCKET })).toThrow('NATCUT_ARTIFACT_BUCKET');
+    }
+    for (const key of ['STORAGE_EMULATOR_HOST', 'FIREBASE_STORAGE_EMULATOR_HOST']) {
+      expect(() => readCloudWorkerConfig({ ...validEnvironment, [key]: 'localhost' })).toThrow(key);
+    }
   });
 
   it('bounds polling and simulation delays', () => {

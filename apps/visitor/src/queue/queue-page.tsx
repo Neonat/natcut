@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PublicQueueStatus, VisitorApi } from '../api.ts';
+import { clearAcceptedSubmissionAttempt } from '../editor/submission-attempt.ts';
 import { usePullToRefresh } from './use-pull-to-refresh.ts';
 import { SurveyCard } from './survey-card.tsx';
 
@@ -28,6 +29,8 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
     setError(null);
     try {
       const latest = await props.api.getStatus(props.submissionId, props.statusToken);
+      if (latest.submissionId !== props.submissionId) throw new Error('Queue status did not match this ticket.');
+      clearAcceptedSubmissionAttempt(props.submissionId);
       if (generation === refreshGeneration.current) setStatus(latest);
     } catch (cause) {
       if (generation === refreshGeneration.current) {

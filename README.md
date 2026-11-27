@@ -168,6 +168,23 @@ The new directory contains `sheet.jpg`, `cut-overlay.svg`, and `evidence.json`. 
 
 This packet is explicitly an **offline preview, not print-ready**. Centered padding is an unverified registration assumption. It contains no PLT, knife pressure, USB call, network call, or printer instruction.
 
+### Generate a physical-adapter dry run
+
+When you have a trusted artifact receipt and the exact immutable bundle bytes it names, build the physical files and protocol evidence entirely offline:
+
+```bash
+npm run physical:dry-run -- \
+  --receipt /path/to/receipt.json \
+  --bundle /path/to/logical-bundle.bin \
+  --out /tmp/natcut-physical-dry-run
+```
+
+The new directory contains `print.jpg`, `cut.plt`, and `evidence.json`. The command re-verifies the complete receipt, generation-bound bundle digests, published profile, logical dimensions, JPEG limit, PLT pressure, and unclipped cut bounds. It white-composites transparent pixels, center-pads the logical raster, traces every accepted island in the already-expanded stored mask without adding the cut border again, and records the exact deterministic combo declaration and PLT-first upload chunk plan. Exact white is a pre-encode invariant; lossy JPEG 4:2:0 may introduce bounded chroma bleed directly beside saturated artwork, while untouched padding borders remain white.
+
+This is still an offline proof. `transport` is fixed to `disabled-dry-run`; there is no job ID, fabricated response, USB import, cloud mutation, worker transition, or printer write. An existing output directory is never replaced, and `.incomplete` marks any interrupted packet. See [`docs/runbooks/physical-adapter-proof.md`](docs/runbooks/physical-adapter-proof.md) for inspection and the remaining approval gate.
+
+The printer package also exposes an offline transport-attempt module. Tests drive its declaration and frame acknowledgement port with mocks. The module requires a persistent SQLite file at an absolute path and reserves one attempt for the exact binding and output digests before declaration. It commits the returned job ID before upload, each frame intent before sending, and each acknowledgement before continuing. PLT precedes JPEG, with 120 ms pacing after each acknowledged frame. A reserved attempt blocks every subsequent attempt on the same journal after a restart. A fully acknowledged mock upload still ends in `needs_reconciliation` with `physical_observation_required`.
+
 ## Build the isolated cloud preview
 
 NatCut's public preview uses its own Firebase Hosting target (`natcut`), Cloud Run service (`natcut-submission`), and named Firestore database (`natcut`) inside `sprout-dev-66f08`. Existing Sprout Hosting and databases are not deployment targets.
@@ -190,13 +207,20 @@ npm run deploy:hosting
 
 Do not run bare `firebase deploy` in this project. The cloud provisioning and recovery commands are recorded in [`docs/runbooks/cloud-preview.md`](docs/runbooks/cloud-preview.md).
 
-On the booth Mac, authenticate Application Default Credentials once and run the outbound simulator with a durable journal:
+**Stop every legacy cloud worker before deploying the version 2 submission API.** This simulator verifies the canonical manifest, profile, exact storage generation and logical color and cut-mask bytes before starting any phase. It journals the receipt and payload together in SQLite and rehashes the stored bytes at execution. A missing or inconsistent artifact holds the queue head. A temporary storage failure retries the same claim.
+
+Begin and completion are now fenced to the exact submission, event, worker, durable execution token, manifest, validation, artifact generation, and immutable profile. The begin lease captures that evidence; completion must match it. The same evidence can confirm a committed `ready` or later `collected` outcome after a lost response. Until that commit or confirmation is durably acknowledged, the worker reports cloud waiting rather than success. Stale, malformed, legacy, or different evidence keeps the queue head on an operator-visible reconciliation hold and cannot release or bypass another slot.
+
+Session 2 completed the authorized cloud-only rollout. Both named-database indexes are ready; the private NatCut artifact bucket has narrow runtime IAM; pinned-generation upload/read passed under both service accounts; the API is deployed by immutable digest; Hosting is pinned to the verified revision; one immutable V2 ticket completed through `SimulatedPrinter`; and rollback plus candidate restoration passed without changing Sprout. Exact resource IDs and evidence are in the [cloud preview runbook](docs/runbooks/cloud-preview.md).
+
+Session 3 has offline JPEG and PLT generation and mock evidence for declaration and upload crash fencing. Session 4's non-printer rehearsal gate now drives two anonymous visitors through the real simulator-desk pickup and privacy flow, then runs the worker crash matrix and a 30-ticket correctness load across the 25-row desk pagination boundary. It proves strict serialized simulation and exact fenced completion locally; it is not a throughput SLA or production-readiness claim. A concrete printer transport, evidence tied to the printer job ID, a controlled loaded-media print, calibration, and an operator procedure to resolve held physical attempts are still blockers. USB access and any printer write require separate explicit approval at execution time; production hardening follows those physical proofs.
 
 ```bash
 gcloud auth application-default login \
   --impersonate-service-account=natcut-worker@sprout-dev-66f08.iam.gserviceaccount.com
 NATCUT_PROJECT_ID=sprout-dev-66f08 \
 NATCUT_DATABASE_ID=natcut \
+NATCUT_ARTIFACT_BUCKET=sprout-dev-66f08-natcut-artifacts \
 NATCUT_SQLITE_PATH="$PWD/.local/natcut-worker.sqlite" \
 NATCUT_WORKER_ID=devfest-macbook \
 npm run worker:cloud:sim
@@ -214,7 +238,7 @@ npm run emulators:test -- --only worker
 npm run test:e2e
 ```
 
-**Safety boundary:** the queue-first stack contains no printer job declaration, upload, print, cut, cancel, or property-mutation implementation. The simulated worker never imports the USB protocol or opens the printer. The existing hardware bridge remains read-only.
+The queue-first worker runs `SimulatedPrinter`. The transport-attempt module has a semantic port but no concrete printer transport or `PhysicalExecutor`. Static import tests keep it outside the worker, dry-run CLI, and read-only bridge entry points.
 
 ## Run the read-only bridge
 

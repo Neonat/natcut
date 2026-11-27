@@ -1,6 +1,14 @@
 export const projects = [
   {
     test: {
+      name: 'artifacts',
+      root: './packages/artifacts',
+      include: ['test/**/*.test.ts'],
+      environment: 'node',
+    },
+  },
+  {
+    test: {
       name: 'submission',
       root: './apps/submission',
       include: ['test/**/*.test.ts'],
@@ -35,6 +43,14 @@ export const projects = [
     test: {
       name: 'pipeline',
       root: './packages/pipeline',
+      include: ['test/**/*.test.ts'],
+      environment: 'node',
+    },
+  },
+  {
+    test: {
+      name: 'printer',
+      root: './packages/printer',
       include: ['test/**/*.test.ts'],
       environment: 'node',
     },

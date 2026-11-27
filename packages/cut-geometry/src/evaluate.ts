@@ -17,6 +17,7 @@ const PRINT_DPI = 300;
 export const GEOMETRY_VERSION = 'natcut-geometry-v1';
 
 export type GeometryEvaluation = {
+  combinedMask: BinaryMask;
   contours: Contour[];
   expandedMasks: BinaryMask[];
   report: GeometryReport;
@@ -140,6 +141,7 @@ export async function evaluateCutGeometry(
   const rasterHash = await sha256Hex(combined.data);
 
   return {
+    combinedMask: combined,
     contours: trace.contours,
     expandedMasks,
     report: {

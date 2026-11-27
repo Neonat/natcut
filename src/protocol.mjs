@@ -56,7 +56,7 @@ export function takeJson(text) {
   let consumed = 0;
   let incompleteStart = null;
 
-  for (const candidate of text.matchAll(/\{\s*"(?:id|method)"\s*:/g)) {
+  for (const candidate of text.matchAll(/\{/g)) {
     const start = candidate.index;
     if (start < consumed) continue;
     let depth = 0;

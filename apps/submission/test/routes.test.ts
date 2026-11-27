@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
-import { geometryIssuesHash, manifestHash, type GeometryReport, type PublicStatus, type Submission } from '@natcut/domain';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { geometryIssuesHash, manifestHash, type CompositionManifest, type GeometryReport, type LogicalSourceBundle, type PublicStatus, type Submission } from '@natcut/domain';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { artifact, bundle } from './fixtures/artifact.ts';
 import {
   IdempotencyConflictError,
   RequeueForbiddenError,
   SurveyUnavailableError,
   buildSubmissionServer,
-  createTrustedManifestValidator,
+  createTrustedArtifactPreparer,
+  type SubmissionLookup,
   type CreateSubmissionInput,
   type SubmissionRepository,
   type SubmitSurveyResult,
@@ -45,7 +47,7 @@ function report(severity: 'ok' | 'warning' | 'error' = 'ok'): GeometryReport {
     minimumContourGapMm: isWarning ? 0.8 : 4,
     edgeClearanceMm: 5,
     geometryVersion: 'natcut-geometry-v1',
-    rasterHash: 'a'.repeat(64),
+    rasterHash: bundle.descriptor.maskSha256,
     acknowledgedByVisitor: false,
     acknowledgedAt: null,
   };
@@ -57,24 +59,37 @@ class MemoryRepository implements SubmissionRepository {
   readonly idempotency = new Map<string, string>();
   sequence = 0;
 
-  async create(input: CreateSubmissionInput) {
-    const key = `${input.ownerUid}:${input.idempotencyKey}`;
+  private accepted(input: SubmissionLookup) {
+    const key = JSON.stringify([input.ownerUid, input.eventId, input.idempotencyKey]);
     const existingId = this.idempotency.get(key);
     if (existingId) {
       const existing = this.records.get(existingId)!;
-      if (existing.manifestHash !== input.manifestHash) throw new IdempotencyConflictError();
-      return { submission: existing, created: false };
+      if (existing.manifestHash !== input.manifestHash || existing.requeuedFrom !== input.requeuedFrom) throw new IdempotencyConflictError();
+      return existing;
     }
     if (input.requeuedFrom) {
       const prior = this.records.get(input.requeuedFrom);
-      if (!prior || prior.ownerUid !== input.ownerUid || prior.publicStatus !== 'cancelled') {
+      if (!prior || prior.ownerUid !== input.ownerUid || prior.eventId !== input.eventId || prior.publicStatus !== 'cancelled') {
         throw new RequeueForbiddenError();
       }
     }
+    return null;
+  }
+
+  async findAccepted(input: SubmissionLookup) {
+    return this.accepted(input);
+  }
+
+  async create(input: CreateSubmissionInput) {
+    const key = JSON.stringify([input.ownerUid, input.eventId, input.idempotencyKey]);
+    const existing = this.accepted(input);
+    if (existing) return { submission: existing, created: false };
     const queueNumber = ++this.sequence;
     const id = `submission-${queueNumber}`;
     const now = input.acceptedAt;
     const submission: Submission = {
+      recordVersion: 2,
+      artifact: input.artifact,
       id,
       ownerUid: input.ownerUid,
       eventId: input.eventId,
@@ -166,8 +181,15 @@ describe('submission routes', () => {
   let repository: MemoryRepository;
   let surveyRepository: MemorySurveyRepository;
   let app: ReturnType<typeof buildSubmissionServer>;
+  const prepareArtifact = vi.fn(async (candidate: CompositionManifest) => ({
+    bundle: { ...bundle, descriptor: { ...bundle.descriptor, renderVersion: candidate.renderVersion } },
+    report: report(candidate.renderVersion === 'invalid' ? 'error' : candidate.renderVersion === 'warning' ? 'warning' : 'ok'),
+  }));
+  const publish = vi.fn(async (input: LogicalSourceBundle, _options?: { signal?: AbortSignal }) => ({ ...artifact, descriptor: input.descriptor }));
 
   beforeEach(() => {
+    prepareArtifact.mockClear();
+    publish.mockClear();
     repository = new MemoryRepository();
     surveyRepository = new MemorySurveyRepository(repository);
     app = buildSubmissionServer({
@@ -180,11 +202,7 @@ describe('submission routes', () => {
         if (token === 'bob-token') return { uid: 'bob' };
         throw new Error('invalid token');
       },
-      validateManifest: async (candidate) => {
-        if (candidate.renderVersion === 'invalid') return report('error');
-        if (candidate.renderVersion === 'warning') return report('warning');
-        return report('ok');
-      },
+      prepareArtifact, publisher: { publish },
       now: () => '2026-11-23T12:00:00.000Z',
     });
   });
@@ -196,7 +214,7 @@ describe('submission routes', () => {
       eventId: 'devfest-sg', statusTokenSecret: 'test-secret-at-least-32-bytes-long', repository,
       surveyRepository,
       verifyBearerToken: async () => ({ uid: 'visitor' }),
-      validateManifest: createTrustedManifestValidator(),
+      prepareArtifact: createTrustedArtifactPreparer(), publisher: { publish },
     });
     const post = (recipe: object) => server.inject({
       method: 'POST', url: '/v1/submissions', headers: { authorization: 'Bearer visitor' },
@@ -237,7 +255,7 @@ describe('submission routes', () => {
       repository,
       surveyRepository,
       verifyBearerToken: async () => ({ uid: 'alice' }),
-      validateManifest: async () => report('ok'),
+      prepareArtifact, publisher: { publish },
       routePrefix: '/api',
     });
 
@@ -355,6 +373,7 @@ describe('submission routes', () => {
   it('rejects malformed manifests and structurally invalid geometry', async () => {
     expect((await submit({ manifest: { ...manifest, surprise: true }, idempotencyKey: 'one' })).statusCode).toBe(400);
     expect((await submit({ manifest: { ...manifest, renderVersion: 'invalid' }, idempotencyKey: 'two' })).statusCode).toBe(422);
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('requires an exact acknowledgement for warnings', async () => {
@@ -375,16 +394,17 @@ describe('submission routes', () => {
       manifest: warningManifest,
       idempotencyKey: 'stale-manifest',
       warningAcknowledgement: {
-        geometryVersion: 'natcut-geometry-v1', rasterHash: 'a'.repeat(64),
+        geometryVersion: 'natcut-geometry-v1', rasterHash: report().rasterHash,
         manifestHash: 'f'.repeat(64), issuesHash: exactIssuesHash,
       },
     })).statusCode).toBe(409);
 
+    expect(publish).not.toHaveBeenCalled();
     const accepted = await submit({
       manifest: warningManifest,
       idempotencyKey: 'three',
       warningAcknowledgement: {
-        geometryVersion: 'natcut-geometry-v1', rasterHash: 'a'.repeat(64),
+        geometryVersion: 'natcut-geometry-v1', rasterHash: report().rasterHash,
         manifestHash: exactManifestHash, issuesHash: exactIssuesHash,
       },
     });
@@ -396,6 +416,7 @@ describe('submission routes', () => {
     const first = await submit();
     expect(first.statusCode).toBe(201);
     const created = first.json();
+    expect(repository.records.get('submission-1')).toMatchObject({ recordVersion: 2, artifact });
     expect(created).toMatchObject({ submissionId: 'submission-1', queueNumber: 1, publicStatus: 'queued' });
     expect(created.statusToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(repository.records.get('submission-1')?.publicStatusTokenHash).toBe(
@@ -409,6 +430,73 @@ describe('submission routes', () => {
     const mutation = await submit({ manifest: { ...manifest, theme: 'battling' }, idempotencyKey: 'request-1' });
     expect(mutation.statusCode).toBe(409);
     expect(repository.records.get('submission-1')?.manifest.theme).toBe('default');
+    expect((await submit({ manifest, idempotencyKey: 'request-1', requeuedFrom: 'another' })).statusCode).toBe(409);
+    expect(prepareArtifact).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires successful storage before calling create and permits retry', async () => {
+    const create = vi.spyOn(repository, 'create');
+    publish.mockRejectedValueOnce(new Error('storage unavailable'));
+    expect((await submit()).statusCode).toBe(503);
+    expect(create).not.toHaveBeenCalled();
+    expect(repository.records.size).toBe(0);
+    expect((await submit()).statusCode).toBe(201);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 503 at the storage deadline and cannot accept a late publication', async () => {
+    await app.ready();
+    const started = Promise.withResolvers<void>();
+    const pending = Promise.withResolvers<typeof artifact>();
+    publish.mockImplementationOnce(() => { started.resolve(); return pending.promise; });
+    const create = vi.spyOn(repository, 'create');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const request = submit();
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(publish.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      pending.resolve(artifact);
+      expect((await request).statusCode).toBe(503);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(create).not.toHaveBeenCalled();
+      expect((await submit()).statusCode).toBe(201);
+    } finally {
+      pending.resolve(artifact);
+      vi.useRealTimers();
+    }
+  });
+
+  it('recovers an accepted legacy ticket while both preparation and storage are unavailable', async () => {
+    const original = await submit();
+    const { submissionId } = original.json();
+    const { recordVersion, artifact: receipt, ...legacy } = repository.records.get(submissionId)!;
+    repository.records.set(submissionId, legacy);
+    await prepareArtifact.withImplementation(async () => { throw new Error('renderer unavailable'); }, async () => {
+      await publish.withImplementation(async () => { throw new Error('storage unavailable'); }, async () => {
+        const retry = await submit();
+        expect(retry.statusCode).toBe(200);
+        expect(retry.json()).toEqual(original.json());
+      });
+    });
+    expect(prepareArtifact).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns one ticket when two requests publish before either creates its binding', async () => {
+    const bothPublishing = Promise.withResolvers<void>();
+    let publishers = 0;
+    await publish.withImplementation(async (input) => {
+      if (++publishers === 2) bothPublishing.resolve();
+      await bothPublishing.promise;
+      return { ...artifact, descriptor: input.descriptor };
+    }, async () => {
+      const [first, second] = await Promise.all([submit(), submit()]);
+      expect([first.statusCode, second.statusCode].sort()).toEqual([200, 201]);
+      expect(first.json()).toEqual(second.json());
+      expect(repository.records.size).toBe(1);
+    });
   });
 
   it('looks up status only through the opaque header and calculates jobs ahead', async () => {
@@ -476,5 +564,9 @@ describe('submission routes', () => {
       'bob-token',
     );
     expect(otherVisitor.statusCode).toBe(403);
+    const active = await submit({ manifest, idempotencyKey: 'active-prior', requeuedFrom: 'submission-2' });
+    expect(active.statusCode).toBe(403);
+    expect(prepareArtifact).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenCalledTimes(2);
   });
 });

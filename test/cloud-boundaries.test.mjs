@@ -105,6 +105,8 @@ test('Cloud Build upload excludes credential-shaped local files', async () => {
     assert.doesNotMatch(stdout, /application_default_credentials\.json/);
     assert.doesNotMatch(stdout, /raw-input-canary/);
     assert.match(stdout, /packages\/render\/catalog\/index\.json/);
+    assert.match(stdout, /packages\/artifacts\/package\.json/);
+    assert.match(stdout, /packages\/artifacts\/src\/gcs-publisher\.ts/);
   } finally {
     await Promise.all(canaries.map((file) => rm(file, { force: true })));
   }
