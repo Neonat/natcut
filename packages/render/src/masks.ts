@@ -9,7 +9,7 @@ export type CutGroupMask = {
   alpha: Uint8Array;
 };
 
-function requireAsset(assets: AssetCatalog, layer: PlannedLayer): RgbaAsset {
+function requireAsset(assets: AssetCatalog<RgbaAsset>, layer: PlannedLayer): RgbaAsset {
   const asset = assets.get(layer.assetId);
   if (!asset) throw new Error(`Missing asset ${layer.assetId} for layer ${layer.id}`);
   if (asset.rgba.length !== asset.width * asset.height * 4) {
@@ -34,7 +34,7 @@ function compositeLayerAlpha(mask: Uint8Array, sheetWidth: number, layer: Planne
 
 export function renderCutGroupMasks(
   plan: PlannedComposition,
-  assets: AssetCatalog,
+  assets: AssetCatalog<RgbaAsset>,
 ): CutGroupMask[] {
   assertPlanWithinSheet(plan);
   const masks = new Map(

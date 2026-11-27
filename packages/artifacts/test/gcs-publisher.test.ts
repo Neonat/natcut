@@ -1,4 +1,4 @@
-import { DEVFEST_SG_V1, encodeLogicalSourceBundle, type LogicalSourceBundle } from '@natcut/domain';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, encodeLogicalSourceBundle, type LogicalSourceBundle } from '@natcut/domain';
 import { beforeAll, expect, it, vi } from 'vitest';
 import { ArtifactIntegrityError, createGcsArtifactPublisher, createGcsArtifactReader } from '../src/index.ts';
 
@@ -6,6 +6,7 @@ let bundle: LogicalSourceBundle;
 beforeAll(async () => {
   const { sheetWidthPx: width, sheetHeightPx: height } = DEVFEST_SG_V1;
   bundle = await encodeLogicalSourceBundle({
+    colorEvidence: NATIVE_SRGB_EVIDENCE,
     width, height, profile: DEVFEST_SG_V1, renderVersion: 'fixture-v1', geometryVersion: 'v1',
     rgba: new Uint8Array(width * height * 4), mask: new Uint8Array(width * height),
   });
@@ -34,7 +35,7 @@ it('reads a single authenticated generation at the derived path and verifies bot
   expect(Buffer.from(verified.bytes).equals(bundle.bytes)).toBe(true);
   expect(send).toHaveBeenCalledTimes(1);
   const [url, init] = send.mock.calls[0]!;
-  expect(String(url)).toBe('https://example.invalid/storage/v1/b/artifacts/o/logical%2Fv1%2F' +
+  expect(String(url)).toBe('https://example.invalid/storage/v1/b/artifacts/o/logical%2Fv2%2F' +
     bundle.descriptor.bundleSha256 + '?alt=media&generation=' + generation);
   expect(init?.method ?? 'GET').toBe('GET');
   expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture');
@@ -92,12 +93,12 @@ it('creates at the derived path, supplies credentials and pins the exact returne
   const [[upload, options], [read, verification]] = send.mock.calls as [[URL, RequestInit], [URL, RequestInit]];
   expect(upload.pathname).toBe('/upload/storage/v1/b/artifacts/o');
   expect(Object.fromEntries(upload.searchParams)).toEqual({
-    ifGenerationMatch: '0', name: 'logical/v1/' + bundle.descriptor.bundleSha256, uploadType: 'multipart', fields: 'generation',
+    ifGenerationMatch: '0', name: 'logical/v2/' + bundle.descriptor.bundleSha256, uploadType: 'multipart', fields: 'generation',
   });
   expect(options.method).toBe('POST');
   expect(new Headers(options.headers).get('authorization')).toBe('Bearer fixture');
   expect(options.signal).toBeInstanceOf(AbortSignal);
-  expect(decodeURIComponent(read.pathname)).toBe('/storage/v1/b/artifacts/o/logical/v1/' + bundle.descriptor.bundleSha256);
+  expect(decodeURIComponent(read.pathname)).toBe('/storage/v1/b/artifacts/o/logical/v2/' + bundle.descriptor.bundleSha256);
   expect(Object.fromEntries(read.searchParams)).toEqual({ alt: 'media', generation });
   expect(new Headers(verification.headers).get('range')).toBe('bytes=0-' + bundle.bytes.length);
   expect(send).toHaveBeenCalledTimes(2);

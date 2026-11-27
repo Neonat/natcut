@@ -70,10 +70,10 @@ export function assetPngFilename(assetId: string): string {
   return digest + '.png';
 }
 
-export async function loadPlannedAssets(
+export async function loadPlannedAssets<T extends RgbaAsset>(
   plan: PlannedComposition,
-  load: (filename: string, id: string) => Promise<RgbaAsset>,
-): Promise<AssetCatalog> {
+  load: (filename: string, id: string) => Promise<T>,
+): Promise<AssetCatalog<T>> {
   const ids = new Set(plan.layers.map((layer) => layer.assetId));
   const loaded = await Promise.all([...ids].map((id) => load(assetPngFilename(id), id)));
   return new Map(loaded.map((asset) => [asset.id, asset]));

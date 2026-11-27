@@ -97,7 +97,7 @@ test('uses fixed NatCut endpoints, a fresh key, and verifies its immutable V2 re
     idempotencyKey: 'cloud-smoke-fixed-nonce',
     ownerUid: 'visitor-one',
     eventId: 'devfest-sg',
-    objectName: `logical/v1/${artifact.descriptor.bundleSha256}`,
+    objectName: `logical/v2/${artifact.descriptor.bundleSha256}`,
     generation: artifact.generation,
     bundleSha256: artifact.descriptor.bundleSha256,
     profileId: artifact.descriptor.profile.id,

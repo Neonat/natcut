@@ -5,6 +5,24 @@ import { sha256Hex } from './sha256.ts';
 const version = z.string().min(1).max(64);
 const positiveInteger = z.number().int().positive();
 const digest = z.string().length(64).regex(/^[a-f0-9]+$/);
+export const SrgbColorEvidenceSchema = z.strictObject({
+  outputSpace: z.literal('srgb'),
+  pipelineVersion: z.literal('natcut-srgb-v1'),
+  sourceSpace: z.enum(['srgb', 'display-p3', 'cmyk']),
+  sourceProfileSha256: digest.nullable(),
+  action: z.enum(['preserved', 'converted']),
+}).refine(evidence => evidence.sourceSpace === 'srgb'
+  ? evidence.action === 'preserved'
+  : evidence.action === 'converted' && evidence.sourceProfileSha256 !== null,
+{ message: 'Source profile, source space and color action must agree.' }).readonly();
+
+export type SrgbColorEvidence = z.infer<typeof SrgbColorEvidenceSchema>;
+// For pixels authored directly in sRGB or received through the digest-verified catalog contract.
+export const NATIVE_SRGB_EVIDENCE = SrgbColorEvidenceSchema.parse({
+  outputSpace: 'srgb', pipelineVersion: 'natcut-srgb-v1', sourceSpace: 'srgb',
+  sourceProfileSha256: null, action: 'preserved',
+});
+
 const metadata = z.object({
   profile: PublishedPrintProfileSchema,
   width: positiveInteger,
@@ -23,8 +41,7 @@ function lengths(width: number, height: number) {
   return { colorByteLength, maskByteLength, byteLength };
 }
 
-export const LogicalSourceBundleDescriptorSchema = metadata.safeExtend({
-  formatVersion: z.literal(1),
+const payloadFields = {
   colorByteLength: positiveInteger,
   colorSha256: digest,
   maskByteLength: positiveInteger,
@@ -32,7 +49,11 @@ export const LogicalSourceBundleDescriptorSchema = metadata.safeExtend({
   byteLength: positiveInteger,
   bundleSha256: digest,
   profileSha256: digest,
-}).strict().refine((descriptor) => {
+};
+export const LogicalSourceBundleDescriptorSchema = z.discriminatedUnion('formatVersion', [
+  metadata.safeExtend({ formatVersion: z.literal(1), ...payloadFields }).strict(),
+  metadata.safeExtend({ formatVersion: z.literal(2), ...payloadFields, colorEvidence: SrgbColorEvidenceSchema }).strict(),
+]).refine((descriptor) => {
   const expected = lengths(descriptor.profile.sheetWidthPx, descriptor.profile.sheetHeightPx);
   return descriptor.colorByteLength === expected.colorByteLength &&
     descriptor.maskByteLength === expected.maskByteLength && descriptor.byteLength === expected.byteLength;
@@ -50,11 +71,12 @@ export const ArtifactReceiptSchema = z.strictObject({
 });
 export type ArtifactReceipt = z.infer<typeof ArtifactReceiptSchema>;
 
-export function artifactObjectPath(bundleSha256: string): string {
-  return 'logical/v1/' + digest.parse(bundleSha256);
+export function artifactObjectPath(descriptor: Pick<LogicalSourceBundleDescriptor, 'formatVersion' | 'bundleSha256'>): string {
+  const version = z.union([z.literal(1), z.literal(2)]).parse(descriptor.formatVersion);
+  return 'logical/v' + version + '/' + digest.parse(descriptor.bundleSha256);
 }
 
-type LogicalSource = z.input<typeof metadata> & { rgba: Uint8Array | Uint8ClampedArray; mask: Uint8Array };
+type LogicalSource = z.input<typeof metadata> & { colorEvidence: SrgbColorEvidence; rgba: Uint8Array | Uint8ClampedArray; mask: Uint8Array };
 
 const typedArrayByteLength = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
@@ -95,6 +117,7 @@ export async function encodeLogicalSourceBundle(source: LogicalSource): Promise<
   const rgba = source.rgba;
   const mask = source.mask;
   const header = metadata.parse(source);
+  const colorEvidence = SrgbColorEvidenceSchema.parse(source.colorEvidence);
   const sizes = lengths(header.width, header.height);
   if (
     actualByteLength(rgba, ['Uint8Array', 'Uint8ClampedArray']) !== sizes.colorByteLength ||
@@ -107,7 +130,7 @@ export async function encodeLogicalSourceBundle(source: LogicalSource): Promise<
   bytes.set(mask, sizes.colorByteLength);
   const hashes = await hashPayload(bytes, sizes.colorByteLength);
   return {
-    descriptor: { formatVersion: 1, ...header, ...sizes, ...hashes, profileSha256: printProfileHashSync(header.profile) },
+    descriptor: { formatVersion: 2, colorEvidence, ...header, ...sizes, ...hashes, profileSha256: printProfileHashSync(header.profile) },
     bytes,
   };
 }

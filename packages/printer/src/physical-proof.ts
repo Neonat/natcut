@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { verifyArtifactBytes } from '@natcut/artifacts/reader';
-import { DEVFEST_SG_V1, encodeLogicalSourceBundle } from '@natcut/domain';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, encodeLogicalSourceBundle, type SrgbColorEvidence } from '@natcut/domain';
 import sharp from 'sharp';
+import { loadRgbaAsset } from '@natcut/render';
 import { parsePlt } from '../../../vendor/pixcut-trace/plt.ts';
 import { pathToPixels } from '../../../vendor/pixcut-trace/transform.ts';
 import { preparePhysicalArtifacts } from './artifacts.ts';
@@ -49,7 +50,7 @@ function proofRasters() {
       }
     }
   }
-  return { rgba, mask };
+  return { rgba, mask, colorEvidence: NATIVE_SRGB_EVIDENCE };
 }
 function backgroundMedian(rgb: Uint8Array, width: number, height: number) {
   const samples: number[][] = [[], [], []];
@@ -146,7 +147,7 @@ function buildCutPreviewSvg(jpeg: Uint8Array, plt: Uint8Array) {
 }
 
 async function buildFromRasters(
-  rasters: { rgba: Uint8Array; mask: Uint8Array },
+  rasters: { rgba: Uint8Array; mask: Uint8Array; colorEvidence: SrgbColorEvidence },
   options: { designVersion: string; label: string; sourceImageSha256?: string },
 ) {
   const profile = DEVFEST_SG_V1;
@@ -214,13 +215,14 @@ export async function buildPhysicalProofFromPng(
   pngBytes: Uint8Array,
   { label = 'Physical proof sheet' }: { label?: string } = {},
 ) {
-  const image = sharp(Buffer.from(pngBytes), { failOn: 'error', limitInputPixels: 20_000_000 });
-  const metadata = await image.metadata();
+  const input = Buffer.from(pngBytes);
+  const metadata = await sharp(input, { limitInputPixels: 20_000_000 }).metadata();
   if (metadata.format !== 'png' || !metadata.width || !metadata.height || metadata.width * 7 !== metadata.height * 4) {
     throw new Error('Physical proof image must be a PNG with an exact 4x7 aspect ratio.');
   }
   const profile = DEVFEST_SG_V1;
-  const rgb = new Uint8Array(await image
+  const source = await loadRgbaAsset(input, 'physical-proof', 20_000_000);
+  const rgb = new Uint8Array(await sharp(Buffer.from(source.rgba), { raw: { width: source.width, height: source.height, channels: 4 } })
     .flatten({ background: { r: 247, g: 243, b: 235 } })
     .resize(profile.sheetWidthPx, profile.sheetHeightPx, { fit: 'fill', kernel: 'lanczos3' })
     .removeAlpha()
@@ -231,7 +233,7 @@ export async function buildPhysicalProofFromPng(
     rgba.set([rgb[pixel * 3]!, rgb[pixel * 3 + 1]!, rgb[pixel * 3 + 2]!, 255], pixel * 4);
   }
   return buildFromRasters(
-    { rgba, mask: maskOpaqueSheet(rgb, profile.sheetWidthPx, profile.sheetHeightPx) },
-    { designVersion: imageDesignVersion, label, sourceImageSha256: sha256Bytes(pngBytes) },
+    { rgba, colorEvidence: source.colorEvidence, mask: maskOpaqueSheet(rgb, profile.sheetWidthPx, profile.sheetHeightPx) },
+    { designVersion: imageDesignVersion, label, sourceImageSha256: sha256Bytes(input) },
   );
 }

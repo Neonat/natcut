@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { DEVFEST_SG_V1, encodeLogicalSourceBundle } from '../packages/domain/src/index.ts';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, encodeLogicalSourceBundle } from '../packages/domain/src/index.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 
@@ -24,6 +24,7 @@ async function inputs(parent) {
     mask[pixel] = 255;
   }
   const bundle = await encodeLogicalSourceBundle({
+    colorEvidence: NATIVE_SRGB_EVIDENCE,
     width: profile.sheetWidthPx, height: profile.sheetHeightPx, profile,
     renderVersion: 'server-raster-v1', geometryVersion: 'geometry-v1', rgba, mask,
   });

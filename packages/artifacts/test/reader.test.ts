@@ -1,0 +1,23 @@
+import { createHash } from 'node:crypto';
+import { expect, it } from 'vitest';
+import { artifactObjectPath, DEVFEST_SG_V1 as profile } from '@natcut/domain';
+import { verifyArtifactBytes, parseArtifactReceipt } from '../src/reader.ts';
+
+// Shipped logical/v1 format: raw RGBA8 followed by the binary mask; no color declaration.
+it('verifies the original receipt without assigning new provenance or moving its object', async () => {
+  const { sheetWidthPx: width, sheetHeightPx: height } = profile;
+  const pixels = width * height;
+  const bytes = new Uint8Array(pixels * 5);
+  const sha256 = (span: Uint8Array) => createHash('sha256').update(span).digest('hex');
+  const receipt = { generation: '9007199254740993', descriptor: {
+    profile, width, height, renderVersion: 'fixture-v1', geometryVersion: 'v1', formatVersion: 1,
+    colorByteLength: pixels * 4, colorSha256: sha256(bytes.subarray(0, pixels * 4)),
+    maskByteLength: pixels, maskSha256: sha256(bytes.subarray(pixels * 4)),
+    byteLength: bytes.length, bundleSha256: sha256(bytes),
+    profileSha256: 'f4812e005f9118f42906afdf8fd3c99d0dd60a0fddca9f7875e12eaffca68890',
+  } };
+  const verified = await verifyArtifactBytes(bytes, parseArtifactReceipt(receipt));
+  expect(verified.receipt).toEqual(receipt);
+  expect(artifactObjectPath(verified.receipt.descriptor)).toBe('logical/v1/' + receipt.descriptor.bundleSha256);
+  expect(() => parseArtifactReceipt({ ...receipt, descriptor: { ...receipt.descriptor, colorEvidence: null } })).toThrow();
+});

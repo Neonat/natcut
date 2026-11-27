@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { verifyArtifactBytes } from '@natcut/artifacts';
-import { DEVFEST_SG_V1, encodeLogicalSourceBundle } from '@natcut/domain';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, encodeLogicalSourceBundle } from '@natcut/domain';
 import { publishPhysicalDryRun } from '../src/index.ts';
 
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -19,6 +19,7 @@ async function artifact() {
     mask[pixel] = 255;
   }
   const bundle = await encodeLogicalSourceBundle({
+    colorEvidence: NATIVE_SRGB_EVIDENCE,
     width: profile.sheetWidthPx, height: profile.sheetHeightPx, profile,
     renderVersion: 'server-raster-v1', geometryVersion: 'geometry-v1', rgba, mask,
   });
@@ -99,6 +100,7 @@ describe('publishPhysicalDryRun', () => {
         mask[y * profile.sheetWidthPx + x] = 255;
       }
       const bundle = await encodeLogicalSourceBundle({
+        colorEvidence: NATIVE_SRGB_EVIDENCE,
         width: profile.sheetWidthPx, height: profile.sheetHeightPx, profile,
         renderVersion: 'server-raster-v1', geometryVersion: 'geometry-v1', rgba, mask,
       });

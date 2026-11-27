@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import sharp from 'sharp';
+import { loadRgbaAsset } from '../packages/render/src/assets.ts';
 import { DEVFEST_SG_V1 } from '../packages/domain/src/print-profile.ts';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -22,11 +23,13 @@ async function normalizeSprite(row, directory) {
   if (typeof row.file !== 'string' || row.file !== path.basename(row.file) || !/\.png$/i.test(row.file)) {
     throw new Error(`Expected a PNG filename for ${name}.`);
   }
-  const source = sharp(await readFile(path.join(directory, row.file)));
-  const { width, height, format, pages } = await source.metadata();
+  const input = await readFile(path.join(directory, row.file));
+  const { format, pages } = await sharp(input).metadata();
   if (format !== 'png' || (pages ?? 1) !== 1) throw new Error(`Expected a still PNG for ${name}.`);
+  const { rgba, width, height } = await loadRgbaAsset(input, name);
   const side = Math.min(760, Math.max(width, height));
-  const { data, info } = await source.rotate().toColourspace('srgb').ensureAlpha()
+  // Canonical catalog objects store normalized RGBA8 sRGB pixels at their PNG digest.
+  const { data, info } = await sharp(Buffer.from(rgba), { raw: { width, height, channels: 4 } })
     .resize(side, side, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .raw().toBuffer({ resolveWithObject: true });
   if (!data.some((value, offset) => offset % 4 === 3 && value >= DEVFEST_SG_V1.alphaThreshold)) {

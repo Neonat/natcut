@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import {
   ArtifactReceiptSchema,
   SubmissionSchema,
+  artifactObjectPath,
   decodeLogicalSourceBundle,
   manifestHash,
   type ArtifactReceipt,
@@ -158,7 +159,7 @@ export async function runSubmissionSmoke(deps: SmokeDependencies) {
     idempotencyKey: attempt.idempotencyKey,
     ownerUid: submission.ownerUid,
     eventId: submission.eventId,
-    objectName: `logical/v1/${receipt.descriptor.bundleSha256}`,
+    objectName: artifactObjectPath(receipt.descriptor),
     generation: receipt.generation,
     bundleSha256: receipt.descriptor.bundleSha256,
     profileId: receipt.descriptor.profile.id,
@@ -261,7 +262,7 @@ async function recoverLiveAttempt(attempt: SmokeAttempt & { ownerUid: string }):
 
 async function readLiveArtifact(receipt: ArtifactReceipt) {
   const token = gcloudAccessToken([`--impersonate-service-account=${workerIdentity}`]);
-  const objectName = `logical/v1/${receipt.descriptor.bundleSha256}`;
+  const objectName = artifactObjectPath(receipt.descriptor);
   const url = new URL(`https://storage.googleapis.com/storage/v1/b/${bucket}/o/${encodeURIComponent(objectName)}`);
   url.searchParams.set('alt', 'media');
   url.searchParams.set('generation', receipt.generation);

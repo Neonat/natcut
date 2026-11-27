@@ -12,7 +12,7 @@ it('sends the verified multipart upload, create precondition and lossless genera
   const requests: string[] = [];
   let exists = false;
   const generation = artifact.generation;
-  const object = 'logical/v1/' + bundle.descriptor.bundleSha256;
+  const object = 'logical/v2/' + bundle.descriptor.bundleSha256;
   const server = createServer(async (request, response) => {
     const url = new URL(request.url!, 'http://127.0.0.1');
     if (request.method === 'POST' && url.searchParams.get('ifGenerationMatch') === '0' &&

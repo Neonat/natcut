@@ -37,7 +37,7 @@ it('turns an opaque 4x7 artwork sheet into one white-border cut contour', async 
     const offset = (y * width + x) * 3;
     rgb.set(x >= 30 && x < 90 && y >= 40 && y < 170 ? [190, 70, 140] : [255, 255, 255], offset);
   }
-  const png = new Uint8Array(await sharp(rgb, { raw: { width, height, channels: 3 } }).png().toBuffer());
+  const png = new Uint8Array(await sharp(rgb, { raw: { width, height, channels: 3 } }).withIccProfile('srgb').png().toBuffer());
   const proof = await buildPhysicalProofFromPng(png, { label: 'Moth orchid example' });
 
   expect(proof.summary).toMatchObject({

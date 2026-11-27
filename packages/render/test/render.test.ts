@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { DEVFEST_SG_V1, CompositionManifestSchema } from '@natcut/domain';
+import { DEVFEST_SG_V1, CompositionManifestSchema, NATIVE_SRGB_EVIDENCE } from '@natcut/domain';
 import { describe, expect, it } from 'vitest';
 import {
   assetPngFilename,
@@ -15,7 +15,7 @@ import {
   sprites,
   type AssetCatalog,
   type PlannedComposition,
-  type RgbaAsset,
+  type SrgbRgbaAsset,
   type SpriteEntry,
 } from '../src/index.ts';
 
@@ -35,9 +35,10 @@ const manifest = CompositionManifestSchema.parse({
   renderVersion: 'fixture-v1',
 });
 
-function solidAsset(id: string, red: number, green: number, blue: number): RgbaAsset {
+function solidAsset(id: string, red: number, green: number, blue: number): SrgbRgbaAsset {
   return {
     id,
+    colorEvidence: NATIVE_SRGB_EVIDENCE,
     width: 2,
     height: 2,
     rgba: new Uint8ClampedArray([
@@ -167,7 +168,7 @@ describe('renderServerRaster', () => {
 
   it('changes both printable pixels and the cut mask for a controlled silhouette change', async () => {
     const plan = planComposition(manifest, DEVFEST_SG_V1);
-    const alternateSprite: RgbaAsset = {
+    const alternateSprite: SrgbRgbaAsset = {
       ...solidAsset('sprite/monstera-v1', 58, 148, 92),
       rgba: new Uint8ClampedArray([
         58, 148, 92, 255,

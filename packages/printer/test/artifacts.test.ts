@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { verifyArtifactBytes, type VerifiedArtifact } from '@natcut/artifacts';
-import { DEVFEST_SG_V1, encodeLogicalSourceBundle } from '@natcut/domain';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, encodeLogicalSourceBundle } from '@natcut/domain';
 import { parsePlt } from '../../../vendor/pixcut-trace/plt.ts';
 import { encodePrinterJpeg, preparePhysicalArtifacts } from '../src/index.ts';
 
@@ -36,6 +36,7 @@ async function artifact(options: { noise?: boolean; emptyMask?: boolean } = {}):
   const source = fixtureBytes(options.noise);
   if (options.emptyMask) source.mask.fill(0);
   const bundle = await encodeLogicalSourceBundle({
+    colorEvidence: NATIVE_SRGB_EVIDENCE,
     width: profile.sheetWidthPx,
     height: profile.sheetHeightPx,
     profile,
@@ -54,6 +55,7 @@ async function customArtifact(
   const mask = new Uint8Array(profile.sheetWidthPx * profile.sheetHeightPx);
   paint(rgba, mask);
   const bundle = await encodeLogicalSourceBundle({
+    colorEvidence: NATIVE_SRGB_EVIDENCE,
     width: profile.sheetWidthPx,
     height: profile.sheetHeightPx,
     profile,

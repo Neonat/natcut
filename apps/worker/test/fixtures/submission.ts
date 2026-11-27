@@ -1,10 +1,11 @@
 import { ArtifactIntegrityError, verifyArtifactBytes, type ArtifactReader } from '@natcut/artifacts';
-import { DEVFEST_SG_V1, encodeLogicalSourceBundle, manifestHash, type CompositionManifest, type Submission } from '@natcut/domain';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, encodeLogicalSourceBundle, manifestHash, type CompositionManifest, type Submission } from '@natcut/domain';
 import type { ClaimedSubmission } from '../../src/cloud-queue.ts';
 import { verifyClaim } from '../../src/artifact-verification.ts';
 
 const { sheetWidthPx: width, sheetHeightPx: height } = DEVFEST_SG_V1;
 export const bundle = await encodeLogicalSourceBundle({
+  colorEvidence: NATIVE_SRGB_EVIDENCE,
   profile: DEVFEST_SG_V1, width, height, renderVersion: 'fixture-v1', geometryVersion: 'natcut-geometry-v1',
   rgba: new Uint8Array(width * height * 4), mask: new Uint8Array(width * height),
 });
