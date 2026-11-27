@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PublicQueueStatus, VisitorApi } from '../api.ts';
 import { usePullToRefresh } from './use-pull-to-refresh.ts';
+import { SurveyCard } from './survey-card.tsx';
 
 const statusCopy = {
   joining: { title: 'Joining the queue', detail: 'Saving your sticker…' },
@@ -12,7 +13,7 @@ const statusCopy = {
   cancelled: { title: 'You left the queue', detail: 'Rejoin at the back when you are ready.' },
 } as const;
 
-export function QueuePage(props: { submissionId: string; statusToken: string; api: VisitorApi; onNavigate?: (path: string) => void }) {
+export function QueuePage(props: { submissionId: string; statusToken: string; api: VisitorApi; simulation?: boolean; onNavigate?: (path: string) => void }) {
   const [status, setStatus] = useState<PublicQueueStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [leaving, setLeaving] = useState(false);
@@ -73,13 +74,16 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
   };
 
   const copy = status ? statusCopy[status.publicStatus] : null;
+  const detail = props.simulation && status?.publicStatus === 'ready'
+    ? 'Simulation complete. No physical sticker was made.'
+    : copy?.detail;
   return (
     <main className="queue-page" data-testid="queue-page" {...pullHandlers}>
       <header className="brand-bar"><span className="brand-mark">sprout</span><span>Print queue</span></header>
       <section className="queue-status" aria-live="polite">
         <div className={`status-orbit ${status?.publicStatus ?? 'loading'}`} aria-hidden="true"><span /></div>
         {copy ? <h1>{copy.title}</h1> : <h1>Checking your place…</h1>}
-        {status?.publicStatus === 'queued' ? <p className="queue-number">{status.jobsAhead === 0 ? 'No jobs ahead' : `${status.jobsAhead} ahead`}</p> : copy?.detail ? <p>{copy.detail}</p> : null}
+        {status?.publicStatus === 'queued' ? <p className="queue-number">{status.jobsAhead === 0 ? 'No jobs ahead' : `${status.jobsAhead} ahead`}</p> : detail ? <p>{detail}</p> : null}
         {status ? <p className="ticket-number">Queue #{status.queueNumber}</p> : null}
       </section>
       {error ? <div className="notice error" role="alert">{error}</div> : null}
@@ -90,6 +94,7 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
         ) : null}
         {status?.publicStatus === 'cancelled' ? <button className="primary-action" type="button" onClick={rejoin}>Rejoin queue</button> : null}
       </div>
+      {status?.publicStatus === 'collected' ? <SurveyCard stickerSubmissionId={props.submissionId} api={props.api} /> : null}
       <p className="pull-hint">Pull down or tap Refresh for the latest status.</p>
     </main>
   );

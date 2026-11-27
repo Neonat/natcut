@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { GEOMETRY_LIMITS, type PrintProfile } from '@natcut/domain';
 import type { CutGroupMask } from '@natcut/render';
 import {
@@ -97,6 +97,20 @@ describe('distance field dilation', () => {
 });
 
 describe('cut geometry policy', () => {
+  it.each(['native', 'insecure HTTP'])('preserves the exact expanded-mask hash in %s', async (context) => {
+    if (context === 'insecure HTTP') vi.stubGlobal('crypto', {});
+    try {
+      const result = await evaluateCutGeometry(
+        [rectangle('sprite', 32, 32, 10, 10, 12, 12)],
+        0,
+        profile(32, 32),
+      );
+      expect(result.report.rasterHash).toBe('0dfd579d1802b1fe2200241d8d3a0075d46a428446853a9fa6f75050e1dde955');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('accepts groups whose expanded cut contours retain the safety gap', async () => {
     const result = await evaluateCutGeometry(
       [rectangle('sprite', 140, 120, 42, 45, 51, 54), rectangle('branding', 140, 120, 83, 45, 92, 54)],

@@ -17,7 +17,7 @@ The current vertical slice proves the phone-to-cloud-to-Mac queue using Firebase
 - A read-only protocol check successfully identified model `DHP700`, SKU `DHP700W#EU1`, firmware `1.0.15_0054`, and hardware revision `x05`.
 - At discovery time the printer reported `idle / idle`, no alerts, and no active jobs.
 - NatCut now has a tested read-only protocol core, USB status CLI, localhost API, and operator status page.
-- NatCut also has a mobile editor, dynamic cut-border preview, trusted submission API, Firestore queue, SQLite Mac journal, and deterministic simulated print phases through pickup-ready.
+- NatCut also has a mobile editor, dynamic cut-border preview, trusted submission API, Firestore queue, SQLite Mac journal, and a Mac simulator desk for running tickets through pickup.
 - No print or cut test has been performed yet, and no sticker sheets are currently loaded.
 
 ## Run the queue-first vertical slice
@@ -59,16 +59,83 @@ Open `http://127.0.0.1:4174`. The runner uses only Firebase project `demo-natcut
 - Firestore emulator: `8080`
 - Auth emulator: `9099`
 
-To move one submitted design through the simulator manually:
+Open the [simulator desk](http://127.0.0.1:8090) on the Mac. Choose **Claim next**, then **Start simulation**. Refresh the desk to see the worker phase. Once the ticket is ready, choose **Mark collected** on its row. The visitor can refresh their ticket after each action. The [booth rehearsal runbook](docs/runbooks/booth-rehearsal.md) covers two visitors and worker recovery.
+
+For terminal control, obtain the current desk session and use its capability on each command. Starting a new worker rotates the capability.
 
 ```bash
-curl -X POST http://127.0.0.1:8090/claim
-curl -X POST http://127.0.0.1:8090/start
+desk_url=http://127.0.0.1:8090
+desk_cap=$(curl -fsS "$desk_url/session" | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).capability')
+curl -fsS -X POST -H "X-NatCut-Control: $desk_cap" -H 'Content-Type: application/json' "$desk_url/claim"
+curl -fsS -X POST -H "X-NatCut-Control: $desk_cap" -H 'Content-Type: application/json' "$desk_url/start"
 ```
 
-Tap **Refresh** on the visitor phone between steps. Claiming changes the public state to **You’re next**; the simulator then advances through internal phases and finishes at **Ready for pickup**. These endpoints operate only on the simulated worker and SQLite journal.
+Tap **Refresh** on the visitor screen between steps. Claiming changes the public state to **You’re next**. The simulator then advances to **Ready for pickup** and the ticket explains that the rehearsal produced no physical sticker.
 
-Stopping and restarting `npm run dev` resets the in-memory Firebase emulators and creates a fresh temporary SQLite journal. No production Firebase project is contacted.
+After the desk marks a ticket collected, the visitor can leave a 1–5 cuteness rating. Product-update email is a separate, unchecked opt-in; opting out sends and stores no email and never affects the sticker. One immutable survey is accepted per anonymous visitor session. Selfie upload remains disabled until retention and publication consent are defined.
+
+Stopping either development command resets the in-memory Firebase emulators and the temporary SQLite journal. Both commands use only the `demo-natcut` Firebase project.
+
+### Rehearse from a phone on private Wi-Fi
+
+Connect the phone and the Mac to the same trusted Wi-Fi network, then run:
+
+```bash
+npm run dev:lan
+```
+
+Scan the terminal QR after the stack is ready, or type the printed visitor URL into the phone browser. The command picks the lowest available private IPv4 address. To select a different address assigned to this Mac, set it explicitly before launching:
+
+```bash
+NATCUT_LAN_IP=192.168.1.25 npm run dev:lan
+```
+
+Use only the bundled fixture art and anonymous emulator sign-in. Keep photos, personal details, and real account credentials out of the rehearsal. The visitor, submission API, and Auth emulator accept connections from the local network. Firestore and the simulated worker controls stay on `127.0.0.1`. Use the same `curl` commands from the Mac to advance a ticket.
+
+If the phone cannot load the URL, check whether the network blocks connections between devices. Guest and conference Wi-Fi may have peer isolation enabled. Check the macOS firewall prompt for Node and allow inbound connections on the trusted rehearsal network. If the Mac changes IP addresses, stop the stack and rerun `npm run dev:lan` to get a new QR. Stop the stack after the rehearsal.
+
+To exercise the private IPv4 browser flow and verify listener reachability from the Mac, run:
+
+```bash
+NATCUT_E2E_LAN=1 npm run test:e2e -- e2e/lan-rehearsal.spec.ts
+```
+
+Scan the QR on a real phone to verify the network between devices.
+
+### Import a named sprite roster
+
+Monstera and Prickly pear are the two rehearsal fixtures. To supply event artwork, put a JSON roster beside the source PNGs in a local folder outside the repository. Each row names one sprite and its PNG. A scientific name is optional.
+
+```json
+[
+  { "name": "Monstera", "scientificName": "Monstera deliciosa", "file": "monstera.png" },
+  { "name": "Prickly pear", "file": "prickly-pear.png" }
+]
+```
+
+```bash
+npm run sprites:import -- --input /path/to/approved-art/roster.json
+```
+
+Each batch supplies the complete picker roster. The importer fits each image on a transparent square up to 760 pixels across and publishes the catalog in `packages/render/catalog`. Use `--out <directory>` to inspect a separate catalog. Commit the generated index and PNGs together. Changed names or artwork receive new IDs. Earlier IDs retain their artwork for accepted tickets and offline proof.
+
+### Generate an offline sheet proof
+
+Create a review packet from the current fixture without connecting to Firebase or the printer:
+
+```bash
+npm run proof:sheet -- --out /tmp/natcut-sheet-proof
+```
+
+To reproduce an accepted design, save the ticket’s `manifest` object in a local JSON file and run the command with `--manifest`.
+
+```bash
+npm run proof:sheet -- --manifest /path/to/manifest.json --out /tmp/natcut-selected-proof
+```
+
+The new directory contains `sheet.jpg`, `cut-overlay.svg`, and `evidence.json`. The JPEG is the padded 1216 × 2128 review raster; the SVG places the traced contour over those same coordinates; the evidence file records distinct hashes for the manifest, logical color raster, expanded cut mask, JPEG, and contours. The command reserves the path without replacement and uses a `.incomplete` sentinel while moving the fully built packet into place. Treat the packet as complete only when all three files exist and the sentinel does not; an interrupted run can leave an empty reserved directory. The resulting packet is a normal movable directory.
+
+This packet is explicitly an **offline preview, not print-ready**. Centered padding is an unverified registration assumption. It contains no PLT, knife pressure, USB call, network call, or printer instruction.
 
 ## Build the isolated cloud preview
 

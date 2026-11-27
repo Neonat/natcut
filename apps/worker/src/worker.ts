@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { CloudQueue } from './cloud-queue.ts';
-import type { JobStore, LocalJobState, LocalPrintJob } from './job-store.ts';
+import { safelyExecutableStates, type JobStore, type LocalJobState, type LocalPrintJob } from './job-store.ts';
 import type { PhysicalExecutor } from './simulated-printer.ts';
 
 export type WorkerResult =
@@ -18,10 +18,6 @@ export type WorkerDependencies = {
   executor: PhysicalExecutor;
   now?: () => string;
 };
-
-const safelyExecutableStates = new Set<LocalJobState>([
-  'claimed', 'rendering', 'validating', 'ready_to_declare',
-]);
 
 class ExecutionFenceError extends Error {
   constructor(readonly outcome: 'waiting_for_cloud' | 'needs_reconciliation') {
@@ -65,11 +61,9 @@ export async function prepareNextWorkerJob(
   await flushPublicStatusOutbox(deps.store, deps.cloud);
   let claim = await deps.cloud.recoverClaim(deps.workerId);
   if (claim) {
-    const safeToResume = deps.store.ensureClaimed(claim);
+    const availability = deps.store.ensureClaimed(claim);
+    if (availability !== 'available') return { kind: availability, submissionId: claim.submission.id };
     const recovered = deps.store.getBySubmissionId(claim.submission.id)!;
-    if (!safeToResume) {
-      return { kind: 'needs_reconciliation', submissionId: recovered.submissionId };
-    }
     if (recovered.state === 'ready') {
       if (claim.submission.publicStatus === 'next') {
         deps.store.stagePublicStatus(recovered.submissionId, 'printing', recovered.stateChangedAt);
@@ -89,11 +83,9 @@ export async function prepareNextWorkerJob(
 
   claim ??= await deps.cloud.claimNextSubmission(deps.workerId);
   if (!claim) return { kind: 'idle' };
-  const safeToResume = deps.store.ensureClaimed(claim);
+  const availability = deps.store.ensureClaimed(claim);
+  if (availability !== 'available') return { kind: availability, submissionId: claim.submission.id };
   const job = deps.store.getBySubmissionId(claim.submission.id)!;
-  if (!safeToResume) {
-    return { kind: 'needs_reconciliation', submissionId: job.submissionId };
-  }
   if (!safelyExecutableStates.has(job.state)) {
     return { kind: 'needs_reconciliation', submissionId: job.submissionId };
   }

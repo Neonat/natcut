@@ -3,12 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 
 export type ContourPreview = Array<{ x: number; y: number }>;
 export type CutPreviewRequest = { revision: number; exact: true; manifest: CompositionManifest };
-export type CutPreviewResult = {
-  revision: number;
-  report: GeometryReport;
-  contours: ContourPreview[];
-  manifestFingerprint?: string;
-};
+export type CutPreviewResult = { revision: number; manifestFingerprint?: string } & (
+  | { report: GeometryReport; contours: ContourPreview[]; error?: never }
+  | { error: string; report?: never; contours?: never }
+);
 
 export class CutPreviewCoordinator {
   private revision = 0;
@@ -79,7 +77,7 @@ export function useCutPreview(workerFactory: () => WorkerPort | null = defaultWo
 
   return {
     result,
-    move: (manifest: CompositionManifest) => coordinator.current?.move(manifest),
-    release: (manifest: CompositionManifest) => coordinator.current?.release(manifest),
+    move: (manifest: CompositionManifest) => { setResult(null); coordinator.current?.move(manifest); },
+    release: (manifest: CompositionManifest) => { setResult(null); coordinator.current?.release(manifest); },
   };
 }

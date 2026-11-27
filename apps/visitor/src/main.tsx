@@ -18,4 +18,4 @@ const config = import.meta.env.PROD
   : readEmulatorVisitorConfig(visitorEnvironment);
 const api = createVisitorApi(config);
 
-createRoot(document.getElementById('root')!).render(<StrictMode><VisitorApp api={api} /></StrictMode>);
+createRoot(document.getElementById('root')!).render(<StrictMode><VisitorApp api={api} simulation={import.meta.env.DEV} /></StrictMode>);

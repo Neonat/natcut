@@ -1,9 +1,13 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { GeometryReport } from '@natcut/domain';
+import { catalogManifest, sprites } from '@natcut/render/browser';
+import { canonicalManifestJson, type GeometryReport } from '@natcut/domain';
 import { CutPreview, EditorPage, fixtureManifest, overlapFixtureManifest } from '../src/index.ts';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 function warningReport(): GeometryReport {
   return {
@@ -22,7 +26,91 @@ function warningReport(): GeometryReport {
   };
 }
 
+function loadVisibleArtwork(root: ParentNode = document): void {
+  root.querySelectorAll('.sticker-preview image').forEach((node) => fireEvent.load(node));
+}
+
+function spriteRadio(id: string): HTMLInputElement {
+  const radio = screen.getAllByRole<HTMLInputElement>('radio').find((input) => input.value === id);
+  if (!radio) throw new Error(`Missing sprite radio ${id}`);
+  return radio;
+}
+
 describe('mobile editor', () => {
+  const alternate = sprites[1];
+  const itWithAlternate = alternate ? it : it.skip;
+
+  itWithAlternate('changes the artwork, discards old contours and warnings, and recovers both visible art and geometry', async () => {
+    let port: EventTarget;
+    const requests: { revision: number; manifest: typeof fixtureManifest }[] = [];
+    vi.stubGlobal('Worker', class extends EventTarget {
+      constructor() { super(); port = this; }
+      postMessage(message: typeof requests[number]) { requests.push(message); }
+    });
+    const respond = (i: number, body: object) => {
+      const { revision, manifest } = requests[i]!;
+      act(() => { port.dispatchEvent(new MessageEvent('message', { data: {
+        revision, manifestFingerprint: canonicalManifestJson(manifest), ...body,
+      } })); });
+    };
+    const { container } = render(<EditorPage submitSubmission={vi.fn()} />);
+    const paths = () => container.querySelectorAll('.sticker-preview path');
+    const image = () => container.querySelector('.sticker-preview image')!.getAttribute('href');
+    const oldImage = image();
+    container.querySelectorAll('.sticker-preview image').forEach((node) => fireEvent.load(node));
+    const warning = { report: warningReport(), contours: [[{ x: 10, y: 10 }, { x: 30, y: 20 }]] };
+    respond(0, warning);
+    expect(paths()).toHaveLength(1);
+    fireEvent.click(spriteRadio(alternate!.id));
+    expect(image()).not.toBe(oldImage);
+    expect(paths()).toHaveLength(0);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: /checking cut/i })).toHaveProperty('disabled', true);
+    respond(0, warning);
+    expect(paths()).toHaveLength(0);
+    respond(1, { error: 'Could not load artwork.' });
+    expect(screen.getByRole('button', { name: /retry preview/i })).toHaveProperty('disabled', false);
+    fireEvent.error(container.querySelector('.sticker-preview image')!);
+    expect(screen.getByRole('alert').textContent).toMatch(/sprite|preview/i);
+    const failedHref = image();
+    fireEvent.click(screen.getByRole('button', { name: /retry preview/i }));
+    expect(image()).not.toBe(failedHref);
+    container.querySelectorAll('.sticker-preview image').forEach((node) => fireEvent.load(node));
+    respond(2, { report: { ...warningReport(), severity: 'ok', issues: [] }, contours: [[{ x: 80, y: 90 }]] });
+    expect(paths()[0]?.getAttribute('d')).toContain('80 90');
+    expect(screen.getByRole('button', { name: /join print queue/i })).toHaveProperty('disabled', false);
+  });
+
+  itWithAlternate('rotates the submission key only when the selected design changes', async () => {
+    const submit = vi.fn().mockRejectedValue(new Error('Lost response'));
+    render(<EditorPage submitSubmission={submit} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} />);
+    loadVisibleArtwork();
+    const clickSubmit = async () => {
+      fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+      await screen.findByRole('alert');
+    };
+    await clickSubmit();
+    fireEvent.click(screen.getByRole('button', { name: /standard/i }));
+    await clickSubmit();
+    fireEvent.click(spriteRadio(alternate!.id));
+    loadVisibleArtwork();
+    await clickSubmit();
+    expect(submit.mock.calls[1]![0].idempotencyKey).toBe(submit.mock.calls[0]![0].idempotencyKey);
+    expect(submit.mock.calls[2]![0].idempotencyKey).not.toBe(submit.mock.calls[0]![0].idempotencyKey);
+    expect(submit.mock.calls[2]![0].manifest.spriteAssetId).not.toBe(submit.mock.calls[0]![0].manifest.spriteAssetId);
+  });
+
+  itWithAlternate('keeps the chosen design fixed while its ticket request is in flight', async () => {
+    render(<EditorPage submitSubmission={() => new Promise(() => {})}
+      previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} />);
+    loadVisibleArtwork();
+    fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
+    const pear = spriteRadio(alternate!.id);
+    const wide = screen.getByRole('button', { name: /Wide/ });
+    expect(pear.matches(':disabled')).toBe(true);
+    expect(wide.matches(':disabled')).toBe(true);
+  });
+
   it('uses sprite language and applies the exact cut-border presets', () => {
     render(<EditorPage submitSubmission={vi.fn()} />);
     expect(screen.getByRole('heading', { name: /your sprite sticker/i })).toBeTruthy();
@@ -50,6 +138,7 @@ describe('mobile editor', () => {
 
   it('shows overlap as a warning and keeps Print anyway enabled', () => {
     render(<EditorPage submitSubmission={vi.fn()} previewReportOverride={warningReport()} />);
+    loadVisibleArtwork();
     expect(screen.getByRole('alert').textContent).toMatch(/two cut borders touch/i);
     expect(screen.getByRole('button', { name: /print anyway/i })).not.toHaveProperty('disabled', true);
   });
@@ -69,11 +158,12 @@ describe('mobile editor', () => {
         onNavigate={vi.fn()}
       />,
     );
+    loadVisibleArtwork();
     fireEvent.click(screen.getByRole('button', { name: /print anyway/i }));
 
     await waitFor(() => expect(submitSubmission).toHaveBeenCalledTimes(1));
     expect(submitSubmission).toHaveBeenCalledWith(expect.objectContaining({
-      manifest: fixtureManifest,
+      manifest: catalogManifest,
       warningAcknowledgement: expect.objectContaining({
         geometryVersion: 'natcut-geometry-v1',
         rasterHash: 'a'.repeat(64),
@@ -88,6 +178,7 @@ describe('mobile editor', () => {
       .mockRejectedValueOnce(new Error('response lost'))
       .mockResolvedValueOnce({ submissionId: 'submission-1', statusToken: 'token' });
     render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={vi.fn()} />);
+    loadVisibleArtwork();
     fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
     await screen.findByRole('alert');
     fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
@@ -99,5 +190,21 @@ describe('mobile editor', () => {
     const { container } = render(<CutPreview manifest={overlapFixtureManifest} contours={[]} />);
     expect(container.querySelectorAll('image')).toHaveLength(3);
     expect(container.querySelector('text')).toBeNull();
+  });
+
+  it('reports visible artwork loading, failure, reload and readiness', async () => {
+    const onArtworkState = vi.fn();
+    const { container, rerender } = render(
+      <CutPreview manifest={catalogManifest} contours={[]} reloadKey={0} onArtworkState={onArtworkState} />,
+    );
+    await waitFor(() => expect(onArtworkState).toHaveBeenLastCalledWith('loading'));
+    const firstHref = container.querySelector('image')!.getAttribute('href');
+    container.querySelectorAll('image').forEach((node) => fireEvent.load(node));
+    expect(onArtworkState).toHaveBeenLastCalledWith('ready');
+    fireEvent.error(container.querySelector('image')!);
+    expect(onArtworkState).toHaveBeenLastCalledWith('error');
+    rerender(<CutPreview manifest={catalogManifest} contours={[]} reloadKey={1} onArtworkState={onArtworkState} />);
+    expect(container.querySelector('image')!.getAttribute('href')).not.toBe(firstHref);
+    await waitFor(() => expect(onArtworkState).toHaveBeenLastCalledWith('loading'));
   });
 });

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-const controlUrl = 'http://127.0.0.1:8090';
+import { command } from './operator-client.ts';
 
 async function submit(page: import('@playwright/test').Page) {
   await page.goto('/edit');
@@ -30,13 +30,13 @@ test('leaving cancels the immutable job and rejoining goes behind the next visit
   const rejoinedQueueNumber = Number(rejoinedQueueText?.match(/\d+/)?.[0]);
   expect(rejoinedQueueNumber).toBeGreaterThan(secondQueueNumber);
 
-  const claim = await request.post(`${controlUrl}/claim`);
+  const claim = await command(request, 'claim');
   expect(claim.ok()).toBeTruthy();
   await second.getByRole('button', { name: 'Refresh' }).click();
   await expect(second.getByRole('heading', { name: 'You’re next' })).toBeVisible();
   await expect(second.getByRole('button', { name: 'Leave queue' })).toBeDisabled();
 
-  const start = await request.post(`${controlUrl}/start`);
+  const start = await command(request, 'start');
   expect(start.status()).toBe(202);
   await expect.poll(async () => {
     await second.getByRole('button', { name: 'Refresh' }).click();

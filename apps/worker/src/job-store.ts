@@ -4,19 +4,15 @@ import { randomUUID } from 'node:crypto';
 import { DEVFEST_SG_V1 } from '@natcut/domain';
 import type { ClaimedSubmission } from './cloud-queue.ts';
 
-export type LocalJobState =
-  | 'claimed'
-  | 'rendering'
-  | 'validating'
-  | 'ready_to_declare'
-  | 'declaring'
-  | 'uploading_cut'
-  | 'uploading_image'
-  | 'printing'
-  | 'cutting'
-  | 'ready'
-  | 'failed'
-  | 'needs_reconciliation';
+export const localJobStates = [
+  'claimed', 'rendering', 'validating', 'ready_to_declare', 'declaring', 'uploading_cut',
+  'uploading_image', 'printing', 'cutting', 'ready', 'failed', 'needs_reconciliation',
+] as const;
+export type LocalJobState = (typeof localJobStates)[number];
+
+export const safelyExecutableStates: ReadonlySet<LocalJobState> = new Set([
+  'claimed', 'rendering', 'validating', 'ready_to_declare',
+]);
 
 export type UploadPhase = 'none' | 'cut' | 'image' | 'complete';
 
@@ -179,8 +175,10 @@ export class JobStore {
     });
   }
 
-  ensureClaimed(claim: ClaimedSubmission): boolean {
+  ensureClaimed(claim: ClaimedSubmission): 'available' | 'busy' | 'needs_reconciliation' {
     return this.database.transaction(() => {
+      // Observe ownership and classify the journal in the same SQLite transaction.
+      if (this.hasLiveExecutionGuard()) return 'busy';
       const existing = this.getBySubmissionId(claim.submission.id);
       if (!existing) {
         this.insertClaimed(claim);
@@ -191,14 +189,19 @@ export class JobStore {
             claim.claimedAt,
             `Local journal was missing while cloud status was ${claim.submission.publicStatus}.`,
           );
-          return false;
+          return 'needs_reconciliation';
         }
-        return true;
+        return 'available';
       }
       if (existing.manifestHash !== claim.submission.manifestHash || existing.queueNumber !== claim.submission.queueNumber) {
         throw new Error(`Cloud lease for ${claim.submission.id} does not match the local journal`);
       }
       if (claim.submission.publicStatus === 'printing' && existing.state !== 'needs_reconciliation') {
+        if (safelyExecutableStates.has(existing.state)) {
+          this.transition(existing.submissionId, 'needs_reconciliation', claim.claimedAt,
+            'Cloud execution began before the local execution phase was recorded.');
+          return 'needs_reconciliation';
+        }
         const localExecutionToken = this.getOrCreateExecutionToken(existing.submissionId);
         if (!claim.executionToken || claim.executionToken !== localExecutionToken) {
           this.transition(
@@ -207,10 +210,10 @@ export class JobStore {
             claim.claimedAt,
             'Cloud execution belongs to a different or missing local journal generation.',
           );
-          return false;
+          return 'needs_reconciliation';
         }
       }
-      return true;
+      return 'available';
     }).immediate();
   }
 
@@ -274,22 +277,22 @@ export class JobStore {
     })();
   }
 
+  hasLiveExecutionGuard(): boolean {
+    const owner = this.database.prepare(
+      'SELECT processId, processIdentity FROM execution_guard WHERE singleton = 1',
+    ).get() as { processId: number; processIdentity: string } | undefined;
+    if (!owner) return false;
+    const observed = processIdentity(owner.processId);
+    return observed === null
+      ? processExists(owner.processId)
+      : owner.processIdentity !== '' && observed === owner.processIdentity;
+  }
+
   tryAcquireExecutionGuard(ownerToken: string, processId: number): boolean {
     return this.database.transaction(() => {
-      const existing = this.database.prepare(
-        'SELECT ownerToken, processId, processIdentity FROM execution_guard WHERE singleton = 1',
-      ).get() as { ownerToken: string; processId: number; processIdentity: string } | undefined;
-      if (existing) {
-        const observedIdentity = processIdentity(existing.processId);
-        const alive = observedIdentity === null
-          ? processExists(existing.processId)
-          : existing.processIdentity !== '' && observedIdentity === existing.processIdentity;
-        if (alive) return false;
-        this.database.prepare('DELETE FROM execution_guard WHERE singleton = 1 AND ownerToken = ?')
-          .run(existing.ownerToken);
-      }
+      if (this.hasLiveExecutionGuard()) return false;
       this.database.prepare(
-        'INSERT INTO execution_guard (singleton, ownerToken, processId, processIdentity) VALUES (1, ?, ?, ?)',
+        'INSERT OR REPLACE INTO execution_guard (singleton, ownerToken, processId, processIdentity) VALUES (1, ?, ?, ?)',
       ).run(ownerToken, processId, processIdentity(processId) ?? fallbackProcessIdentity);
       return true;
     }).immediate();

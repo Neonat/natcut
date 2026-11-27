@@ -4,6 +4,8 @@ import type {
   PrintProfile,
 } from '@natcut/domain';
 
+import { assertSupportedRecipe } from './catalog.ts';
+
 export type PlannedLayer = {
   id: string;
   member: CutGroupMember;
@@ -56,6 +58,7 @@ export function planComposition(
   manifest: CompositionManifest,
   profile: PrintProfile,
 ): PlannedComposition {
+  assertSupportedRecipe(manifest);
   const layers: PlannedLayer[] = [];
 
   if (manifest.trainerAssetId === null) {

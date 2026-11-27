@@ -1,20 +1,25 @@
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { DEVFEST_SG_V1, CompositionManifestSchema } from '@natcut/domain';
 import { describe, expect, it } from 'vitest';
 import {
-  loadRgbaAsset,
+  assetPngFilename,
+  loadPackagedAssets,
   planComposition,
   renderCutGroupMasks,
   renderServerRaster,
+  spriteChoices,
+  sprites,
   type AssetCatalog,
   type PlannedComposition,
   type RgbaAsset,
+  type SpriteEntry,
 } from '../src/index.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '../../..');
 
 const manifest = CompositionManifestSchema.parse({
   schemaVersion: 1,
@@ -50,6 +55,26 @@ const assets: AssetCatalog = new Map([
 ]);
 
 describe('planComposition', () => {
+  it('keeps an archived selection visible without offering other archived artwork', () => {
+    const archived: SpriteEntry[] = [
+      { id: 'sprite/selected-old', name: 'Selected old', pngSha256: 'a'.repeat(64), width: 1, height: 1 },
+      { id: 'sprite/other-old', name: 'Other old', pngSha256: 'b'.repeat(64), width: 1, height: 1 },
+    ];
+    expect(spriteChoices('sprite/selected-old', sprites, archived).map((entry) => entry.id)).toEqual([
+      ...sprites.map((entry) => entry.id),
+      'sprite/selected-old',
+    ]);
+    expect(spriteChoices(sprites[0]!.id, sprites, archived)).toBe(sprites);
+  });
+
+  it.each([
+    { renderVersion: 'unknown-v2' },
+    { spriteAssetId: 'branding/logo' },
+    { spriteAssetId: 'trainer/friend-v1' },
+  ])('rejects unsupported recipes and swapped layer roles before rasterizing: %j', (change) => {
+    expect(() => planComposition({ ...manifest, ...change }, DEVFEST_SG_V1)).toThrow();
+  });
+
   it('produces the fixed 1200x2100 default layout in deterministic layer order', async () => {
     const expected = JSON.parse(
       await readFile(path.join(here, 'fixtures/expected-layout.json'), 'utf8'),
@@ -87,12 +112,21 @@ describe('planComposition', () => {
 });
 
 describe('asset loading and masks', () => {
-  it('loads the approved fixture sprite as RGBA', async () => {
-    const asset = await loadRgbaAsset(
-      path.join(repoRoot, 'fixtures/assets/sprite-fixture.png'),
-      'sprite/monstera-v1',
-    );
+  it('rejects packaged PNG bytes that no longer match a ticket’s immutable asset identity', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'natcut-changed-art-'));
+    try {
+      const logo = assetPngFilename('branding/logo');
+      await cp(path.resolve(here, '../catalog/artwork', logo), path.join(directory, logo));
+      await cp(path.join(directory, logo), path.join(directory, assetPngFilename(manifest.spriteAssetId)));
+      await expect(loadPackagedAssets(planComposition(manifest, DEVFEST_SG_V1), directory)).rejects.toThrow(/digest/i);
+    } finally {
+      await rm(directory, { recursive: true });
+    }
+  });
 
+  it('loads the approved fixture sprite as RGBA', async () => {
+    const packaged = await loadPackagedAssets(planComposition(manifest, DEVFEST_SG_V1));
+    const asset = packaged.get('sprite/monstera-v1')!;
     expect(asset.id).toBe('sprite/monstera-v1');
     expect(asset.width).toBeGreaterThan(0);
     expect(asset.height).toBeGreaterThan(0);
@@ -131,13 +165,33 @@ describe('renderServerRaster', () => {
     expect(first.rgba[3]).toBe(0);
   });
 
-  it('uses the same alpha resampling for the trusted raster and cut masks', async () => {
-    const loaded = await Promise.all([
-      loadRgbaAsset(path.join(repoRoot, 'fixtures/assets/sprite-fixture.png'), 'sprite/monstera-v1'),
-      loadRgbaAsset(path.join(repoRoot, 'fixtures/assets/sprout-wordmark.png'), 'branding/logo'),
-    ]);
-    const realAssets: AssetCatalog = new Map(loaded.map((asset) => [asset.id, asset]));
+  it('changes both printable pixels and the cut mask for a controlled silhouette change', async () => {
     const plan = planComposition(manifest, DEVFEST_SG_V1);
+    const alternateSprite: RgbaAsset = {
+      ...solidAsset('sprite/monstera-v1', 58, 148, 92),
+      rgba: new Uint8ClampedArray([
+        58, 148, 92, 255,
+        58, 148, 92, 0,
+        58, 148, 92, 0,
+        58, 148, 92, 0,
+      ]),
+    };
+    const alternateAssets: AssetCatalog = new Map(assets).set(alternateSprite.id, alternateSprite);
+    const [firstRaster, secondRaster] = await Promise.all([
+      renderServerRaster(plan, assets),
+      renderServerRaster(plan, alternateAssets),
+    ]);
+    const maskHash = (catalog: AssetCatalog) => createHash('sha256')
+      .update(renderCutGroupMasks(plan, catalog)[0]!.alpha)
+      .digest('hex');
+
+    expect(secondRaster.sha256).not.toBe(firstRaster.sha256);
+    expect(maskHash(alternateAssets)).not.toBe(maskHash(assets));
+  });
+
+  it('uses the same alpha resampling for the trusted raster and cut masks', async () => {
+    const plan = planComposition(manifest, DEVFEST_SG_V1);
+    const realAssets = await loadPackagedAssets(plan);
     const raster = await renderServerRaster(plan, realAssets);
     const masks = renderCutGroupMasks(plan, realAssets);
     let mismatchCount = 0;

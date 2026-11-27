@@ -11,6 +11,7 @@
   "scripts": {
     "preinstall": "node scripts/check-node.mjs",
     "predev": "node scripts/check-node.mjs",
+    "predev:lan": "node scripts/check-node.mjs",
     "pretest": "node scripts/check-node.mjs",
     "pretypecheck": "node scripts/check-node.mjs",
     "prestart": "node scripts/check-node.mjs",
@@ -19,16 +20,19 @@
     "pretest:e2e": "node scripts/check-node.mjs",
     "start": "node src/server.mjs",
     "dev": "node scripts/dev.mjs",
+    "dev:lan": "node scripts/dev.mjs --lan",
     "build:hosting": "npm run build --workspace @natcut/visitor",
     "deploy:hosting": "node scripts/deploy-hosting.mjs",
     "worker:cloud:sim": "tsx scripts/cloud-worker.ts",
+    "proof:sheet": "tsx scripts/proof-sheet.ts",
     "test": "npm run test:legacy && npm run test:unit",
     "test:e2e": "playwright test",
     "test:legacy": "node --test test/protocol.test.mjs test/server.test.mjs test/snapshot.test.mjs test/usb-session.test.mjs",
-    "test:unit": "node --test test/workspace-smoke.test.mjs test/cloud-worker-entrypoint.test.mjs test/cloud-boundaries.test.mjs && vitest run --passWithNoTests",
+    "test:unit": "node --import tsx --test test/workspace-smoke.test.mjs test/cloud-worker-entrypoint.test.mjs test/cloud-boundaries.test.mjs test/dev-config.test.mjs test/proof-sheet.test.mjs && vitest run --passWithNoTests",
     "emulators:test": "node scripts/emulators-test.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "status": "node bin/status.mjs"
+    "status": "node bin/status.mjs",
+    "sprites:import": "node scripts/import-sprites.mjs"
   },
   "dependencies": {
     "usb": "^2.14.0"
@@ -45,6 +49,7 @@
     "@vitejs/plugin-react": "^6.3.0",
     "firebase-tools": "15.37.0",
     "jsdom": "^27.2.0",
+    "qrcode-terminal": "0.12.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",

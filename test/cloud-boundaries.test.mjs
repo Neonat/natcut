@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -56,6 +57,13 @@ test('production Hosting build fails without config and excludes unrelated Vite 
       VITE_UNRELATED_CANARY: 'must-not-ship-in-natcut',
     },
   });
+  const catalog = JSON.parse(await readFile(path.join(repoRoot, 'packages/render/catalog/index.json'), 'utf8'));
+  assert.ok(catalog.sprites.length >= 1);
+  for (const entry of [...catalog.sprites, ...catalog.archived]) {
+    const shipped = await readFile(path.join(repoRoot, 'apps/visitor/dist', entry.pngSha256 + '.png'));
+    assert.equal(createHash('sha256').update(shipped).digest('hex'), entry.pngSha256);
+    assert.deepEqual(shipped, await readFile(path.join(repoRoot, 'packages/render/catalog/artwork', entry.pngSha256 + '.png')));
+  }
   const assets = await readdir(path.join(repoRoot, 'apps/visitor/dist/assets'));
   const javascript = await Promise.all(
     assets.filter((name) => name.endsWith('.js')).map((name) => readFile(path.join(repoRoot, 'apps/visitor/dist/assets', name), 'utf8')),
@@ -86,6 +94,7 @@ test('local runtime rejects production selection before opening a database', asy
 test('Cloud Build upload excludes credential-shaped local files', async () => {
   const canaries = [
     path.join(repoRoot, '.env.production'),
+    path.join(repoRoot, 'packages/render/catalog/raw-input-canary.json'),
     path.join(repoRoot, 'application_default_credentials.json'),
   ];
   try {
@@ -94,6 +103,8 @@ test('Cloud Build upload excludes credential-shaped local files', async () => {
     assert.match(stdout, /cloudbuild\.submission\.yaml/);
     assert.doesNotMatch(stdout, /\.env\.production/);
     assert.doesNotMatch(stdout, /application_default_credentials\.json/);
+    assert.doesNotMatch(stdout, /raw-input-canary/);
+    assert.match(stdout, /packages\/render\/catalog\/index\.json/);
   } finally {
     await Promise.all(canaries.map((file) => rm(file, { force: true })));
   }

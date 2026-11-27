@@ -1,3 +1,4 @@
+export * from './catalog.ts';
 export * from './assets.ts';
 export * from './layout.ts';
 export * from './masks.ts';
