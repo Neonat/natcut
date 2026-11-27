@@ -16,6 +16,13 @@ it('verifies the original receipt without assigning new provenance or moving its
     byteLength: bytes.length, bundleSha256: sha256(bytes),
     profileSha256: 'f4812e005f9118f42906afdf8fd3c99d0dd60a0fddca9f7875e12eaffca68890',
   } };
+  for (const sourceProfileSha256 of ['0'.repeat(64), 'c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353']) {
+    const colorEvidence = { outputSpace: 'srgb', pipelineVersion: 'natcut-srgb-v1',
+      sourceSpace: 'cmyk', action: 'converted', sourceProfileSha256 };
+    expect(() => parseArtifactReceipt({ ...receipt,
+      descriptor: { ...receipt.descriptor, formatVersion: 2, colorEvidence },
+    })).toThrow();
+  }
   const verified = await verifyArtifactBytes(bytes, parseArtifactReceipt(receipt));
   expect(verified.receipt).toEqual(receipt);
   expect(artifactObjectPath(verified.receipt.descriptor)).toBe('logical/v1/' + receipt.descriptor.bundleSha256);

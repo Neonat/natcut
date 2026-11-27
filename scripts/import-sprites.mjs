@@ -4,8 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import sharp from 'sharp';
-import { loadRgbaAsset } from '../packages/render/src/assets.ts';
-import { DEVFEST_SG_V1 } from '../packages/domain/src/print-profile.ts';
+import { catalogSpriteId, normalizeSpritePng } from '../packages/render/src/assets.ts';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
@@ -26,19 +25,10 @@ async function normalizeSprite(row, directory) {
   const input = await readFile(path.join(directory, row.file));
   const { format, pages } = await sharp(input).metadata();
   if (format !== 'png' || (pages ?? 1) !== 1) throw new Error(`Expected a still PNG for ${name}.`);
-  const { rgba, width, height } = await loadRgbaAsset(input, name);
-  const side = Math.min(760, Math.max(width, height));
-  // Canonical catalog objects store normalized RGBA8 sRGB pixels at their PNG digest.
-  const { data, info } = await sharp(Buffer.from(rgba), { raw: { width, height, channels: 4 } })
-    .resize(side, side, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-    .raw().toBuffer({ resolveWithObject: true });
-  if (!data.some((value, offset) => offset % 4 === 3 && value >= DEVFEST_SG_V1.alphaThreshold)) {
-    throw new Error(`Artwork for ${name} has no pixels above the print alpha threshold.`);
-  }
-  const png = await sharp(data, { raw: info }).png().toBuffer();
+  const { png, side, colorEvidence } = await normalizeSpritePng(input, name);
   const pngSha256 = hash(png);
-  const id = 'sprite/' + hash(JSON.stringify([name, scientificName ?? null, pngSha256]));
-  return { entry: { id, name, ...(scientificName ? { scientificName } : {}), pngSha256, width: side, height: side }, png };
+  const entry = { name, ...(scientificName ? { scientificName } : {}), pngSha256, colorEvidence, width: side, height: side };
+  return { entry: { id: catalogSpriteId(entry), ...entry }, png };
 }
 
 function processIsAlive(pid) {

@@ -35,8 +35,8 @@ async function fixture(t) {
   await mkdir(src);
   await Promise.all([
     image({ r: 40, g: 60, b: 30 }).jpeg().toFile(path.join(src, 'reference.jpg')),
-    image({ r: 14, g: 151, b: 67 }).png().toFile(path.join(src, 'one.png')),
-    image({ r: 10, g: 125, b: 91 }).png().toFile(path.join(src, 'two.png')),
+    image({ r: 14, g: 151, b: 67 }).withIccProfile('p3').png().toFile(path.join(src, 'one.png')),
+    image({ r: 10, g: 125, b: 91 }).withIccProfile('srgb').png().toFile(path.join(src, 'two.png')),
   ]);
   const manifest = {
     version: 1,
@@ -57,11 +57,17 @@ async function fixture(t) {
 }
 
 test('publishes a deterministic offline packet with importer-compatible candidate PNGs', async (t) => {
-  const { root, out, run } = await fixture(t);
+  const { root, src, out, run } = await fixture(t);
   const result = await run();
   assert.equal(result.status, 0, result.stderr);
   const files = await readdir(out);
   const html = await readFile(path.join(out, 'index.html'), 'utf8');
+  const packet = JSON.parse(html.match(/<script type="application\/json" id="review-packet">(.*?)<\/script>/s)[1]);
+  const first = packet.plants[0];
+  const source = first.candidateSources[first.candidates[0]];
+  assert.equal(source.sha256, sha256(await readFile(path.join(src, 'one.png'))));
+  assert.equal(source.colorEvidence.sourceSpace, 'display-p3');
+  assert.equal(source.colorEvidence.action, 'converted');
   assert.match(html, /Monstera deliciosa/);
   assert.match(html, /Prickly pear/);
   assert.doesNotMatch(html, /https?:\/\//);
@@ -85,6 +91,11 @@ test('publishes a deterministic offline packet with importer-compatible candidat
   await exec(process.execPath, [fileURLToPath(new URL('../scripts/import-sprites.mjs', import.meta.url)),
     '--input', roster, '--out', catalog]);
   const { sprites } = JSON.parse(await readFile(path.join(catalog, 'index.json'), 'utf8'));
+  assert.ok(sprites.every(({ colorEvidence }) => colorEvidence.sourceSpace === 'srgb'
+    && colorEvidence.action === 'preserved' && colorEvidence.sourceProfileSha256 === null));
+  for (const file of files.filter(file => file.endsWith('.png'))) {
+    assert.equal((await readFile(path.join(out, file))).toString('ascii', 37, 41), 'sRGB');
+  }
   assert.deepEqual(sprites.map(({ pngSha256 }) => pngSha256), files.filter((file) => file.endsWith('.png'))
     .map((file) => path.parse(file).name));
 });
@@ -111,13 +122,15 @@ const invalid = [
     frames.writeUInt32BE(2);
     await writeFile(file, Buffer.concat([png.subarray(0, 33), pngChunk('acTL', frames), png.subarray(33)]));
   }],
+  ['untagged printable candidates', /Monstera.*profile/i, ({ src }) =>
+    image({ r: 14, g: 151, b: 67 }).png().toFile(path.join(src, 'one.png'))],
   ['an empty candidate', /Monstera.*(?:image|PNG)/, ({ src }) => writeFile(path.join(src, 'one.png'), '')],
   ['a corrupt PNG', /Monstera.*(?:image|PNG)/, async ({ src }) => {
     const file = path.join(src, 'one.png');
     await writeFile(file, (await readFile(file)).subarray(0, 50));
   }],
   ['a candidate below printable alpha', /Monstera.*alpha/i, ({ src }) =>
-    image({ r: 14, g: 151, b: 67 }, 0.4).png().toFile(path.join(src, 'one.png'))],
+    image({ r: 14, g: 151, b: 67 }, 0.4).withIccProfile('srgb').png().toFile(path.join(src, 'one.png'))],
   ['duplicate common names', /duplicate.*monstera/i, ({ manifest }) => { manifest.plants[1].name = ' monstera '; }],
   ['a common name that grows beyond 128 characters in NFC', /name[\s\S]*128/i, ({ manifest }) => {
     manifest.plants[0].name = '\u0344'.repeat(65);

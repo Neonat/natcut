@@ -1,4 +1,4 @@
-import type { CompositionManifest } from '@natcut/domain';
+import { SrgbColorEvidenceSchema, type SrgbColorEvidence, type CompositionManifest } from '@natcut/domain';
 import index from '../catalog/index.json' with { type: 'json' };
 import type { AssetCatalog, RgbaAsset } from './assets.ts';
 import type { PlannedComposition } from './layout.ts';
@@ -8,12 +8,17 @@ export type SpriteEntry = Readonly<{
   name: string;
   scientificName?: string;
   pngSha256: string;
+  colorEvidence?: SrgbColorEvidence;
   width: number;
   height: number;
 }>;
 
-export const sprites: readonly SpriteEntry[] = Object.freeze(index.sprites.map((entry) => Object.freeze(entry)));
-const archivedSprites: readonly SpriteEntry[] = Object.freeze(index.archived.map((entry) => Object.freeze(entry)));
+function freezeEntry({ colorEvidence, ...entry }: Omit<SpriteEntry, 'colorEvidence'> & { colorEvidence?: unknown }): SpriteEntry {
+  return Object.freeze(colorEvidence === undefined ? entry : { ...entry, colorEvidence: SrgbColorEvidenceSchema.parse(colorEvidence) });
+}
+
+export const sprites: readonly SpriteEntry[] = Object.freeze(index.sprites.map(freezeEntry));
+const archivedSprites: readonly SpriteEntry[] = Object.freeze(index.archived.map(freezeEntry));
 const byId = new Map<string, SpriteEntry>([...sprites, ...archivedSprites].map((entry) => [entry.id, entry]));
 const legacySprite = 'sprite/monstera-v1';
 const legacyTrainer = 'trainer/friend-v1';
@@ -62,6 +67,10 @@ export function assertSupportedRecipe(manifest: CompositionManifest): void {
     || brand?.id !== 'brand' || brand.members.length !== 1 || brand.members[0] !== 'branding') {
     throw new Error('Unsupported catalog composition.');
   }
+}
+
+export function catalogSpriteEntry(assetId: string): SpriteEntry | undefined {
+  return byId.get(assetId);
 }
 
 export function assetPngFilename(assetId: string): string {

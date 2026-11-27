@@ -124,6 +124,9 @@ it('uses intrinsic typed-array length instead of a shadowed byteLength property'
 it('rejects missing, unsupported and inconsistent sRGB evidence for new receipts and encoding', async () => {
   for (const invalid of [
     undefined, { ...colorEvidence, outputSpace: 'adobe-rgb' }, { ...colorEvidence, action: 'converted' },
+    { ...colorEvidence, sourceSpace: 'cmyk', action: 'converted', sourceProfileSha256: '0'.repeat(64) },
+    { ...colorEvidence, sourceSpace: 'cmyk', action: 'converted',
+      sourceProfileSha256: 'c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353' },
     { ...colorEvidence, sourceSpace: 'cmyk' }, { ...colorEvidence, leak: true },
     { ...colorEvidence, sourceSpace: 'display-p3', action: 'converted' },
     { ...colorEvidence, sourceProfileSha256: 'not-a-hash' }, { ...colorEvidence, pipelineVersion: 'other' },

@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import sharp from 'sharp';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE } from '@natcut/domain';
 
 const exec = promisify(execFile);
 type Row = { name: string; file: string; scientificName?: string };
@@ -105,3 +106,39 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
     await rm(dir, { recursive: true, force: true });
   }
 }, 30_000);
+
+it('binds a converted sprite’s provenance into its ID and restores it when loading normalized PNG pixels', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'sprite-color-'));
+  const out = path.join(directory, 'catalog');
+  try {
+    const image = sharp(Buffer.from([176, 92, 63, 255]), { raw: { width: 1, height: 1, channels: 4 } });
+    await image.withIccProfile('p3').png().toFile(path.join(directory, 'source.png'));
+    const input = path.join(directory, 'roster.json');
+    await writeFile(input, JSON.stringify([{ name: 'Orchid', file: 'source.png' }]));
+    await exec(process.execPath, ['scripts/import-sprites.mjs', '--input', input, '--out', out],
+      { cwd: path.resolve(import.meta.dirname, '../../..') });
+    const index = JSON.parse(await readFile(path.join(out, 'index.json'), 'utf8'));
+    const entry = index.sprites[0];
+    const expected = { ...NATIVE_SRGB_EVIDENCE, sourceSpace: 'display-p3', action: 'converted',
+      sourceProfileSha256: '231752984cd4a5278e1b8d2390fe496767d4511fc81f54e1a5c69ae9ab4c42b5' };
+    expect(entry.colorEvidence).toEqual(expected);
+    async function loadFromIndex() {
+      vi.resetModules();
+      vi.doMock('../catalog/index.json', () => ({ default: index }));
+      const { catalogManifest, planComposition, loadPackagedAssets } = await import('../src/index.ts');
+      const plan = planComposition(catalogManifest, DEVFEST_SG_V1);
+      return loadPackagedAssets({ ...plan, layers: [plan.layers[0]!] }, path.join(out, 'artwork'));
+    }
+    const asset = (await loadFromIndex()).get(entry.id)!;
+    expect(asset.colorEvidence).toEqual(expected);
+    expect(Array.from(asset.rgba)).toEqual([176, 92, 63, 255]);
+    entry.colorEvidence = NATIVE_SRGB_EVIDENCE;
+    await expect(loadFromIndex()).rejects.toThrow(/identity/i);
+    delete entry.colorEvidence;
+    await expect(loadFromIndex()).rejects.toThrow(/identity/i);
+  } finally {
+    vi.doUnmock('../catalog/index.json');
+    vi.resetModules();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

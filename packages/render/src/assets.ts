@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32 } from 'node:zlib';
-import { NATIVE_SRGB_EVIDENCE, SrgbColorEvidenceSchema, type SrgbColorEvidence } from '@natcut/domain';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, SrgbColorEvidenceSchema, recognizedIccSpace, type SrgbColorEvidence } from '@natcut/domain';
 import sharp from 'sharp';
-import { loadPlannedAssets } from './catalog.ts';
+import { catalogSpriteEntry, loadPlannedAssets, type SpriteEntry } from './catalog.ts';
 import type { PlannedComposition } from './layout.ts';
 
 export type RgbaAsset = {
@@ -18,20 +18,9 @@ export type SrgbRgbaAsset = RgbaAsset & { readonly colorEvidence: SrgbColorEvide
 export type AssetCatalog<T extends RgbaAsset = SrgbRgbaAsset> = ReadonlyMap<string, T>;
 
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-// Whole ICC profiles, not mutable descriptions or an RGB channel count. First the three
-// libvips built-ins, then Apple's sRGB, Display P3 and Generic CMYK profiles.
-const supportedProfiles = new Map<string, SrgbColorEvidence['sourceSpace']>([
-  ['c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353', 'srgb'],
-  ['231752984cd4a5278e1b8d2390fe496767d4511fc81f54e1a5c69ae9ab4c42b5', 'display-p3'],
-  ['156e7c14f244cfc4ed83a755ca4803d80e15dd249b40fae82cb127d3902e15c7', 'cmyk'],
-  ['2b3aa1645779a9e634744faf9b01e9102b0c9b88fd6deced7934df86b949af7e', 'srgb'],
-  ['0ff6958f98684c61f6bbdce1368ddeaf3873baf84545baba482e920d92a914c0', 'display-p3'],
-  ['0c8a584b288a306eac9e1d3f1e68bc1b64331c717ceb051420e6257f17b3509a', 'cmyk'],
-]);
-
 // Sharp does not expose the PNG sRGB chunk as ICC metadata. Recognize this explicit
 // declaration without accepting a guessed color space, contradictory tags, or a bad CRC.
-function pngDeclaresSrgb(bytes: Buffer, hasIcc: boolean): boolean {
+function pngDeclaresSrgb(bytes: Buffer, hasIcc: boolean, iccSpace: SrgbColorEvidence['sourceSpace'] | undefined): boolean {
   const chunks = new Map<string, Buffer>();
   let seenPixels = false;
   for (let offset = 8; offset < bytes.length;) {
@@ -53,15 +42,18 @@ function pngDeclaresSrgb(bytes: Buffer, hasIcc: boolean): boolean {
   if (chunks.has('cICP') || chunks.has('iCCP') !== hasIcc || (tag && hasIcc)) {
     throw new Error('Ambiguous or unsupported PNG color profile.');
   }
-  if (!tag) return false;
   const gamma = chunks.get('gAMA');
   const chroma = chunks.get('cHRM');
+  if (!tag && iccSpace !== 'srgb') {
+    if (hasIcc && (gamma || chroma)) throw new Error('Cannot verify PNG gamma or chromaticities against the embedded profile.');
+    return false;
+  }
   const srgbChroma = [31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000];
-  if (tag.length !== 1 || tag[0]! > 3 || (gamma && (gamma.length !== 4 || gamma.readUInt32BE() !== 45455)) ||
+  if ((tag && (tag.length !== 1 || tag[0]! > 3)) || (gamma && (gamma.length !== 4 || gamma.readUInt32BE() !== 45455)) ||
       (chroma && (chroma.length !== 32 || srgbChroma.some((value, i) => chroma.readUInt32BE(i * 4) !== value)))) {
     throw new Error('Invalid or conflicting PNG sRGB declaration.');
   }
-  return true;
+  return !!tag;
 }
 
 async function decodeAsset(input: Buffer, id: string, normalizedCatalog: boolean, limitInputPixels?: number) {
@@ -69,11 +61,11 @@ async function decodeAsset(input: Buffer, id: string, normalizedCatalog: boolean
   const image = sharp(bytes, { failOn: 'warning', ...(limitInputPixels === undefined ? {} : { limitInputPixels }) });
   const metadata = await image.metadata();
   const icc = metadata.icc;
-  const pngSrgb = metadata.format === 'png' && pngDeclaresSrgb(bytes, !!icc);
+  const sourceProfileSha256 = icc ? sha256(icc) : null;
+  const sourceSpace = sourceProfileSha256 ? recognizedIccSpace(sourceProfileSha256) : undefined;
+  const pngSrgb = metadata.format === 'png' && pngDeclaresSrgb(bytes, !!icc, sourceSpace);
   let colorEvidence = NATIVE_SRGB_EVIDENCE;
   if (icc) {
-    const sourceProfileSha256 = sha256(icc);
-    const sourceSpace = supportedProfiles.get(sourceProfileSha256);
     const expectedBands = sourceSpace === 'cmyk' ? 4 : 3;
     if (!sourceSpace || (metadata.space === 'cmyk') !== (sourceSpace === 'cmyk') ||
         metadata.channels !== expectedBands + Number(metadata.hasAlpha)) {
@@ -97,6 +89,29 @@ export async function loadRgbaAsset(input: string | Buffer, id: string, limitInp
   return decodeAsset(typeof input === 'string' ? await readFile(input) : input, id, false, limitInputPixels);
 }
 
+// PNG sRGB chunk, perceptual intent (0), with its standard length and CRC. The
+// raw PNG encoder writes IHDR at offset 8 and emits no other color declarations.
+const pngSrgbChunk = Buffer.from('000000017352474200aece1ce9', 'hex');
+
+export async function normalizeSpritePng(bytes: Buffer, name: string, limitInputPixels?: number) {
+  const { rgba, width, height, colorEvidence } = await loadRgbaAsset(bytes, name, limitInputPixels);
+  const side = Math.min(760, Math.max(width, height));
+  const { data, info } = await sharp(Buffer.from(rgba), { raw: { width, height, channels: 4 } })
+    .resize(side, side, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .raw().toBuffer({ resolveWithObject: true });
+  if (!data.some((value, offset) => offset % 4 === 3 && value >= DEVFEST_SG_V1.alphaThreshold)) {
+    throw new Error(`Artwork for ${name} has no pixels above the print alpha threshold.`);
+  }
+  const png = await sharp(data, { raw: info }).png().toBuffer();
+  return { png: Buffer.concat([png.subarray(0, 33), pngSrgbChunk, png.subarray(33)]), side, colorEvidence };
+}
+
+export function catalogSpriteId(entry: Pick<SpriteEntry, 'name' | 'scientificName' | 'pngSha256' | 'colorEvidence'>): string {
+  const identity: unknown[] = [entry.name, entry.scientificName ?? null, entry.pngSha256];
+  if (entry.colorEvidence !== undefined) identity.push(SrgbColorEvidenceSchema.parse(entry.colorEvidence));
+  return 'sprite/' + sha256(Buffer.from(JSON.stringify(identity)));
+}
+
 export function loadPackagedAssets(
   plan: PlannedComposition,
   directory = fileURLToPath(new URL('../catalog/artwork/', import.meta.url)),
@@ -106,6 +121,10 @@ export function loadPackagedAssets(
     if (filename !== sha256(bytes) + '.png') throw new Error(`Artwork digest mismatch for ${id}.`);
     // The trusted catalog pins normalized sRGB PNGs by digest, including shipped
     // artwork that predates embedded profiles. External callers cannot take this path.
-    return decodeAsset(bytes, id, true);
+    const entry = catalogSpriteEntry(id);
+    if (entry && catalogSpriteId(entry) !== id) throw new Error(`Catalog sprite identity mismatch for ${id}.`);
+    const decoded = await decodeAsset(bytes, id, true);
+    if (decoded.colorEvidence.sourceSpace !== 'srgb') throw new Error('Catalog PNG pixels must already be normalized to sRGB.');
+    return { ...decoded, colorEvidence: entry?.colorEvidence ?? decoded.colorEvidence };
   });
 }

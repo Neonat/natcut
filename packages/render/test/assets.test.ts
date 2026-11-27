@@ -27,7 +27,7 @@ it.each(['srgb', 'p3', 'cmyk'] as const)('interprets the actual embedded %s prof
   expect(Array.from(asset.rgba)).toEqual(profile === 'cmyk' ? [172, 82, 39, 255] : [176, 92, 63, 255]);
   const catalog = await loadPackagedAssets(plan);
   expect(catalog.get('branding/logo')!.colorEvidence).toEqual(native);
-  const raster = await renderServerRaster(plan, new Map(catalog).set(asset.id, asset));
+  const raster = await renderServerRaster({ ...plan, layers: [plan.layers[0]!] }, new Map(catalog).set(asset.id, asset));
   expect(raster.colorEvidence).toEqual(asset.colorEvidence);
   expect(Object.isFrozen(raster.colorEvidence)).toBe(true);
 });
@@ -75,4 +75,12 @@ it('holds a composition whose two different source ICCs cannot fit one receipt',
   const sprite = await loadRgbaAsset(await swatch().withIccProfile('p3').png().toBuffer(), catalogManifest.spriteAssetId);
   const logo = await loadRgbaAsset(await swatch().withIccProfile('cmyk').tiff({ compression: 'none' }).toBuffer(), 'branding/logo');
   await expect(renderServerRaster(plan, new Map(layers).set(sprite.id, sprite).set(logo.id, logo))).rejects.toThrow(/distinct source profiles/i);
+});
+
+it('rejects conflicting gamma and chromaticities paired with a recognized sRGB ICC', async () => {
+  const png = await swatch().withIccProfile('srgb').png().toBuffer();
+  const gamma = Buffer.alloc(4);
+  gamma.writeUInt32BE(100000);
+  await expect(loadRgbaAsset(tagPng(png, 'gAMA', gamma), 'external')).rejects.toThrow();
+  await expect(loadRgbaAsset(tagPng(png, 'cHRM', Buffer.alloc(32)), 'external')).rejects.toThrow();
 });

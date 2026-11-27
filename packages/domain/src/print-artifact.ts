@@ -5,6 +5,21 @@ import { sha256Hex } from './sha256.ts';
 const version = z.string().min(1).max(64);
 const positiveInteger = z.number().int().positive();
 const digest = z.string().length(64).regex(/^[a-f0-9]+$/);
+// Whole ICC profiles, not mutable descriptions or an RGB channel count. First the three
+// libvips built-ins, then Apple's sRGB, Display P3 and Generic CMYK profiles.
+const supportedProfiles = new Map<string, 'srgb' | 'display-p3' | 'cmyk'>([
+  ['c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353', 'srgb'],
+  ['231752984cd4a5278e1b8d2390fe496767d4511fc81f54e1a5c69ae9ab4c42b5', 'display-p3'],
+  ['156e7c14f244cfc4ed83a755ca4803d80e15dd249b40fae82cb127d3902e15c7', 'cmyk'],
+  ['2b3aa1645779a9e634744faf9b01e9102b0c9b88fd6deced7934df86b949af7e', 'srgb'],
+  ['0ff6958f98684c61f6bbdce1368ddeaf3873baf84545baba482e920d92a914c0', 'display-p3'],
+  ['0c8a584b288a306eac9e1d3f1e68bc1b64331c717ceb051420e6257f17b3509a', 'cmyk'],
+]);
+
+export function recognizedIccSpace(profileSha256: string) {
+  return supportedProfiles.get(profileSha256);
+}
+
 export const SrgbColorEvidenceSchema = z.strictObject({
   outputSpace: z.literal('srgb'),
   pipelineVersion: z.literal('natcut-srgb-v1'),
@@ -14,7 +29,9 @@ export const SrgbColorEvidenceSchema = z.strictObject({
 }).refine(evidence => evidence.sourceSpace === 'srgb'
   ? evidence.action === 'preserved'
   : evidence.action === 'converted' && evidence.sourceProfileSha256 !== null,
-{ message: 'Source profile, source space and color action must agree.' }).readonly();
+{ message: 'Source profile, source space and color action must agree.' })
+  .refine(evidence => evidence.sourceProfileSha256 === null || recognizedIccSpace(evidence.sourceProfileSha256) === evidence.sourceSpace,
+    { message: 'The ICC profile must be recognized and match the source color space.' }).readonly();
 
 export type SrgbColorEvidence = z.infer<typeof SrgbColorEvidenceSchema>;
 // For pixels authored directly in sRGB or received through the digest-verified catalog contract.
