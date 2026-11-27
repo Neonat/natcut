@@ -246,6 +246,8 @@ The print constructor consumes only RGBA color samples and their provenance. Its
 
 `natcut-jpeg-qc-v1` checks dimensions, the embedded sRGB ICC and RGB8 samples. The calibrated inclusive limits are 19,313 thousandths for each channel’s mean absolute error, 96 levels for p99, 201,249 ppm of pixels above 32 levels, and 9 levels for the largest 16 × 16 tile bias. Failure output reports reasons and worst-pixel and worst-tile coordinates. Rerun the software measurements from the repository root. [Calibration corpus and results](packages/printer/test/jpeg-qc-calibration.md)
 
+The offline NatCut–Sprout plant-job adapter lives in `apps/submission/src/plant-flow.ts` and `sprout-client.ts`. It binds one capture to a stable intent, deadline and approved catalog fallback; verifies private Sprout candidate bytes; and keeps the first local artwork outcome immutable. It does not expose a live visitor route. Generated acceptance still needs a reviewed runtime sprite catalog writer and loader because `catalog-v1` only reads packaged sprite IDs. [Adapter contract and remaining gates](docs/superpowers/specs/2026-11-28-natcut-sprout-adapter.md)
+
 ```sh
 npx vitest run --project printer test/qc-calibration.test.ts test/generation-qc.test.ts
 ```

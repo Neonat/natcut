@@ -6,6 +6,7 @@ import { connectAuthEmulator, getAuth, signInAnonymously } from 'firebase/auth';
 import { connectFirestoreEmulator, doc, getFirestore, setDoc } from 'firebase/firestore';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { IdempotencyConflictError, RequeueForbiddenError, createSubmissionRepository, createSurveyRepository } from '../src/index.ts';
+import { createPlantFlowRepository, PlantFlowConflictError } from '../src/plant-flow-repository.ts';
 import { artifact, submissionInput as input } from './fixtures/artifact.ts';
 
 const emulatorEnabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST && process.env.FIREBASE_AUTH_EMULATOR_HOST);
@@ -67,6 +68,36 @@ emulatorDescribe('Firebase emulator integration', () => {
     expect(second.submission.queueNumber).toBe(2);
     await firestore.doc(`submissions/${first.submission.id}`).update({ publicStatus: 'ready' });
     expect((await repository.getPublicStatus(second.submission.id, 'c'.repeat(64)))?.jobsAhead).toBe(0);
+  }, 20_000);
+
+  it('reserves one plant intent and commits only the first local outcome across concurrent callers', async () => {
+    const repository = createPlantFlowRepository(database());
+    const key = { eventId: 'plant-event', visitorSessionId: 'plant-visitor', captureId: 'plant-capture' };
+    const input = { ...key, requestFingerprint: 'a'.repeat(64),
+      liveDeadlineAt: '2026-11-28T00:00:15.000Z', fallbackAssetId: 'sprite/approved' };
+    const [first, retry] = await Promise.all([repository.reserve(input), repository.reserve(input)]);
+    expect(first.generationIntentId).toBe(retry.generationIntentId);
+    expect(first.liveDeadlineAt).toBe(retry.liveDeadlineAt);
+    await expect(repository.reserve({ ...input, requestFingerprint: 'b'.repeat(64) })).rejects.toBeInstanceOf(PlantFlowConflictError);
+    await repository.bind(key, first.generationIntentId, 'plant-job-1');
+    await expect(repository.bind(key, first.generationIntentId, 'other-job')).rejects.toBeInstanceOf(PlantFlowConflictError);
+    await repository.observe(key, first.generationIntentId, 'eligible');
+    const fallback = { decisionId: 'decision-1', decidedAt: '2026-11-28T00:00:15.000Z',
+      outcome: 'catalog_fallback_accepted' as const, catalogAssetId: input.fallbackAssetId,
+      reason: 'deadline_elapsed' as const };
+    const generated = { decisionId: 'decision-2', decidedAt: '2026-11-28T00:00:14.000Z',
+      outcome: 'generated_accepted' as const, candidateId: 'candidate-1',
+      natcutAssetId: 'sprite/generated', reason: 'candidate_approved_before_deadline' as const };
+    const [winner, loser] = await Promise.all([
+      repository.commit(key, first.generationIntentId, fallback),
+      repository.commit(key, first.generationIntentId, generated),
+    ]);
+    expect(winner.accepted).toEqual(loser.accepted);
+    expect((await repository.get(key))?.accepted).toEqual(winner.accepted);
+    expect((await repository.commit(key, first.generationIntentId, generated)).accepted).toEqual(winner.accepted);
+    expect((await repository.recordAck(key, first.generationIntentId, winner.accepted!.decisionId, 'confirmed')).sproutAck).toBe('confirmed');
+    expect((await repository.recordAck(key, first.generationIntentId, winner.accepted!.decisionId, 'needs_reconciliation')).sproutAck).toBe('confirmed');
+    await expect(repository.recordAck(key, first.generationIntentId, 'wrong-decision', 'confirmed')).rejects.toBeInstanceOf(PlantFlowConflictError);
   }, 20_000);
 
   it('counts queued tickets with future or malformed receipts without decoding unrelated artifacts', async () => {
