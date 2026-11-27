@@ -2,14 +2,14 @@ import {
   prepareTransportAttempt,
   SqliteTransportAttemptJournal,
 } from '../packages/printer/src/transport-attempt.ts';
-import { createPhysicalEvidenceRuntime, requireMutableAttempt } from './physical-evidence.mjs';
+import { createPhysicalEvidenceRuntime, existingAttemptError, requireMutableAttempt } from './physical-evidence.mjs';
 import { frameUploadPayload } from '../packages/printer/src/protocol-plan.ts';
 
 export function createBrowserPhysicalCoordinator({
   approvalFingerprint,
   journalPath,
   getPhysicalAttemptEvidence = createPhysicalEvidenceRuntime({ journalPath }).getPhysicalAttemptEvidence,
-  createJournal = (file) => new SqliteTransportAttemptJournal(file),
+  createJournal = (file) => new SqliteTransportAttemptJournal(file, { existingOnly: true }),
 }) {
   let state = null;
   let started = false;
@@ -37,7 +37,7 @@ export function createBrowserPhysicalCoordinator({
       const journal = createJournal(journalPath);
       if (!journal.reserve(prepared.evidence, prepared.evidenceHash)) {
         journal.close?.();
-        throw new Error('A physical attempt is already reserved.');
+        throw existingAttemptError(getPhysicalAttemptEvidence());
       }
       const descriptors = prepared.payloads.map((payload) => ({
         payload,

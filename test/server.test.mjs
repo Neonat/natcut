@@ -3,6 +3,8 @@ import { once } from 'node:events';
 import { connect } from 'node:net';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { SqlitePhysicalQcJournal } from '@natcut/printer/physical-qc';
+import { buildPhysicalProof } from '../packages/printer/src/physical-proof.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
@@ -314,19 +316,23 @@ const registration = {
   evidence: [{ kind: 'photo_reference', reference: 'fixture-receipt' }], notes: 'Synthetic inspection',
 };
 
+function populatePhysicalFixture(legacy, frames) {
+  assert.equal(legacy.reserve(fixtureEvidence, evidenceHash), true);
+  legacy.recordPrinterJobId(submissionId, evidenceHash, printerJobId);
+  for (let i = 0; i < frames; i++) {
+    legacy.recordFrameIntent(submissionId, evidenceHash, i, i === 0 ? 'plt' : 'jpeg', 0);
+    legacy.recordFrameAcknowledged(submissionId, evidenceHash, i);
+  }
+  legacy.markReconciliation(submissionId, evidenceHash, 'physical_observation_required');
+}
+
 async function physicalFixture(t, frames = 2) {
   const dir = await mkdtemp(join(tmpdir(), 'natcut-http-qc-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const journalPath = join(dir, 'synthetic.sqlite');
   const legacy = new SqliteTransportAttemptJournal(journalPath);
   try {
-    assert.equal(legacy.reserve(fixtureEvidence, evidenceHash), true);
-    legacy.recordPrinterJobId(submissionId, evidenceHash, printerJobId);
-    for (let i = 0; i < frames; i++) {
-      legacy.recordFrameIntent(submissionId, evidenceHash, i, i === 0 ? 'plt' : 'jpeg', 0);
-      legacy.recordFrameAcknowledged(submissionId, evidenceHash, i);
-    }
-    legacy.markReconciliation(submissionId, evidenceHash, 'physical_observation_required');
+    populatePhysicalFixture(legacy, frames);
   } finally { legacy.close(); }
   return journalPath;
 }
@@ -460,4 +466,34 @@ test('operator records a known observation, reloads the locked UI, and records C
   }, options());
   assert.deepEqual(usbCalls, []);
   assert.deepEqual(requests, ['evidence','record-completed','evidence','evidence','physical-qc','evidence'].map(path => '/api/physical-proof/' + path));
+});
+
+test('a completed outcome between the HTTP check and direct reservation wins without hardware', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'natcut-final-reserve-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const journalPath = join(directory, 'synthetic.sqlite');
+  new SqliteTransportAttemptJournal(journalPath).close();
+  const proof = await buildPhysicalProof();
+  const approvalFingerprint = proof.summary.approvalFingerprint;
+  const calls = [];
+  const options = createPhysicalProofRuntime({
+    journalPath, approvalFingerprint, buildProof: () => proof,
+    createJournal(file) {
+      const rival = new SqliteTransportAttemptJournal(file);
+      try { populatePhysicalFixture(rival, 2); } finally { rival.close(); }
+      const qc = new SqlitePhysicalQcJournal(file);
+      try { qc.recordCompletedAttempt(completed); } finally { qc.close(); }
+      return new SqliteTransportAttemptJournal(file);
+    },
+    openSession() { calls.push('open'); return { io: {}, close() {} }; },
+    createTransport() { calls.push('create'); return {}; },
+  });
+  await withServer(assert.fail, async base => {
+    const response = await post(base, 'send', { approvalFingerprint, confirmation: 'SEND ONE SHEET' });
+    const body = await response.json();
+    assert.equal(response.status, 409);
+    assert.deepEqual(calls, []);
+    assert.equal(body.error.code, 'ATTEMPT_LOCKED');
+    assert.deepEqual((await (await readEvidence(base)).json()).evidence.outcome, completed);
+  }, options);
 });

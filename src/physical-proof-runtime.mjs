@@ -1,4 +1,4 @@
-import { createPhysicalEvidenceRuntime, requireMutableAttempt } from './physical-evidence.mjs';
+import { createPhysicalEvidenceRuntime, existingAttemptError, journalUnavailable, requireMutableAttempt } from './physical-evidence.mjs';
 import { buildPhysicalProof } from '../packages/printer/src/physical-proof.ts';
 import {
   runTransportAttempt,
@@ -11,10 +11,9 @@ export function createPhysicalProofRuntime({
   journalPath,
   openSession,
   buildProof = buildPhysicalProof,
-  createJournal = (file) => new SqliteTransportAttemptJournal(file),
+  createJournal = (file) => new SqliteTransportAttemptJournal(file, { existingOnly: true }),
   createQcJournal,
   createTransport = createUsbTransportMutationPort,
-  runAttempt = runTransportAttempt,
 }) {
   const physicalSendEnabled = typeof approvalFingerprint === 'string' && /^[a-f0-9]{64}$/.test(approvalFingerprint);
   const evidence = createPhysicalEvidenceRuntime({ journalPath, createQcJournal });
@@ -35,12 +34,18 @@ export function createPhysicalProofRuntime({
       const journal = createJournal(journalPath);
       let session;
       try {
-        session = await openSession();
-        const transport = createTransport(session.io);
-        return await runAttempt(proof.artifacts, proof.binding, { journal, transport });
+        const result = await runTransportAttempt(proof.artifacts, proof.binding, {
+          journal,
+          async openTransport() {
+            session = await openSession();
+            return createTransport(session.io);
+          },
+        });
+        if (result.reason === 'attempt_already_reserved') throw existingAttemptError(evidence.getPhysicalAttemptEvidence());
+        if (result.reason === 'journal_unavailable') throw journalUnavailable();
+        return result;
       } finally {
-        if (session) await session.close();
-        journal.close();
+        try { await session?.close(); } finally { journal.close(); }
       }
     },
   };

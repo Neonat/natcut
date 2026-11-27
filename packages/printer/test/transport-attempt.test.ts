@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { prepared } from './prepared-fixture.ts';
 import type { PreparedPhysicalArtifacts } from '../src/artifacts.ts';
 import {
@@ -83,6 +83,21 @@ describe('SqliteTransportAttemptJournal', () => {
     expect(() => new SqliteTransportAttemptJournal(candidate(file)).close()).toThrow(/absolute file path/);
   });
 
+  it('cannot create or initialize a substitute when reserving against an existing journal', async () => {
+    const file = await journalPath();
+    expect(() => new SqliteTransportAttemptJournal(file, { existingOnly: true })).toThrow();
+    const seed = new Database(file);
+    seed.close();
+    const journal = new SqliteTransportAttemptJournal(file, { existingOnly: true });
+    try {
+      const artifact = await prepared();
+      const opened = vi.fn();
+      expect(await runTransportAttempt(artifact, binding(artifact), { journal, openTransport: opened }))
+        .toEqual({ kind: 'preflight_failed', reason: 'journal_unavailable' });
+      expect(opened).not.toHaveBeenCalled();
+    } finally { journal.close(); }
+  });
+
   it('opens the same absolute file in WAL mode across a reopen', async () => {
     const file = await journalPath();
     new SqliteTransportAttemptJournal(file).close();
@@ -108,6 +123,32 @@ describe('runTransportAttempt', () => {
     expect(scripted.events).toEqual([]);
     expect(journal.get('submission-1')).toBeNull();
     journal.close();
+  });
+
+  it('holds a failed transport open after reservation without reopening it on restart', async () => {
+    const artifact = await prepared();
+    const input = binding(artifact);
+    const file = await journalPath();
+    const first = new SqliteTransportAttemptJournal(file);
+    let phaseAtOpen;
+    const openTransport = vi.fn(async () => {
+      phaseAtOpen = first.get(input.submissionId)?.phase;
+      throw new Error('Synthetic device open failed.');
+    });
+    try {
+      expect(await runTransportAttempt(artifact, input, { journal: first, openTransport }))
+        .toEqual({ kind: 'needs_reconciliation', reason: 'transport_open_failed' });
+      expect(phaseAtOpen).toBe('declaring');
+      expect(first.get(input.submissionId)).toMatchObject({
+        phase: 'needs_reconciliation', reason: 'transport_open_failed', printerJobId: null, acknowledgedFrames: 0,
+      });
+    } finally { first.close(); }
+    const restarted = new SqliteTransportAttemptJournal(file, { existingOnly: true });
+    try {
+      expect(await runTransportAttempt(artifact, input, { journal: restarted, openTransport }))
+        .toEqual({ kind: 'needs_reconciliation', reason: 'attempt_already_reserved' });
+      expect(openTransport).toHaveBeenCalledTimes(1);
+    } finally { restarted.close(); }
   });
 
   it.each(['print', 'cut'] as const)('rejects empty %s bytes with a matching digest before reservation', async (kind) => {

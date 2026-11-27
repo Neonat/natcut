@@ -5,13 +5,17 @@ export function journalUnavailable() {
   return Object.assign(new Error('The original transport journal is unavailable. Check its configured absolute path.'), { code: 'JOURNAL_UNAVAILABLE' });
 }
 
+export function existingAttemptError(evidence) {
+  if (evidence?.outcome) {
+    return Object.assign(new Error('Attempt locked. No resend.'), { code: 'ATTEMPT_LOCKED' });
+  }
+  return Object.assign(new Error('This journal already contains a physical attempt. Inspect its evidence.'), { code: 'ATTEMPT_ALREADY_STARTED' });
+}
+
 export function requireMutableAttempt(getEvidence, starting) {
   const evidence = getEvidence();
-  if (evidence?.outcome) {
-    throw Object.assign(new Error('Attempt locked. No resend.'), { code: 'ATTEMPT_LOCKED' });
-  }
-  if (evidence?.attempt && (starting || evidence.attempt.fullyUploaded)) {
-    throw Object.assign(new Error('This journal already contains a physical attempt. Inspect its evidence.'), { code: 'ATTEMPT_ALREADY_STARTED' });
+  if (evidence?.outcome || (evidence?.attempt && (starting || evidence.attempt.fullyUploaded))) {
+    throw existingAttemptError(evidence);
   }
 }
 

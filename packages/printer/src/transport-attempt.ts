@@ -56,8 +56,9 @@ function isRecord(input: unknown): input is Record<string, unknown> {
 export class SqliteTransportAttemptJournal implements TransportAttemptJournal {
   private readonly database: Database.Database;
 
-  constructor(file: string) {
-    this.database = openTransportJournalDatabase(file, false);
+  constructor(file: string, { existingOnly = false } = {}) {
+    this.database = openTransportJournalDatabase(file, existingOnly);
+    if (existingOnly) return;
     try {
       this.database.exec(`
         CREATE TABLE IF NOT EXISTS transport_attempts (
@@ -214,29 +215,42 @@ function requireReconciliation(
   return { kind: 'needs_reconciliation', reason };
 }
 
+type TransportDependencies = {
+  journal: TransportAttemptJournal;
+  pace?: (milliseconds: number) => Promise<void>;
+} & ({ transport: TransportMutationPort } | { openTransport: () => Promise<TransportMutationPort> });
+
 export async function runTransportAttempt(
   artifacts: PreparedPhysicalArtifacts,
   binding: TransportAttemptBinding,
-  dependencies: {
-    journal: TransportAttemptJournal;
-    transport: TransportMutationPort;
-    pace?: (milliseconds: number) => Promise<void>;
-  },
+  dependencies: TransportDependencies,
 ): Promise<TransportAttemptResult> {
   const prepared = prepareTransportAttempt(artifacts, binding);
   if (!prepared) return { kind: 'preflight_failed', reason: 'evidence_mismatch' };
-  const { declaration, payloads, evidence, evidenceHash } = prepared;
-  const { submissionId } = evidence;
-  const { journal, transport } = dependencies;
-  const pace = dependencies.pace ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   try {
-    if (!journal.reserve(evidence, evidenceHash)) {
+    if (!dependencies.journal.reserve(prepared.evidence, prepared.evidenceHash)) {
       return { kind: 'needs_reconciliation', reason: 'attempt_already_reserved' };
     }
   } catch {
     return { kind: 'preflight_failed', reason: 'journal_unavailable' };
   }
+  return executeReservedAttempt(prepared, dependencies);
+}
 
+async function executeReservedAttempt(
+  prepared: NonNullable<ReturnType<typeof prepareTransportAttempt>>,
+  dependencies: TransportDependencies,
+): Promise<TransportAttemptResult> {
+  const { declaration, payloads, evidence, evidenceHash } = prepared;
+  const { submissionId } = evidence;
+  const { journal } = dependencies;
+  const pace = dependencies.pace ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  let transport: TransportMutationPort;
+  try {
+    transport = 'openTransport' in dependencies ? await dependencies.openTransport() : dependencies.transport;
+  } catch {
+    return requireReconciliation(journal, submissionId, evidenceHash, 'transport_open_failed');
+  }
   let declarationReply: unknown;
   try {
     declarationReply = await transport.declareCombo(declaration);

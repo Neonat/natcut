@@ -20,7 +20,7 @@ const rowSchema = z.strictObject({
   printerJobId: journalJobId.nullable(), acknowledgedFrames: z.int().nonnegative(),
   pendingKind: z.enum(['plt', 'jpeg']).nullable(), pendingIndex: z.int().nonnegative().nullable(),
   reason: z.enum([
-    'attempt_already_reserved', 'declaration_outcome_unknown', 'printer_job_id_invalid',
+    'attempt_already_reserved', 'transport_open_failed', 'declaration_outcome_unknown', 'printer_job_id_invalid',
     'job_id_persistence_failed', 'frame_checkpoint_failed', 'frame_acknowledgement_unknown',
     'acknowledgement_checkpoint_failed', 'pacing_outcome_unknown', 'physical_observation_required',
   ]).nullable(),
