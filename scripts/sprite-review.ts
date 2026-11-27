@@ -114,15 +114,218 @@ async function publishDirectory(stage: string, out: string) {
   throw new Error(`Could not publish packet at ${out}.`);
 }
 
+const reviewStyles = `
+  :root {
+    color-scheme: light;
+    --forest: #18392b;
+    --cream: #f7f2df;
+    --paper: #fffdf4;
+    --leaf-light: #e8efce;
+    --line: #b7c0a9;
+    --muted: #526457;
+    --focus: #a04a2d;
+    background: var(--cream);
+    color: var(--forest);
+    font: 1rem/1.45 system-ui, sans-serif;
+    scroll-padding-top: 8rem;
+    accent-color: var(--forest);
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body, h1, h2, h3, p, figure, fieldset { margin: 0; }
+  img { display: block; width: 100%; }
+  button { font: inherit; }
+  .frame { width: min(100% - 2rem, 78rem); margin-inline: auto; }
+  .masthead { position: sticky; z-index: 1; top: 0; background: var(--paper); border-bottom: 1px solid var(--line); }
+  .masthead .frame { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .5rem 1.25rem; padding-block: .75rem; }
+  h1 { font-size: 1.125rem; font-weight: 750; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
+  .progress { color: var(--muted); font-size: .875rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  button {
+    min-height: 44px; padding: .5rem 1rem; border: 1px solid var(--forest); border-radius: .4rem;
+    color: var(--paper); background: var(--forest); font-size: .875rem; font-weight: 750; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #284f37; }
+  button:disabled { color: var(--muted); background: #e9e9dc; border-color: var(--line); cursor: default; }
+  .warning { padding: .5rem .75rem; background: #fff0b9; border-inline-start: 3px solid var(--focus); }
+  .plant { padding-block: 1.5rem 1.75rem; border-bottom: 1px solid var(--line); }
+  .plant-title { margin-bottom: .875rem; }
+  h2 { font: 700 clamp(1.625rem, 4vw, 2.125rem)/1.15 Georgia, serif; overflow-wrap: anywhere; text-wrap: balance; }
+  .scientific { margin-top: .125rem; color: var(--muted); font-style: italic; overflow-wrap: anywhere; }
+  .comparison { display: grid; gap: .875rem; align-items: start; }
+  .reference, .candidate { min-width: 0; padding: .625rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--paper); }
+  figcaption, h3 { margin: 0 0 .5rem; font-size: .875rem; font-weight: 750; }
+  .reference img { height: 10.5rem; object-fit: contain; background: #ecebde; border-radius: .25rem; }
+  .candidates { min-width: 0; padding: 0; border: 0; }
+  .candidate-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 16.5rem), 1fr)); gap: .875rem; }
+  .candidate:has(.approval input:checked) { border-color: var(--forest); box-shadow: inset 0 0 0 1px var(--forest); }
+  .candidate img {
+    height: 10.5rem; padding: .5rem; object-fit: contain; border-radius: .25rem;
+    background: repeating-conic-gradient(#f3f1e5 0% 25%, #e8e9dc 0% 50%) 0 0 / 1rem 1rem;
+  }
+  .rating { min-width: 0; padding: 0; border: 0; margin-top: .5rem; }
+  .rating legend { padding: 0; margin-bottom: .25rem; font-size: .8125rem; font-weight: 650; }
+  .score-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(44px, 1fr)); gap: .25rem; }
+  label { min-height: 44px; display: flex; align-items: center; justify-content: center; color: var(--forest); cursor: pointer; }
+  .score-options label, .approval { border: 1px solid var(--line); border-radius: .3rem; background: var(--paper); gap: .25rem; }
+  label:hover, label:has(input:checked) { border-color: var(--forest); background: var(--leaf-light); }
+  label:has(input:checked) { font-weight: 750; }
+  label input { width: 1rem; height: 1rem; margin: 0; flex: none; }
+  button:focus-visible, label:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .score-options span { font-size: .8125rem; }
+  .approval { justify-content: start; gap: .5rem; margin-top: .625rem; padding-inline: .625rem; font-size: .875rem; }
+  .approved-text, .approval:has(input:checked) .approve-text { display: none; }
+  .approval:has(input:checked) .approved-text { display: inline; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  @media (max-width: 30rem) {
+    .reference img, .candidate img { height: 9rem; }
+  }
+  @media (min-width: 48rem) {
+    .comparison { grid-template-columns: minmax(12rem, 1fr) minmax(0, 3fr); }
+    .reference img { height: auto; aspect-ratio: 1; }
+  }
+`;
+
+const escapeHtml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+
+function renderRating(candidate: string, metric: 'cuteness' | 'accuracy', label: string) {
+  const scores = [1, 2, 3, 4, 5].map((score) => `<label>
+    <input type="radio" name="${candidate}-${metric}" data-candidate="${candidate}" data-metric="${metric}" value="${score}">
+    <span>${score}</span>
+  </label>`).join('');
+  return `<fieldset class="rating"><legend>${label}</legend><div class="score-options">${scores}</div></fieldset>`;
+}
+
+function renderPlant(plant: ReviewPlant, index: number) {
+  const name = escapeHtml(plant.name);
+  const scientific = plant.scientificName ? `<p class="scientific">${escapeHtml(plant.scientificName)}</p>` : '';
+  const candidates = plant.candidates.map((file, candidateIndex) => {
+    const number = candidateIndex + 1;
+    return `<article class="candidate" aria-labelledby="candidate-${index}-${number}">
+      <h3 id="candidate-${index}-${number}">Candidate ${number}</h3>
+      <img src="${file}" alt="Candidate ${number} sprite for ${name}">
+      ${renderRating(file, 'cuteness', 'Cuteness')}
+      ${renderRating(file, 'accuracy', 'Accuracy')}
+      <label class="approval">
+        <input type="radio" name="approval-${index}" data-plant="${index}" value="${file}">
+        <span class="approve-text">Approve sprite</span><span class="approved-text">Approved sprite</span>
+      </label>
+    </article>`;
+  }).join('');
+  return `<section class="plant" aria-labelledby="plant-${index}">
+    <header class="plant-title"><h2 id="plant-${index}">${name}</h2>${scientific}</header>
+    <div class="comparison">
+      <figure class="reference">
+        <figcaption>Reference photo</figcaption>
+        <img src="${plant.reference}" alt="Reference photo of ${name}">
+      </figure>
+      <fieldset class="candidates">
+        <legend class="visually-hidden">Approve one sprite for ${name}</legend>
+        <div class="candidate-grid">${candidates}</div>
+      </fieldset>
+    </div>
+  </section>`;
+}
+
+const reviewScript = `
+  const packet = JSON.parse(document.querySelector('#review-packet').textContent);
+  const form = document.querySelector('#review');
+  const progress = document.querySelector('#progress');
+  const exportButton = document.querySelector('#export');
+  const storageWarning = document.querySelector('#storage-warning');
+  const storageKey = 'natcut:sprite-review:v1:' + packet.key;
+  const total = packet.plants.length;
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey));
+    if (saved?.version === 1) {
+      for (const input of form.querySelectorAll('input[type="radio"]')) {
+        const { candidate, metric, plant } = input.dataset;
+        const value = metric ? saved.scores?.[candidate]?.[metric] : saved.approved?.[plant];
+        input.checked = String(value) === input.value;
+      }
+    }
+  } catch {
+    storageWarning.hidden = false;
+  }
+
+  function readProgress() {
+    const scores = {};
+    const approved = {};
+    for (const input of form.querySelectorAll('input:checked')) {
+      const { candidate, metric, plant } = input.dataset;
+      if (metric) (scores[candidate] ??= {})[metric] = Number(input.value);
+      else approved[plant] = input.value;
+    }
+    return { version: 1, scores, approved };
+  }
+
+  function showProgress({ approved }) {
+    const count = Object.keys(approved).length;
+    progress.textContent = count + ' of ' + total + (total === 1 ? ' plant' : ' plants') + ' approved';
+    exportButton.disabled = count !== total;
+  }
+
+  form.addEventListener('change', () => {
+    const state = readProgress();
+    showProgress(state);
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(state));
+      storageWarning.hidden = true;
+    } catch {
+      storageWarning.hidden = false;
+    }
+  });
+
+  exportButton.addEventListener('click', () => {
+    const { approved } = readProgress();
+    if (Object.keys(approved).length !== total) return;
+    const roster = packet.plants.map(({ name, scientificName }, index) => ({
+      name, ...(scientificName ? { scientificName } : {}), file: approved[index],
+    }));
+    const url = URL.createObjectURL(new Blob([JSON.stringify(roster, null, 2) + '\\n'], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'roster.json';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  showProgress(readProgress());
+`;
+
 function renderPage(packet: ReviewPacket) {
   const data = JSON.stringify(packet).replaceAll('<', '\\u003c');
   return `<!doctype html>
 <html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sprite quality review</title>
-<h1>Sprite quality review</h1>
-<script type="application/json" id="review-packet">${data}</script>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sprite quality review</title>
+  <style>${reviewStyles}</style>
+</head>
+<body>
+  <header class="masthead">
+    <div class="frame">
+      <h1>Sprite quality review</h1>
+      <div class="actions">
+        <p class="progress" id="progress" role="status" aria-atomic="true">0 of ${packet.plants.length} ${packet.plants.length === 1 ? 'plant' : 'plants'} approved</p>
+        <button id="export" type="button" disabled>Export roster</button>
+      </div>
+    </div>
+  </header>
+  <main class="frame">
+    <p class="warning" id="storage-warning" role="alert" hidden>Review progress could not be loaded or saved. Keep this tab open until you export.</p>
+    <noscript><p class="warning">Enable JavaScript to score sprites and export your roster.</p></noscript>
+    <form id="review" autocomplete="off">
+      ${packet.plants.map(renderPlant).join('')}
+    </form>
+  </main>
+  <script type="application/json" id="review-packet">${data}</script>
+  <script>${reviewScript}</script>
+</body>
 </html>
 `;
 }
