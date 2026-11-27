@@ -91,13 +91,14 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
     await sharp({ create: { width: 9, height: 5, channels: 4, background: 'green' } }).png().toFile(path.join(dir, 'b.png'));
     await writeFile(concurrentA, JSON.stringify(rows.with(0, { ...rows[0]!, file: 'a.png' })));
     await writeFile(concurrentB, JSON.stringify(rows.with(0, { ...rows[0]!, file: 'b.png' })));
+    await writeFile(path.join(out + '.import-lock-v2', 'ticket-999999998-00000000-0000-0000-0000-000000000001'), '1');
     await Promise.all([
       exec('npm', ['run', 'sprites:import', '--', '--input', concurrentA, '--out', out], { cwd: path.resolve(import.meta.dirname, '../../..') }),
       exec('npm', ['run', 'sprites:import', '--', '--input', concurrentB, '--out', out], { cwd: path.resolve(import.meta.dirname, '../../..') }),
     ]);
     const serialized = await loadIndex();
     const versions = [...serialized.sprites, ...serialized.archived].filter((entry) => entry.name === 'Plant 0');
-    expect(new Set(versions.map((entry) => entry.id)).size).toBeGreaterThanOrEqual(3);
+    expect(new Set(versions.map((entry) => entry.id)).size).toBe(4);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
