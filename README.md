@@ -6,7 +6,7 @@ The longer-term goal is a fast sticker-booth workflow:
 
 `customer capture -> preset/theme -> generated sticker sheet -> preview -> queue -> local USB bridge -> PixCut S1`
 
-The current vertical slice proves the phone-to-cloud-to-Mac queue using Firebase emulators and a simulated printer. Physical printer execution remains intentionally absent.
+The current vertical slice proves the phone-to-cloud-to-Mac queue using Firebase emulators and a simulated printer. The queue worker still runs the simulator. A separate local physical-proof workflow produced one owner-observed sheet.
 
 ## Current state
 
@@ -18,7 +18,7 @@ The current vertical slice proves the phone-to-cloud-to-Mac queue using Firebase
 - At discovery time the printer reported `idle / idle`, no alerts, and no active jobs.
 - NatCut now has a tested read-only protocol core, USB status CLI, localhost API, and operator status page.
 - NatCut also has a mobile editor, dynamic cut-border preview, trusted submission API, Firestore queue, SQLite Mac journal, and a Mac simulator desk for running tickets through pickup.
-- No print or cut test has been performed yet, and no sticker sheets are currently loaded.
+- The owner reported one completed physical attempt on 28 November 2026. Transport, cut alignment and kiss cut passed. Print quality failed due to printer ribbon registration. The attempt is permanently locked against resend. Its original journal and job identity are unavailable in the repository. [Owner observation](docs/evidence/physical-attempt-2026-11-28.json)
 
 ## Run the queue-first vertical slice
 
@@ -137,7 +137,7 @@ Save a version 1 manifest outside the repository. List one still reference photo
 }
 ```
 
-On macOS, build the packet in a new directory and open its `index.html` in your browser. Score candidates from 1 to 5 for cuteness and accuracy. Export is available once each plant has an approved sprite with both scores. Save the downloaded `roster.json` beside `index.html` and the packet PNGs before importing.
+On macOS, build the packet in a new directory and open its `index.html` in your browser. Score candidates from 1 to 5 for cuteness and accuracy. Export is available once each plant has an approved sprite with both scores. Save the exported `roster.json` beside `index.html` and keep the packet PNGs and `sources/` together. The importer verifies the original tagged candidate in `sources/` against its digest, regenerates the normalized preview, and checks that it matches the reviewed pixels before import.
 
 ```bash
 npm run sprites:review -- --input /path/to/manifest.json --out /path/to/new-review
@@ -181,7 +181,7 @@ npm run physical:dry-run -- \
 
 The new directory contains `print.jpg`, `cut.plt`, and `evidence.json`. The command re-verifies the complete receipt, generation-bound bundle digests, published profile, logical dimensions, JPEG limit, PLT pressure, and unclipped cut bounds. It white-composites transparent pixels, center-pads the logical raster, traces every accepted island in the already-expanded stored mask without adding the cut border again, and records the exact deterministic combo declaration and PLT-first upload chunk plan. Exact white is a pre-encode invariant; lossy JPEG 4:2:0 may introduce bounded chroma bleed directly beside saturated artwork, while untouched padding borders remain white.
 
-This is still an offline proof. `transport` is fixed to `disabled-dry-run`; there is no job ID, fabricated response, USB import, cloud mutation, worker transition, or printer write. An existing output directory is never replaced, and `.incomplete` marks any interrupted packet. See [`docs/runbooks/physical-adapter-proof.md`](docs/runbooks/physical-adapter-proof.md) for inspection and the remaining approval gate.
+This is still an offline proof. `transport` is fixed to `disabled-dry-run`; there is no job ID, fabricated response, USB import, cloud mutation, worker transition, or printer write. An existing output directory is never replaced, and `.incomplete` marks any interrupted packet. See [`docs/runbooks/physical-adapter-proof.md`](docs/runbooks/physical-adapter-proof.md) for inspection and the historical reconciliation blocker.
 
 The printer package also exposes an offline transport-attempt module. Tests drive its declaration and frame acknowledgement port with mocks. The module requires a persistent SQLite file at an absolute path and reserves one attempt for the exact binding and output digests before declaration. It commits the returned job ID before upload, each frame intent before sending, and each acknowledgement before continuing. PLT precedes JPEG, with 120 ms pacing after each acknowledged frame. A reserved attempt blocks every subsequent attempt on the same journal after a restart. A fully acknowledged mock upload still ends in `needs_reconciliation` with `physical_observation_required`.
 
@@ -213,7 +213,7 @@ Begin and completion are now fenced to the exact submission, event, worker, dura
 
 Session 2 completed the authorized cloud-only rollout. Both named-database indexes are ready; the private NatCut artifact bucket has narrow runtime IAM; pinned-generation upload/read passed under both service accounts; the API is deployed by immutable digest; Hosting is pinned to the verified revision; one immutable V2 ticket completed through `SimulatedPrinter`; and rollback plus candidate restoration passed without changing Sprout. Exact resource IDs and evidence are in the [cloud preview runbook](docs/runbooks/cloud-preview.md).
 
-Session 3 has offline JPEG and PLT generation and mock evidence for declaration and upload crash fencing. Session 4's non-printer rehearsal gate now drives two anonymous visitors through the real simulator-desk pickup and privacy flow, then runs the worker crash matrix and a 30-ticket correctness load across the 25-row desk pagination boundary. It proves strict serialized simulation and exact fenced completion locally; it is not a throughput SLA or production-readiness claim. A concrete printer transport, evidence tied to the printer job ID, a controlled loaded-media print, calibration, and an operator procedure to resolve held physical attempts are still blockers. USB access and any printer write require separate explicit approval at execution time; production hardening follows those physical proofs.
+The simulator rehearsal covers pickup, privacy, recovery and serialized queue behavior. The browser physical-proof workflow is separate. Its completed attempt has a failed print-quality observation and unresolved journal binding. Neither simulator completion nor a passed JPEG comparison resolves that physical failure.
 
 ```bash
 gcloud auth application-default login \
@@ -238,22 +238,23 @@ npm run emulators:test -- --only worker
 npm run test:e2e
 ```
 
-The queue-first worker runs `SimulatedPrinter`. The transport-attempt module has a semantic port but no concrete printer transport or `PhysicalExecutor`. Static import tests keep it outside the worker, dry-run CLI, and read-only bridge entry points.
+### Verify generation QC offline
 
-## Run the read-only bridge
+New `logical/v2` receipts carry the sorted, deduplicated set of source color spaces, ICC digests and actions used in the composition, including native branding. External artwork needs a recognized ICC profile or an unambiguous PNG sRGB declaration and 8-bit samples. The importer preserves sRGB and converts recognized Display P3 or CMYK to sRGB. Untagged and higher bit-depth external artwork fails at import; convert higher bit-depth sources to tagged 8-bit sRGB before review. Older `logical/v1` receipts and paths remain readable. Physical generation requires v2 color evidence.
 
-Requires Node.js 24.12 or newer.
+The print constructor consumes only RGBA color samples and their provenance. Its reference is the opaque, white-composited, padded sRGB RGB8 raster supplied to the JPEG encoder. The cut constructor consumes the expanded mask and produces a separate PLT. The display overlay is built from the finished JPEG and PLT. The former arbitrary-PNG physical-proof input is disabled.
 
-```bash
-npm install
-npm test
-npm run status -- --json
-npm start
+`natcut-jpeg-qc-v1` checks dimensions, the embedded sRGB ICC and RGB8 samples. The calibrated inclusive limits are 19,313 thousandths for each channel’s mean absolute error, 96 levels for p99, 201,249 ppm of pixels above 32 levels, and 9 levels for the largest 16 × 16 tile bias. Failure output reports reasons and worst-pixel and worst-tile coordinates. Rerun the software measurements from the repository root. [Calibration corpus and results](packages/printer/test/jpeg-qc-calibration.md)
+
+```sh
+npx vitest run --project printer test/qc-calibration.test.ts test/generation-qc.test.ts
 ```
 
-Open `http://127.0.0.1:4173` after starting the server. The current API exposes only `GET /api/health` and `GET /api/printer`; it cannot create, upload, confirm, cancel, pause, resume, print, or cut a job.
+### Inspect the physical proof record
 
-USB interfaces are exclusive. Close BrenCut, Liene Photos, and any Chrome tab that has connected to the printer before using the CLI or dashboard. NatCut reports a connection-busy error instead of detaching another process.
+The local dashboard reads the configured, existing absolute `NATCUT_TRANSPORT_JOURNAL` when it loads. It can show the checkpoint or record an observation without connecting to a printer. An unavailable or inconsistent journal disables printer controls. The historical source report remains unbound until the original journal identity and the actual observation time can be confirmed. The journal accepts identical retries and rejects changed evidence. There is no reset or second attempt. [Operator procedure](docs/runbooks/physical-adapter-proof.md#physical-attempt-and-ribbon-registration)
+
+Cyan, magenta and yellow ribbon-registration artifacts arise inside the printer. They are not an image-generation failure. Software QC measures encoding and cannot prevent ribbon misregistration. The operator records each channel as pass, fail or uncertain, with references and notes, in a separate append-only post-print record. This never changes a queue status or releases its slot.
 
 ## Direction
 
@@ -309,15 +310,9 @@ These details are empirical and must be validated against this specific printer 
 
 Exit condition: the Mac can open the expected interfaces, receive valid protocol replies, and close cleanly. **Completed.**
 
-### 1. Controlled hardware proof
+### 1. Completed physical proof
 
-- Audit the exact BrenCut job sequence and safety boundaries.
-- Prepare one known 1200 x 2100 test image and a simple, clearly previewed contour.
-- Load one sheet and use a conservative kiss-cut pressure agreed before testing.
-- Submit one print-and-cut job while recording raw replies and timings.
-- Verify print placement, cut registration, cut depth, completion state, and clean USB release.
-
-Exit condition: one sheet prints and contour-cuts correctly without Liene Photos.
+The owner’s report records one attempt. Transport, cut alignment and kiss cut passed. Printer ribbon registration failed physical print quality. This attempt remains locked. The original transport journal is needed to bind the report to its job ID.
 
 ### 2. NatCut driver core
 
@@ -330,7 +325,7 @@ Exit condition: one sheet prints and contour-cuts correctly without Liene Photos
 
 Exit condition: repeatable driver tests plus a small CLI that can query status and submit a prepared job.
 
-Read-only foundation completed: protocol framing/parsing, identity, status, active-job listing, USB lifecycle, and a tested status CLI. Job creation and upload remain intentionally absent.
+Read-only foundation completed: protocol framing/parsing, identity, status, active-job listing, USB lifecycle, and a tested status CLI. The local proof adapter adds journal-fenced job declaration and upload. The queue worker continues to use the simulator.
 
 ### 3. Local website bridge
 
@@ -342,7 +337,7 @@ Read-only foundation completed: protocol framing/parsing, identity, status, acti
 
 Exit condition: an operator can submit a prepared sheet from the website and watch it complete.
 
-Read-only foundation completed: localhost health/status endpoints and an operator dashboard. Submission controls remain intentionally absent.
+The operator dashboard restores the physical attempt lock and exposes separate append-only observation controls.
 
 ### 4. Reliability and throughput
 

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { DEVFEST_SG_V1, CompositionManifestSchema } from '@natcut/domain';
+import { DEVFEST_SG_V1, CompositionManifestSchema, NATIVE_SRGB_EVIDENCE } from '@natcut/domain';
 import { describe, expect, it } from 'vitest';
 import {
   assetPngFilename,
@@ -15,7 +15,7 @@ import {
   sprites,
   type AssetCatalog,
   type PlannedComposition,
-  type RgbaAsset,
+  type SrgbRgbaAsset,
   type SpriteEntry,
 } from '../src/index.ts';
 
@@ -35,9 +35,10 @@ const manifest = CompositionManifestSchema.parse({
   renderVersion: 'fixture-v1',
 });
 
-function solidAsset(id: string, red: number, green: number, blue: number): RgbaAsset {
+function solidAsset(id: string, red: number, green: number, blue: number): SrgbRgbaAsset {
   return {
     id,
+    colorEvidence: NATIVE_SRGB_EVIDENCE,
     width: 2,
     height: 2,
     rgba: new Uint8ClampedArray([
@@ -167,7 +168,7 @@ describe('renderServerRaster', () => {
 
   it('changes both printable pixels and the cut mask for a controlled silhouette change', async () => {
     const plan = planComposition(manifest, DEVFEST_SG_V1);
-    const alternateSprite: RgbaAsset = {
+    const alternateSprite: SrgbRgbaAsset = {
       ...solidAsset('sprite/monstera-v1', 58, 148, 92),
       rgba: new Uint8ClampedArray([
         58, 148, 92, 255,
@@ -213,4 +214,17 @@ describe('renderServerRaster', () => {
     expect(() => renderCutGroupMasks(invalid, assets)).toThrow(/outside/i);
     await expect(renderServerRaster(invalid, assets)).rejects.toThrow(/outside/i);
   });
+});
+
+it('unions native and converted sources in stable order and collapses repeated layer sources', async () => {
+  const plan = planComposition(manifest, DEVFEST_SG_V1);
+  const p3 = { sourceSpace: 'display-p3', action: 'converted',
+    sourceProfileSha256: '231752984cd4a5278e1b8d2390fe496767d4511fc81f54e1a5c69ae9ab4c42b5' } as const;
+  const converted = { ...assets.get(manifest.spriteAssetId)!, colorEvidence: { ...NATIVE_SRGB_EVIDENCE, sources: [p3] } };
+  const mixed = new Map(assets).set(converted.id, converted);
+  const layers = [...plan.layers, plan.layers[0]!];
+  for (const ordered of [layers, layers.toReversed()]) {
+    const raster = await renderServerRaster({ ...plan, layers: ordered }, mixed);
+    expect(raster.colorEvidence.sources).toEqual([p3, { sourceSpace: 'srgb', action: 'preserved', sourceProfileSha256: null }]);
+  }
 });

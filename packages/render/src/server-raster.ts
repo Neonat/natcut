@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { NATIVE_SRGB_EVIDENCE, SrgbColorEvidenceSchema, srgbColorEvidence, type SourceColorEvidence, type SrgbColorEvidence } from '@natcut/domain';
 import type { AssetCatalog } from './assets.ts';
 import { assertPlanWithinSheet, type PlannedComposition } from './layout.ts';
 import { compositeRgbaPixel, nearestSourceCoordinate } from './sampling.ts';
@@ -8,6 +9,7 @@ export type RenderedRaster = {
   height: number;
   rgba: Uint8ClampedArray;
   sha256: string;
+  readonly colorEvidence: SrgbColorEvidence;
 };
 
 export async function renderServerRaster(
@@ -16,10 +18,13 @@ export async function renderServerRaster(
 ): Promise<RenderedRaster> {
   assertPlanWithinSheet(plan);
 
+  const sources: SourceColorEvidence[] = [];
   const rendered = new Uint8ClampedArray(plan.width * plan.height * 4);
   for (const layer of plan.layers) {
     const asset = assets.get(layer.assetId);
     if (!asset) throw new Error(`Missing asset ${layer.assetId} for layer ${layer.id}`);
+    const layerEvidence = SrgbColorEvidenceSchema.parse(asset.colorEvidence);
+    sources.push(...layerEvidence.sources);
     if (asset.rgba.length !== asset.width * asset.height * 4) {
       throw new Error(`Asset ${layer.assetId} has invalid RGBA length`);
     }
@@ -38,6 +43,7 @@ export async function renderServerRaster(
     width: plan.width,
     height: plan.height,
     rgba: rendered,
+    colorEvidence: sources.length ? srgbColorEvidence(sources) : NATIVE_SRGB_EVIDENCE,
     sha256: createHash('sha256').update(rendered).digest('hex'),
   };
 }

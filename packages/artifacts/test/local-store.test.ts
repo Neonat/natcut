@@ -3,7 +3,7 @@ import { chmod, mkdtemp, open, readdir, readFile, rm, stat, symlink, truncate, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
-import { DEVFEST_SG_V1 as profile, encodeLogicalSourceBundle, type LogicalSourceBundle } from '@natcut/domain';
+import { DEVFEST_SG_V1 as profile, NATIVE_SRGB_EVIDENCE, encodeLogicalSourceBundle, type LogicalSourceBundle } from '@natcut/domain';
 import { LocalArtifactStore } from '../src/index.ts';
 
 let bundle: LogicalSourceBundle;
@@ -12,6 +12,7 @@ let root: string, objectPath: string, store: LocalArtifactStore;
 beforeAll(async () => {
   const { sheetWidthPx: width, sheetHeightPx: height } = profile;
   bundle = await encodeLogicalSourceBundle({
+    colorEvidence: NATIVE_SRGB_EVIDENCE,
     width, height, profile, rgba: new Uint8Array(width * height * 4), mask: new Uint8Array(width * height),
     renderVersion: 'fixture-v1', geometryVersion: 'natcut-geometry-v1',
   });

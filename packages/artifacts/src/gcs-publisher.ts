@@ -84,7 +84,7 @@ async function readPinned(
 ) {
   const { generation, descriptor } = receipt;
   const { byteLength } = descriptor;
-  const object = objectUrl(bucket, artifactObjectPath(descriptor.bundleSha256));
+  const object = objectUrl(bucket, artifactObjectPath(descriptor));
   object.search = new URLSearchParams({ alt: 'media', generation }).toString();
   let response: Response;
   try {
@@ -136,7 +136,7 @@ export function createGcsArtifactPublisher(bucket: GcsBucket, send: typeof fetch
       const { bytes, descriptor } = await decodeLogicalSourceBundle(bundle.bytes, bundle.descriptor);
       signal.throwIfAborted();
       const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      const name = artifactObjectPath(descriptor.bundleSha256);
+      const name = artifactObjectPath(descriptor);
       const upload = new URL('/upload/' + bucketPath(bucket), bucket.storage.apiEndpoint);
       upload.search = new URLSearchParams({ uploadType: 'multipart', ifGenerationMatch: '0', name, fields: 'generation' }).toString();
 

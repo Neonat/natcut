@@ -40,16 +40,18 @@ export async function publishPhysicalDryRun(input: VerifiedArtifact, destination
         file: 'print.jpg',
         width: prepared.profile.rasterWidthPx,
         height: prepared.profile.rasterHeightPx,
-        bytes: prepared.jpeg.byteLength,
-        sha256: prepared.jpegSha256,
-        quality: prepared.jpegQuality,
+        bytes: prepared.print.bytes.byteLength,
+        sha256: prepared.print.sha256,
+        quality: prepared.print.quality,
+        colorEvidence: prepared.print.colorEvidence,
+        generationQc: prepared.print.generationQc,
       },
       plt: {
         file: 'cut.plt',
-        bytes: prepared.plt.byteLength,
-        sha256: prepared.pltSha256,
+        bytes: prepared.cut.bytes.byteLength,
+        sha256: prepared.cut.sha256,
         knifePressure: prepared.profile.knifePressure,
-        stats: prepared.cutStats,
+        stats: prepared.cut.stats,
       },
     },
     protocol: {
@@ -86,8 +88,8 @@ export async function publishPhysicalDryRun(input: VerifiedArtifact, destination
     await writeFile(path.join(resolved, '.incomplete'), 'NatCut physical dry-run generation is incomplete.\n', { flag: 'wx' });
     stage = await mkdtemp(path.join(parent, `.${path.basename(resolved)}.tmp-`));
     await Promise.all([
-      writeFile(path.join(stage, 'print.jpg'), prepared.jpeg, { flag: 'wx' }),
-      writeFile(path.join(stage, 'cut.plt'), prepared.plt, { flag: 'wx' }),
+      writeFile(path.join(stage, 'print.jpg'), prepared.print.bytes, { flag: 'wx' }),
+      writeFile(path.join(stage, 'cut.plt'), prepared.cut.bytes, { flag: 'wx' }),
       writeFile(path.join(stage, 'evidence.json'), `${JSON.stringify(evidence, null, 2)}\n`, { flag: 'wx' }),
     ]);
     for (const name of ['print.jpg', 'cut.plt', 'evidence.json']) {

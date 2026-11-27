@@ -7,7 +7,7 @@ import { createTrustedArtifactPreparer, createTrustedManifestValidator } from '.
 const historicalMaskHash = '1465f6f4822228afd53188f8490373156e9005a673cf06a6f3da849ecf90e84d';
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
-it('prepares the packaged server color, expanded mask, contours and a verified V1 bundle', async () => {
+it('prepares the packaged server color, expanded mask, contours and a verified V2 bundle', async () => {
   const plan = planComposition(catalogManifest, DEVFEST_SG_V1);
   const assets = await loadPackagedAssets(plan);
   const reference = await renderServerRaster(plan, assets);
@@ -16,6 +16,7 @@ it('prepares the packaged server color, expanded mask, contours and a verified V
   const decoded = await decodeLogicalSourceBundle(bytes, descriptor);
 
   expect(prepared.profile).toBe(DEVFEST_SG_V1);
+  expect(descriptor).toMatchObject({ formatVersion: 2, colorEvidence: reference.colorEvidence });
   expect(descriptor.profile).toEqual(prepared.profile);
   expect(prepared.raster.sha256).toBe(reference.sha256);
   expect(digest(decoded.rgba)).toBe(reference.sha256);

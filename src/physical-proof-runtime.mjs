@@ -1,6 +1,5 @@
-import { isAbsolute } from 'node:path';
-import { readFile } from 'node:fs/promises';
-import { buildPhysicalProof, buildPhysicalProofFromPng } from '../packages/printer/src/physical-proof.ts';
+import { createPhysicalEvidenceRuntime, existingAttemptError, journalUnavailable, requireMutableAttempt } from './physical-evidence.mjs';
+import { buildPhysicalProof } from '../packages/printer/src/physical-proof.ts';
 import {
   runTransportAttempt,
   SqliteTransportAttemptJournal,
@@ -11,22 +10,17 @@ export function createPhysicalProofRuntime({
   approvalFingerprint,
   journalPath,
   openSession,
-  proofImagePath,
   buildProof = buildPhysicalProof,
-  readProofImage = readFile,
-  buildPngProof = buildPhysicalProofFromPng,
-  createJournal = (file) => new SqliteTransportAttemptJournal(file),
+  createJournal = (file) => new SqliteTransportAttemptJournal(file, { existingOnly: true }),
+  createQcJournal,
   createTransport = createUsbTransportMutationPort,
-  runAttempt = runTransportAttempt,
 }) {
   const physicalSendEnabled = typeof approvalFingerprint === 'string' && /^[a-f0-9]{64}$/.test(approvalFingerprint);
-  const preparePhysicalProof = proofImagePath
-    ? async () => buildPngProof(new Uint8Array(await readProofImage(proofImagePath)), { label: 'Moth orchid example' })
-    : buildProof;
-
+  const evidence = createPhysicalEvidenceRuntime({ journalPath, createQcJournal });
   return {
+    ...evidence,
     physicalSendEnabled,
-    preparePhysicalProof,
+    preparePhysicalProof: buildProof,
     async sendPhysicalProof(input, proof) {
       if (!physicalSendEnabled) throw new Error('The exact printer write still requires separate approval.');
       if (input?.approvalFingerprint !== approvalFingerprint ||
@@ -34,20 +28,24 @@ export function createPhysicalProofRuntime({
           input?.confirmation !== 'SEND ONE SHEET') {
         throw new Error('The approved fingerprint does not match this exact physical proof.');
       }
-      if (typeof journalPath !== 'string' || !isAbsolute(journalPath)) {
-        throw new Error('An absolute transport journal path is required.');
-      }
+      requireMutableAttempt(evidence.getPhysicalAttemptEvidence, true);
       if (typeof openSession !== 'function') throw new Error('The USB session opener is unavailable.');
 
       const journal = createJournal(journalPath);
       let session;
       try {
-        session = await openSession();
-        const transport = createTransport(session.io);
-        return await runAttempt(proof.artifacts, proof.binding, { journal, transport });
+        const result = await runTransportAttempt(proof.artifacts, proof.binding, {
+          journal,
+          async openTransport() {
+            session = await openSession();
+            return createTransport(session.io);
+          },
+        });
+        if (result.reason === 'attempt_already_reserved') throw existingAttemptError(evidence.getPhysicalAttemptEvidence());
+        if (result.reason === 'journal_unavailable') throw journalUnavailable();
+        return result;
       } finally {
-        if (session) await session.close();
-        journal.close();
+        try { await session?.close(); } finally { journal.close(); }
       }
     },
   };

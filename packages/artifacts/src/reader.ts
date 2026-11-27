@@ -20,8 +20,9 @@ export function parseArtifactReceipt(input: unknown): ArtifactReceipt {
 
 export async function verifyArtifactBytes(bytes: Uint8Array, receipt: ArtifactReceipt): Promise<VerifiedArtifact> {
   try {
-    const decoded = await decodeLogicalSourceBundle(bytes, receipt.descriptor);
-    return { receipt: { generation: receipt.generation, descriptor: decoded.descriptor }, bytes: decoded.bytes };
+    const { descriptor, generation } = parseArtifactReceipt(receipt);
+    const decoded = await decodeLogicalSourceBundle(bytes, descriptor);
+    return { receipt: { generation, descriptor: decoded.descriptor }, bytes: decoded.bytes };
   } catch (cause) {
     throw new ArtifactIntegrityError('Invalid logical artifact: ' + (cause instanceof Error ? cause.message : 'invalid bytes'), { cause });
   }

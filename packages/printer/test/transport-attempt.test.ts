@@ -3,8 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
-import { DEVFEST_SG_V1, printProfileHashSync } from '@natcut/domain';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { prepared } from './prepared-fixture.ts';
 import type { PreparedPhysicalArtifacts } from '../src/artifacts.ts';
 import {
   SqliteTransportAttemptJournal,
@@ -17,49 +17,12 @@ import {
 const temporaryDirectories: string[] = [];
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
-function prepared(): PreparedPhysicalArtifacts {
-  const jpeg = new Uint8Array([255, 216, 1, 2, 255, 217]);
-  const plt = new TextEncoder().encode('IN VER0.1.0 KP42 U1,1 D1,1 D2,2 U6476,0  @ ');
-  return {
-    receipt: {
-      generation: '7',
-      descriptor: {
-        formatVersion: 1,
-        profile: DEVFEST_SG_V1,
-        width: 1200,
-        height: 2100,
-        renderVersion: 'server-raster-v1',
-        geometryVersion: 'geometry-v1',
-        colorByteLength: 10_080_000,
-        colorSha256: 'a'.repeat(64),
-        maskByteLength: 2_520_000,
-        maskSha256: 'c'.repeat(64),
-        byteLength: 12_600_000,
-        bundleSha256: 'b'.repeat(64),
-        profileSha256: printProfileHashSync(DEVFEST_SG_V1),
-      },
-    },
-    profile: DEVFEST_SG_V1,
-    jpeg,
-    jpegSha256: sha256(jpeg),
-    jpegQuality: 95,
-    plt,
-    pltSha256: sha256(plt),
-    sourceMaskSha256: 'c'.repeat(64),
-    cutStats: { pathCount: 1, pointCount: 2, cutLengthMm: 1, travelLengthMm: 0 },
-  };
+function expectedFrames(artifact: PreparedPhysicalArtifacts) {
+  return ([['plt', artifact.cut.bytes], ['jpeg', artifact.print.bytes]] as const).flatMap(([kind, bytes]) =>
+    Array.from({ length: Math.ceil(bytes.length / 4071) }, (_, index) => `frame:${kind}:${index}`));
 }
 
-function multiFramePrepared(): PreparedPhysicalArtifacts {
-  const artifact = prepared();
-  artifact.plt = new TextEncoder().encode(
-    `IN VER0.1.0 KP42 U1,1 ${'D2,2 '.repeat(900)}U6476,0  @ `,
-  );
-  artifact.pltSha256 = sha256(artifact.plt);
-  return artifact;
-}
-
-function binding(artifact = prepared()): TransportAttemptBinding {
+function binding(artifact: PreparedPhysicalArtifacts): TransportAttemptBinding {
   return {
     submissionId: 'submission-1',
     eventId: 'event-1',
@@ -120,6 +83,21 @@ describe('SqliteTransportAttemptJournal', () => {
     expect(() => new SqliteTransportAttemptJournal(candidate(file)).close()).toThrow(/absolute file path/);
   });
 
+  it('cannot create or initialize a substitute when reserving against an existing journal', async () => {
+    const file = await journalPath();
+    expect(() => new SqliteTransportAttemptJournal(file, { existingOnly: true })).toThrow();
+    const seed = new Database(file);
+    seed.close();
+    const journal = new SqliteTransportAttemptJournal(file, { existingOnly: true });
+    try {
+      const artifact = await prepared();
+      const opened = vi.fn();
+      expect(await runTransportAttempt(artifact, binding(artifact), { journal, openTransport: opened }))
+        .toEqual({ kind: 'preflight_failed', reason: 'journal_unavailable' });
+      expect(opened).not.toHaveBeenCalled();
+    } finally { journal.close(); }
+  });
+
   it('opens the same absolute file in WAL mode across a reopen', async () => {
     const file = await journalPath();
     new SqliteTransportAttemptJournal(file).close();
@@ -134,7 +112,7 @@ describe('SqliteTransportAttemptJournal', () => {
 
 describe('runTransportAttempt', () => {
   it('preflights exact receipt evidence before reserving or touching transport', async () => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const input = binding(artifact);
     input.receipt = { ...input.receipt, generation: '8' };
     const file = await journalPath();
@@ -147,10 +125,36 @@ describe('runTransportAttempt', () => {
     journal.close();
   });
 
-  it.each(['jpeg', 'plt'] as const)('rejects empty %s bytes with a matching digest before reservation', async (kind) => {
-    const artifact = prepared();
-    artifact[kind] = new Uint8Array();
-    artifact[`${kind}Sha256`] = sha256(artifact[kind]);
+  it('holds a failed transport open after reservation without reopening it on restart', async () => {
+    const artifact = await prepared();
+    const input = binding(artifact);
+    const file = await journalPath();
+    const first = new SqliteTransportAttemptJournal(file);
+    let phaseAtOpen;
+    const openTransport = vi.fn(async () => {
+      phaseAtOpen = first.get(input.submissionId)?.phase;
+      throw new Error('Synthetic device open failed.');
+    });
+    try {
+      expect(await runTransportAttempt(artifact, input, { journal: first, openTransport }))
+        .toEqual({ kind: 'needs_reconciliation', reason: 'transport_open_failed' });
+      expect(phaseAtOpen).toBe('declaring');
+      expect(first.get(input.submissionId)).toMatchObject({
+        phase: 'needs_reconciliation', reason: 'transport_open_failed', printerJobId: null, acknowledgedFrames: 0,
+      });
+    } finally { first.close(); }
+    const restarted = new SqliteTransportAttemptJournal(file, { existingOnly: true });
+    try {
+      expect(await runTransportAttempt(artifact, input, { journal: restarted, openTransport }))
+        .toEqual({ kind: 'needs_reconciliation', reason: 'attempt_already_reserved' });
+      expect(openTransport).toHaveBeenCalledTimes(1);
+    } finally { restarted.close(); }
+  });
+
+  it.each(['print', 'cut'] as const)('rejects empty %s bytes with a matching digest before reservation', async (kind) => {
+    const valid = await prepared();
+    const bytes = new Uint8Array();
+    const artifact = { ...valid, [kind]: { ...valid[kind], bytes, sha256: sha256(bytes) } };
     const journal = new SqliteTransportAttemptJournal(await journalPath());
     const scripted = scriptedTransport();
     try {
@@ -166,7 +170,7 @@ describe('runTransportAttempt', () => {
   it.each(['missing ID', 'primitive ID', 'null ID', 'hostile binding getter'] as const)(
     'rejects a malformed binding with %s before reservation',
     async (caseName) => {
-      const artifact = prepared();
+      const artifact = await prepared();
       const input: Record<string, unknown> = binding(artifact);
       if (caseName === 'missing ID') delete input.submissionId;
       if (caseName === 'primitive ID') input.submissionId = 23;
@@ -188,18 +192,18 @@ describe('runTransportAttempt', () => {
   );
 
   it('persists a positive job ID before the first PLT frame and ends held after both payloads', async () => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const file = await journalPath();
     const journal = new SqliteTransportAttemptJournal(file);
     const events: string[] = [];
     const scripted = scriptedTransport({
-      onFrame(kind) {
+      onFrame(kind, index) {
         const reopened = new SqliteTransportAttemptJournal(file);
         const row = reopened.get('submission-1');
         reopened.close();
         expect(row?.printerJobId).toBe(23);
         expect(row?.phase).toBe('frame_pending');
-        expect(row?.acknowledgedFrames).toBe(kind === 'plt' ? 0 : 1);
+        expect(row?.acknowledgedFrames).toBe(kind === 'plt' ? index : 1 + index);
         events.push(`observed:${kind}`);
       },
     });
@@ -209,10 +213,10 @@ describe('runTransportAttempt', () => {
       pace: async (milliseconds) => { events.push(`pace:${milliseconds}`); },
     });
     expect(result).toEqual({ kind: 'needs_reconciliation', reason: 'physical_observation_required' });
-    expect(scripted.events).toEqual(['declare', 'frame:plt:0', 'frame:jpeg:0']);
-    expect(events).toEqual(['observed:plt', 'pace:120', 'observed:jpeg', 'pace:120']);
+    expect(scripted.events).toEqual(['declare', ...expectedFrames(artifact)]);
+    expect(events).toEqual(expectedFrames(artifact).flatMap(frame => ['observed:' + frame.split(':')[1], 'pace:120']));
     expect(journal.get('submission-1')).toMatchObject({
-      phase: 'needs_reconciliation', printerJobId: 23, acknowledgedFrames: 2,
+      phase: 'needs_reconciliation', printerJobId: 23, acknowledgedFrames: expectedFrames(artifact).length,
       reason: 'physical_observation_required',
     });
     const evidence = JSON.parse(journal.get('submission-1')!.evidenceJson);
@@ -220,14 +224,14 @@ describe('runTransportAttempt', () => {
       submissionId: 'submission-1', eventId: 'event-1', workerId: 'worker-1',
       executionToken: 'execution-token-1', manifestHash: 'd'.repeat(64),
       receipt: artifact.receipt,
-      jpeg: { byteLength: artifact.jpeg.byteLength, sha256: artifact.jpegSha256 },
-      plt: { byteLength: artifact.plt.byteLength, sha256: artifact.pltSha256 },
+      jpeg: { byteLength: artifact.print.bytes.byteLength, sha256: artifact.print.sha256 },
+      plt: { byteLength: artifact.cut.bytes.byteLength, sha256: artifact.cut.sha256 },
     });
     journal.close();
   });
 
   it('holds a lost declaration response and never declares again after restart', async () => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const file = await journalPath();
     const first = new SqliteTransportAttemptJournal(file);
     const lost = scriptedTransport({ declareError: new Error('timeout after write') });
@@ -243,7 +247,7 @@ describe('runTransportAttempt', () => {
   });
 
   it('uses the reserved identity even when the caller changes the binding during declaration', async () => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const input = binding(artifact);
     const journal = new SqliteTransportAttemptJournal(await journalPath());
     const scripted = scriptedTransport();
@@ -261,8 +265,8 @@ describe('runTransportAttempt', () => {
       input.submissionId = 'submission-2';
       declaration.resolve({ jobId: 23 });
       await expect(pending).resolves.toEqual({ kind: 'needs_reconciliation', reason: 'physical_observation_required' });
-      expect(scripted.events).toEqual(['declare', 'frame:plt:0', 'frame:jpeg:0']);
-      expect(journal.get('submission-1')).toMatchObject({ printerJobId: 23, acknowledgedFrames: 2, phase: 'needs_reconciliation' });
+      expect(scripted.events).toEqual(['declare', ...expectedFrames(artifact)]);
+      expect(journal.get('submission-1')).toMatchObject({ printerJobId: 23, acknowledgedFrames: expectedFrames(artifact).length, phase: 'needs_reconciliation' });
       expect(journal.get('submission-2')).toBeNull();
     } finally {
       journal.close();
@@ -272,7 +276,7 @@ describe('runTransportAttempt', () => {
   it.each([0, -1, 1.5, 0x1_0000_0000, Number.NaN, '23', null, {}, { jobId: 23 }])(
     'holds invalid declaration job ID %j without sending data',
     async (jobId) => {
-      const artifact = prepared();
+      const artifact = await prepared();
       const journal = new SqliteTransportAttemptJournal(await journalPath());
       const scripted = scriptedTransport({ jobId });
       expect(await runTransportAttempt(artifact, binding(artifact), { journal, transport: scripted.transport }))
@@ -286,7 +290,7 @@ describe('runTransportAttempt', () => {
   it.each(['throwing getter', 'throwing enumeration'] as const)(
     'holds a malformed declaration reply with %s without exposing its diagnostic',
     async (caseName) => {
-      const artifact = prepared();
+      const artifact = await prepared();
       const journal = new SqliteTransportAttemptJournal(await journalPath());
       const scripted = scriptedTransport();
       const reply = caseName === 'throwing getter'
@@ -311,7 +315,7 @@ describe('runTransportAttempt', () => {
   );
 
   it('stops before upload when the job ID checkpoint cannot commit', async () => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const durable = new SqliteTransportAttemptJournal(await journalPath());
     const journal = {
       ...durable,
@@ -329,7 +333,7 @@ describe('runTransportAttempt', () => {
   });
 
   it('holds an acknowledgement loss, records only prior acknowledgements, and never resumes', async () => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const file = await journalPath();
     const journal = new SqliteTransportAttemptJournal(file);
     const scripted = scriptedTransport({ failFrame: { kind: 'jpeg', index: 0 } });
@@ -350,7 +354,7 @@ describe('runTransportAttempt', () => {
     ['recordFrameIntent', 'frame_checkpoint_failed', []],
     ['recordFrameAcknowledged', 'acknowledgement_checkpoint_failed', ['frame:plt:0']],
   ] as const)('holds a failed %s checkpoint without advancing', async (method, reason, expectedFrames) => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const durable = new SqliteTransportAttemptJournal(await journalPath());
     const journal = {
       reserve: durable.reserve.bind(durable),
@@ -371,7 +375,7 @@ describe('runTransportAttempt', () => {
   });
 
   it('holds a pacing failure after the acknowledged frame and sends no next frame', async () => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const journal = new SqliteTransportAttemptJournal(await journalPath());
     const scripted = scriptedTransport();
     expect(await runTransportAttempt(artifact, binding(artifact), {
@@ -385,25 +389,25 @@ describe('runTransportAttempt', () => {
   });
 
   it('copies payloads before declaration so later caller mutation cannot change framed bytes', async () => {
-    const artifact = prepared();
-    const original = { plt: new Uint8Array(artifact.plt), jpeg: new Uint8Array(artifact.jpeg) };
+    const artifact = await prepared();
+    const original = { plt: new Uint8Array(artifact.cut.bytes), jpeg: new Uint8Array(artifact.print.bytes) };
     const journal = new SqliteTransportAttemptJournal(await journalPath());
     const scripted = scriptedTransport({ jobId: 31 });
     const transport: TransportMutationPort = {
       ...scripted.transport,
       declareCombo(declaration) {
-        artifact.plt.fill(0);
-        artifact.jpeg.fill(0);
+        artifact.cut.bytes.fill(0);
+        artifact.print.bytes.fill(0);
         return scripted.transport.declareCombo(declaration);
       },
     };
     try {
       await expect(runTransportAttempt(artifact, binding(artifact), { journal, transport, pace: async () => undefined }))
         .resolves.toEqual({ kind: 'needs_reconciliation', reason: 'physical_observation_required' });
-      expect(scripted.events).toEqual(['declare', 'frame:plt:0', 'frame:jpeg:0']);
-      for (const { kind, frame } of scripted.frames) {
+      expect(scripted.events).toEqual(['declare', ...expectedFrames(artifact)]);
+      for (const { kind, index, frame } of scripted.frames) {
         const newline = frame.indexOf(10);
-        expect(frame.subarray(newline + 5)).toEqual(original[kind]);
+        expect(frame.subarray(newline + 5)).toEqual(original[kind].subarray(index * 4071, (index + 1) * 4071));
       }
     } finally {
       journal.close();
@@ -413,11 +417,11 @@ describe('runTransportAttempt', () => {
   it.each(['declaring', 'declared', 'frame_pending', 'frame_acknowledged'] as const)(
     'preserves raw %s across reopen and blocks all later transport calls',
     async (phase) => {
-      const artifact = prepared();
+      const artifact = await prepared();
       const evidence = {
         ...binding(artifact),
-        jpeg: { byteLength: artifact.jpeg.byteLength, sha256: artifact.jpegSha256 },
-        plt: { byteLength: artifact.plt.byteLength, sha256: artifact.pltSha256 },
+        jpeg: { byteLength: artifact.print.bytes.byteLength, sha256: artifact.print.sha256 },
+        plt: { byteLength: artifact.cut.bytes.byteLength, sha256: artifact.cut.sha256 },
       } satisfies TransportAttemptEvidence;
       const evidenceHash = sha256(new TextEncoder().encode(JSON.stringify(evidence)));
       const { submissionId } = evidence;
@@ -454,7 +458,7 @@ describe('runTransportAttempt', () => {
   );
 
   it('allows only one concurrent reservation and one declaration', async () => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const file = await journalPath();
     const first = new SqliteTransportAttemptJournal(file);
     const second = new SqliteTransportAttemptJournal(file);
@@ -470,7 +474,7 @@ describe('runTransportAttempt', () => {
   });
 
   it('serializes different submissions behind the one reserved printer attempt', async () => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const file = await journalPath();
     const first = new SqliteTransportAttemptJournal(file);
     const second = new SqliteTransportAttemptJournal(file);
@@ -489,7 +493,7 @@ describe('runTransportAttempt', () => {
   });
 
   it('persists acknowledgement of one PLT frame before sending the next PLT frame', async () => {
-    const artifact = multiFramePrepared();
+    const artifact = await prepared('circles');
     const file = await journalPath();
     const journal = new SqliteTransportAttemptJournal(file);
     const observations: number[] = [];
@@ -508,12 +512,12 @@ describe('runTransportAttempt', () => {
       pace: async () => undefined,
     });
     expect(scripted.events.slice(0, 3)).toEqual(['declare', 'frame:plt:0', 'frame:plt:1']);
-    expect(observations).toEqual([0, 1]);
+    expect(observations).toEqual(Array.from({ length: Math.ceil(artifact.cut.bytes.length / 4071) }, (_, i) => i));
     journal.close();
   });
 
   it('does no I/O when the reserved submission is presented with stale evidence', async () => {
-    const artifact = prepared();
+    const artifact = await prepared();
     const file = await journalPath();
     const first = new SqliteTransportAttemptJournal(file);
     await runTransportAttempt(artifact, binding(artifact), {
@@ -530,4 +534,23 @@ describe('runTransportAttempt', () => {
     expect(scripted.events).toEqual([]);
     reopened.close();
   });
+});
+
+it('rejects corrupted evidence on a transport read and retains the reservation', async () => {
+  const file = await journalPath();
+  const artifact = await prepared();
+  const evidence: TransportAttemptEvidence = {
+    ...binding(artifact),
+    jpeg: { byteLength: artifact.print.bytes.byteLength, sha256: artifact.print.sha256 },
+    plt: { byteLength: artifact.cut.bytes.byteLength, sha256: artifact.cut.sha256 },
+  };
+  const journal = new SqliteTransportAttemptJournal(file);
+  const brokenHash = 'a'.repeat(64);
+  try {
+    expect(journal.reserve(evidence, brokenHash)).toBe(true);
+    expect(() => journal.get(evidence.submissionId)).toThrow();
+    expect(journal.reserve(evidence, brokenHash)).toBe(false);
+  } finally {
+    journal.close();
+  }
 });

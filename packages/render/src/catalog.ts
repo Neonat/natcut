@@ -1,4 +1,4 @@
-import type { CompositionManifest } from '@natcut/domain';
+import { SrgbColorEvidenceSchema, type SrgbColorEvidence, type CompositionManifest } from '@natcut/domain';
 import index from '../catalog/index.json' with { type: 'json' };
 import type { AssetCatalog, RgbaAsset } from './assets.ts';
 import type { PlannedComposition } from './layout.ts';
@@ -8,12 +8,17 @@ export type SpriteEntry = Readonly<{
   name: string;
   scientificName?: string;
   pngSha256: string;
+  colorEvidence?: SrgbColorEvidence;
   width: number;
   height: number;
 }>;
 
-export const sprites: readonly SpriteEntry[] = Object.freeze(index.sprites.map((entry) => Object.freeze(entry)));
-const archivedSprites: readonly SpriteEntry[] = Object.freeze(index.archived.map((entry) => Object.freeze(entry)));
+function freezeEntry({ colorEvidence, ...entry }: Omit<SpriteEntry, 'colorEvidence'> & { colorEvidence?: unknown }): SpriteEntry {
+  return Object.freeze(colorEvidence === undefined ? entry : { ...entry, colorEvidence: SrgbColorEvidenceSchema.parse(colorEvidence) });
+}
+
+export const sprites: readonly SpriteEntry[] = Object.freeze(index.sprites.map(freezeEntry));
+const archivedSprites: readonly SpriteEntry[] = Object.freeze(index.archived.map(freezeEntry));
 const byId = new Map<string, SpriteEntry>([...sprites, ...archivedSprites].map((entry) => [entry.id, entry]));
 const legacySprite = 'sprite/monstera-v1';
 const legacyTrainer = 'trainer/friend-v1';
@@ -64,16 +69,20 @@ export function assertSupportedRecipe(manifest: CompositionManifest): void {
   }
 }
 
+export function catalogSpriteEntry(assetId: string): SpriteEntry | undefined {
+  return byId.get(assetId);
+}
+
 export function assetPngFilename(assetId: string): string {
   const digest = byId.get(assetId)?.pngSha256 ?? legacyPngs.get(assetId);
   if (!digest) throw new Error('Unknown artwork.');
   return digest + '.png';
 }
 
-export async function loadPlannedAssets(
+export async function loadPlannedAssets<T extends RgbaAsset>(
   plan: PlannedComposition,
-  load: (filename: string, id: string) => Promise<RgbaAsset>,
-): Promise<AssetCatalog> {
+  load: (filename: string, id: string) => Promise<T>,
+): Promise<AssetCatalog<T>> {
   const ids = new Set(plan.layers.map((layer) => layer.assetId));
   const loaded = await Promise.all([...ids].map((id) => load(assetPngFilename(id), id)));
   return new Map(loaded.map((asset) => [asset.id, asset]));

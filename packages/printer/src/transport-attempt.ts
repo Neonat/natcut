@@ -1,11 +1,16 @@
 import { createHash } from 'node:crypto';
-import { isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import { parseArtifactReceipt } from '@natcut/artifacts/reader';
 import type { ArtifactReceipt } from '@natcut/domain';
 import type { PreparedPhysicalArtifacts } from './artifacts.ts';
 import { frameUploadPayload, planComboJob, planUploadPayloads, type UploadPayload } from './protocol-plan.ts';
+import {
+  openTransportJournalDatabase, parseTransportAttemptRow,
+  type TransportAttemptEvidence, type TransportAttemptReason, type TransportAttemptRecord,
+} from './transport-journal-read.ts';
+
+export type { TransportAttemptEvidence, TransportAttemptPhase, TransportAttemptReason, TransportAttemptRecord } from './transport-journal-read.ts';
 
 export type TransportAttemptBinding = {
   submissionId: string;
@@ -14,47 +19,6 @@ export type TransportAttemptBinding = {
   executionToken: string;
   manifestHash: string;
   receipt: ArtifactReceipt;
-};
-
-export type TransportAttemptEvidence = {
-  submissionId: string;
-  eventId: string;
-  workerId: string;
-  executionToken: string;
-  manifestHash: string;
-  receipt: ArtifactReceipt;
-  jpeg: { byteLength: number; sha256: string };
-  plt: { byteLength: number; sha256: string };
-};
-
-export type TransportAttemptPhase =
-  | 'declaring'
-  | 'declared'
-  | 'frame_pending'
-  | 'frame_acknowledged'
-  | 'needs_reconciliation';
-
-export type TransportAttemptReason =
-  | 'attempt_already_reserved'
-  | 'declaration_outcome_unknown'
-  | 'printer_job_id_invalid'
-  | 'job_id_persistence_failed'
-  | 'frame_checkpoint_failed'
-  | 'frame_acknowledgement_unknown'
-  | 'acknowledgement_checkpoint_failed'
-  | 'pacing_outcome_unknown'
-  | 'physical_observation_required';
-
-export type TransportAttemptRecord = {
-  submissionId: string;
-  evidenceHash: string;
-  evidenceJson: string;
-  phase: TransportAttemptPhase;
-  printerJobId: number | null;
-  acknowledgedFrames: number;
-  pendingKind: 'plt' | 'jpeg' | null;
-  pendingIndex: number | null;
-  reason: TransportAttemptReason | null;
 };
 
 export interface TransportAttemptJournal {
@@ -85,67 +49,17 @@ export type TransportAttemptResult =
   | { kind: 'preflight_failed'; reason: 'evidence_mismatch' | 'journal_unavailable' }
   | { kind: 'needs_reconciliation'; reason: TransportAttemptReason };
 
-const phases: ReadonlySet<string> = new Set([
-  'declaring', 'declared', 'frame_pending', 'frame_acknowledged', 'needs_reconciliation',
-]);
-const reasons: ReadonlySet<string> = new Set([
-  'attempt_already_reserved', 'declaration_outcome_unknown', 'printer_job_id_invalid',
-  'job_id_persistence_failed', 'frame_checkpoint_failed', 'frame_acknowledgement_unknown',
-  'acknowledgement_checkpoint_failed', 'pacing_outcome_unknown', 'physical_observation_required',
-]);
-
 function isRecord(input: unknown): input is Record<string, unknown> {
   return Boolean(input) && typeof input === 'object' && !Array.isArray(input);
-}
-
-function isPhase(input: unknown): input is TransportAttemptPhase {
-  return typeof input === 'string' && phases.has(input);
-}
-
-function isReason(input: unknown): input is TransportAttemptReason {
-  return typeof input === 'string' && reasons.has(input);
-}
-
-function parseRecord(input: unknown): TransportAttemptRecord | null {
-  if (!isRecord(input)) return null;
-  const row = input;
-  if (typeof row.submissionId !== 'string' || typeof row.evidenceHash !== 'string' ||
-      typeof row.evidenceJson !== 'string' || !isPhase(row.phase) ||
-      (row.printerJobId !== null && typeof row.printerJobId !== 'number') ||
-      typeof row.acknowledgedFrames !== 'number' ||
-      (row.pendingKind !== null && row.pendingKind !== 'plt' && row.pendingKind !== 'jpeg') ||
-      (row.pendingIndex !== null && typeof row.pendingIndex !== 'number') ||
-      (row.reason !== null && !isReason(row.reason))) {
-    throw new Error('Invalid transport attempt journal row.');
-  }
-  return {
-    submissionId: row.submissionId,
-    evidenceHash: row.evidenceHash,
-    evidenceJson: row.evidenceJson,
-    phase: row.phase,
-    printerJobId: row.printerJobId,
-    acknowledgedFrames: row.acknowledgedFrames,
-    pendingKind: row.pendingKind,
-    pendingIndex: row.pendingIndex,
-    reason: row.reason,
-  };
 }
 
 export class SqliteTransportAttemptJournal implements TransportAttemptJournal {
   private readonly database: Database.Database;
 
-  constructor(file: string) {
-    if (typeof file !== 'string' || !isAbsolute(file) || file !== file.trim() || file.includes('\0')) {
-      throw new Error('The transport attempt journal requires an absolute file path.');
-    }
-    this.database = new Database(file);
+  constructor(file: string, { existingOnly = false } = {}) {
+    this.database = openTransportJournalDatabase(file, existingOnly);
+    if (existingOnly) return;
     try {
-      this.database.pragma('busy_timeout = 5000');
-      if (this.database.pragma('journal_mode = WAL', { simple: true }) !== 'wal') {
-        throw new Error('The transport attempt journal requires SQLite WAL mode.');
-      }
-      this.database.pragma('synchronous = FULL');
-      if (process.platform === 'darwin') this.database.pragma('fullfsync = ON');
       this.database.exec(`
         CREATE TABLE IF NOT EXISTS transport_attempts (
           submissionId TEXT PRIMARY KEY,
@@ -218,11 +132,12 @@ export class SqliteTransportAttemptJournal implements TransportAttemptJournal {
   }
 
   get(submissionId: string): TransportAttemptRecord | null {
-    return parseRecord(this.database.prepare(`
+    const row = this.database.prepare(`
       SELECT submissionId, evidenceHash, evidenceJson, phase, printerJobId,
         acknowledgedFrames, pendingKind, pendingIndex, reason
       FROM transport_attempts WHERE submissionId = ?
-    `).get(submissionId));
+    `).get(submissionId);
+    return row === undefined ? null : parseTransportAttemptRow(row).attempt;
   }
 
   close(): void {
@@ -250,17 +165,9 @@ export function prepareTransportAttempt(
       return null;
     }
     const receipt = parseArtifactReceipt(binding.receipt);
-    const snapshot = { ...artifacts };
-    if (!isDeepStrictEqual(receipt, snapshot.receipt) || !isDeepStrictEqual(receipt.descriptor.profile, snapshot.profile) ||
-        !(snapshot.jpeg instanceof Uint8Array) || !(snapshot.plt instanceof Uint8Array)) return null;
-    snapshot.receipt = receipt;
-    snapshot.profile = receipt.descriptor.profile;
-    snapshot.jpeg = new Uint8Array(snapshot.jpeg);
-    snapshot.plt = new Uint8Array(snapshot.plt);
-    if (snapshot.jpeg.byteLength === 0 || snapshot.plt.byteLength === 0) return null;
-
-    const payloads = planUploadPayloads(snapshot);
-    const declaration = planComboJob(snapshot);
+    if (!isDeepStrictEqual(receipt, artifacts.receipt)) return null;
+    const payloads = planUploadPayloads(artifacts);
+    const declaration = planComboJob(artifacts);
     const jpeg = payloads.find((payload) => payload.kind === 'jpeg');
     const plt = payloads.find((payload) => payload.kind === 'plt');
     if (!jpeg || !plt) return null;
@@ -308,29 +215,42 @@ function requireReconciliation(
   return { kind: 'needs_reconciliation', reason };
 }
 
+type TransportDependencies = {
+  journal: TransportAttemptJournal;
+  pace?: (milliseconds: number) => Promise<void>;
+} & ({ transport: TransportMutationPort } | { openTransport: () => Promise<TransportMutationPort> });
+
 export async function runTransportAttempt(
   artifacts: PreparedPhysicalArtifacts,
   binding: TransportAttemptBinding,
-  dependencies: {
-    journal: TransportAttemptJournal;
-    transport: TransportMutationPort;
-    pace?: (milliseconds: number) => Promise<void>;
-  },
+  dependencies: TransportDependencies,
 ): Promise<TransportAttemptResult> {
   const prepared = prepareTransportAttempt(artifacts, binding);
   if (!prepared) return { kind: 'preflight_failed', reason: 'evidence_mismatch' };
-  const { declaration, payloads, evidence, evidenceHash } = prepared;
-  const { submissionId } = evidence;
-  const { journal, transport } = dependencies;
-  const pace = dependencies.pace ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   try {
-    if (!journal.reserve(evidence, evidenceHash)) {
+    if (!dependencies.journal.reserve(prepared.evidence, prepared.evidenceHash)) {
       return { kind: 'needs_reconciliation', reason: 'attempt_already_reserved' };
     }
   } catch {
     return { kind: 'preflight_failed', reason: 'journal_unavailable' };
   }
+  return executeReservedAttempt(prepared, dependencies);
+}
 
+async function executeReservedAttempt(
+  prepared: NonNullable<ReturnType<typeof prepareTransportAttempt>>,
+  dependencies: TransportDependencies,
+): Promise<TransportAttemptResult> {
+  const { declaration, payloads, evidence, evidenceHash } = prepared;
+  const { submissionId } = evidence;
+  const { journal } = dependencies;
+  const pace = dependencies.pace ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  let transport: TransportMutationPort;
+  try {
+    transport = 'openTransport' in dependencies ? await dependencies.openTransport() : dependencies.transport;
+  } catch {
+    return requireReconciliation(journal, submissionId, evidenceHash, 'transport_open_failed');
+  }
   let declarationReply: unknown;
   try {
     declarationReply = await transport.declareCombo(declaration);

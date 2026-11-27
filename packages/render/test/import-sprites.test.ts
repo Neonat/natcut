@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import sharp from 'sharp';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, ArtifactReceiptSchema } from '@natcut/domain';
 
 const exec = promisify(execFile);
 type Row = { name: string; file: string; scientificName?: string };
@@ -27,7 +28,7 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
       const file = `local-source-${i}.png`;
       rows.push({ name: `Plant ${i}`, file });
       const image = sharp({ create: { width: i % 2 ? 4 : 8, height: i % 2 ? 8 : 4, channels: 4, background: { r: i, g: 100, b: 100, alpha: 1 } } });
-      await (i === 19 ? image.withMetadata({ orientation: 6 }) : image).png().toFile(path.join(dir, file));
+      await (i === 19 ? image.withMetadata({ orientation: 6 }) : image).withIccProfile('srgb').png().toFile(path.join(dir, file));
     }
     rows[0]!.scientificName = 'Example species';
     await importRows(rows);
@@ -56,7 +57,7 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
     await importRows(rows.toReversed());
     expect(await loadIndex()).toEqual(initial);
 
-    await sharp({ create: { width: 3, height: 9, channels: 4, background: 'red' } }).png().toFile(path.join(dir, rows[0]!.file));
+    await sharp({ create: { width: 3, height: 9, channels: 4, background: 'red' } }).withIccProfile('srgb').png().toFile(path.join(dir, rows[0]!.file));
     await importRows(rows);
     const changed = await loadIndex();
     expect(changed.archived).toContainEqual(first);
@@ -65,9 +66,11 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
 
     const files = await readdir(path.join(out, 'artwork'));
     await writeFile(path.join(dir, 'broken.png'), 'invalid');
-    await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(path.join(dir, 'empty.png'));
-    await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 20, g: 80, b: 40, alpha: 0.4 } } }).png().toFile(path.join(dir, 'faint.png'));
+    await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).withIccProfile('srgb').png().toFile(path.join(dir, 'empty.png'));
+    await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 20, g: 80, b: 40, alpha: 0.4 } } }).withIccProfile('srgb').png().toFile(path.join(dir, 'faint.png'));
+    await sharp({ create: { width: 8, height: 8, channels: 4, background: 'red' } }).png().toFile(path.join(dir, 'untagged.png'));
     for (const bad of [
+      { name: 'Untagged', file: 'untagged.png' },
       { name: ' plant 0 ', file: rows[1]!.file },
       { name: 'Duplicate artwork', file: rows[0]!.file },
       { name: 'Broken', file: 'broken.png' },
@@ -87,8 +90,8 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
 
     const concurrentA = path.join(dir, 'concurrent-a.json');
     const concurrentB = path.join(dir, 'concurrent-b.json');
-    await sharp({ create: { width: 5, height: 9, channels: 4, background: 'blue' } }).png().toFile(path.join(dir, 'a.png'));
-    await sharp({ create: { width: 9, height: 5, channels: 4, background: 'green' } }).png().toFile(path.join(dir, 'b.png'));
+    await sharp({ create: { width: 5, height: 9, channels: 4, background: 'blue' } }).withIccProfile('srgb').png().toFile(path.join(dir, 'a.png'));
+    await sharp({ create: { width: 9, height: 5, channels: 4, background: 'green' } }).withIccProfile('srgb').png().toFile(path.join(dir, 'b.png'));
     await writeFile(concurrentA, JSON.stringify(rows.with(0, { ...rows[0]!, file: 'a.png' })));
     await writeFile(concurrentB, JSON.stringify(rows.with(0, { ...rows[0]!, file: 'b.png' })));
     await writeFile(path.join(out + '.import-lock-v2', 'ticket-999999998-00000000-0000-0000-0000-000000000001'), '1');
@@ -103,3 +106,50 @@ it('imports a stable 20-sprite roster with fitted transparent artwork and retain
     await rm(dir, { recursive: true, force: true });
   }
 }, 30_000);
+
+it('binds a converted sprite’s provenance into its ID and restores it when loading normalized PNG pixels', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'sprite-color-'));
+  const out = path.join(directory, 'catalog');
+  try {
+    const image = sharp(Buffer.from([176, 92, 63, 255]), { raw: { width: 1, height: 1, channels: 4 } });
+    await image.withIccProfile('p3').png().toFile(path.join(directory, 'source.png'));
+    const input = path.join(directory, 'roster.json');
+    await writeFile(input, JSON.stringify([{ name: 'Orchid', file: 'source.png' }]));
+    await exec(process.execPath, ['scripts/import-sprites.mjs', '--input', input, '--out', out],
+      { cwd: path.resolve(import.meta.dirname, '../../..') });
+    const index = JSON.parse(await readFile(path.join(out, 'index.json'), 'utf8'));
+    const entry = index.sprites[0];
+    const p3 = { sourceSpace: 'display-p3', action: 'converted',
+      sourceProfileSha256: '231752984cd4a5278e1b8d2390fe496767d4511fc81f54e1a5c69ae9ab4c42b5' };
+    const expected = { ...NATIVE_SRGB_EVIDENCE, sources: [p3] };
+    expect(entry.colorEvidence).toEqual(expected);
+    async function loadFromIndex() {
+      vi.resetModules();
+      vi.doMock('../catalog/index.json', () => ({ default: index }));
+      const { catalogManifest, planComposition, loadPackagedAssets, assetPngFilename } = await import('../src/index.ts');
+      const plan = planComposition(catalogManifest, DEVFEST_SG_V1);
+      const logo = assetPngFilename('branding/logo');
+      await copyFile(path.join(import.meta.dirname, '../catalog/artwork', logo), path.join(out, 'artwork', logo));
+      return loadPackagedAssets(plan, path.join(out, 'artwork'));
+    }
+    const catalog = await loadFromIndex();
+    const asset = catalog.get(entry.id)!;
+    const { createTrustedArtifactPreparer } = await import('@natcut/submission');
+    const { catalogManifest } = await import('../src/index.ts');
+    const { bundle } = await createTrustedArtifactPreparer(catalog)(catalogManifest);
+    const receipt = ArtifactReceiptSchema.parse({ descriptor: bundle.descriptor, generation: '1' });
+    expect(receipt.descriptor).toMatchObject({ formatVersion: 2, colorEvidence: {
+      ...expected, sources: [p3, ...NATIVE_SRGB_EVIDENCE.sources],
+    } });
+    expect(asset.colorEvidence).toEqual(expected);
+    expect(Array.from(asset.rgba)).toEqual([176, 92, 63, 255]);
+    entry.colorEvidence = NATIVE_SRGB_EVIDENCE;
+    await expect(loadFromIndex()).rejects.toThrow(/identity/i);
+    delete entry.colorEvidence;
+    await expect(loadFromIndex()).rejects.toThrow(/identity/i);
+  } finally {
+    vi.doUnmock('../catalog/index.json');
+    vi.resetModules();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

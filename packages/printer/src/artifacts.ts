@@ -1,24 +1,37 @@
 import { createHash } from 'node:crypto';
 import { parseArtifactReceipt, verifyArtifactBytes, type VerifiedArtifact } from '@natcut/artifacts/reader';
-import { decodeLogicalSourceBundle, type PrintProfile } from '@natcut/domain';
+import { decodeLogicalSourceBundle, type SrgbColorEvidence, type PrintProfile } from '@natcut/domain';
 import sharp from 'sharp';
 import { findContours } from '../../../vendor/pixcut-trace/contours.ts';
 import { generateCutPath, type GenerateOptions } from '../../../vendor/pixcut-trace/generate.ts';
 import { CUT_CANVAS } from '../../../vendor/pixcut-trace/units.ts';
 import type { PltStats } from '../../../vendor/pixcut-trace/plt.ts';
+import { verifyPrintJpeg, type CanonicalPrintPreview, type GenerationQcResult } from './generation-qc.ts';
+export { preparePhysicalArtifacts } from './prepared-evidence.ts';
 
-const jpegQualities = [95, 92, 90, 85, 80, 75, 70, 60, 50] as const;
+export const jpegQualities = [95, 92, 90, 85, 80, 75, 70, 60, 50] as const;
 
+export type PreparedPrintArtifact = {
+  readonly kind: 'print-raster-jpeg';
+  readonly bytes: Uint8Array;
+  readonly sha256: string;
+  readonly quality: number;
+  readonly preview: CanonicalPrintPreview;
+  readonly colorEvidence: SrgbColorEvidence;
+  readonly generationQc: GenerationQcResult;
+};
+export type PreparedCutArtifact = {
+  readonly kind: 'cut-path-plt';
+  readonly bytes: Uint8Array;
+  readonly sha256: string;
+  readonly sourceMaskSha256: string;
+  readonly stats: PltStats;
+};
 export type PreparedPhysicalArtifacts = {
-  receipt: VerifiedArtifact['receipt'];
-  profile: Readonly<PrintProfile>;
-  jpeg: Uint8Array;
-  jpegSha256: string;
-  jpegQuality: number;
-  plt: Uint8Array;
-  pltSha256: string;
-  sourceMaskSha256: string;
-  cutStats: PltStats;
+  readonly receipt: VerifiedArtifact['receipt'];
+  readonly profile: Readonly<PrintProfile>;
+  readonly print: PreparedPrintArtifact;
+  readonly cut: PreparedCutArtifact;
 };
 
 function sha256(bytes: Uint8Array): string {
@@ -34,19 +47,32 @@ function centeredPadding(profile: PrintProfile) {
   return { left: horizontal / 2, right: horizontal / 2, top: vertical / 2, bottom: vertical / 2 };
 }
 
-export async function encodePrinterJpeg(rgba: Uint8Array, profile: PrintProfile) {
-  const padding = centeredPadding(profile);
+export async function buildCanonicalPreview(rgba: Uint8Array, profile: PrintProfile): Promise<CanonicalPrintPreview> {
+  const sheet = { width: profile.sheetWidthPx, height: profile.sheetHeightPx, channels: 4 as const };
+  if (rgba.length !== sheet.width * sheet.height * sheet.channels) throw new Error('Expected sheet-sized RGBA8 print input.');
+  const { data, info } = await sharp(rgba, { raw: sheet })
+    .flatten({ background: '#ffffff' })
+    .extend({ ...centeredPadding(profile), background: '#ffffff' })
+    .toColourspace('srgb').raw({ depth: 'uchar' }).toBuffer({ resolveWithObject: true });
+  if (info.width !== profile.rasterWidthPx || info.height !== profile.rasterHeightPx || info.channels !== 3) {
+    throw new Error('Expected a profile-sized sRGB RGB8 preview.');
+  }
+  return { kind: 'srgb-rgb8-preview', width: info.width, height: info.height, channels: 3, data };
+}
+
+export function encodePreviewAtQuality(preview: CanonicalPrintPreview, quality: typeof jpegQualities[number]) {
+  return sharp(preview.data, { raw: { width: preview.width, height: preview.height, channels: preview.channels } })
+    .withIccProfile('srgb')
+    .jpeg({ quality, chromaSubsampling: '4:2:0', progressive: false, mozjpeg: false }).toBuffer();
+}
+
+async function preparePrint(rgba: Uint8Array, colorEvidence: SrgbColorEvidence, profile: PrintProfile): Promise<PreparedPrintArtifact> {
+  const preview = await buildCanonicalPreview(rgba, profile);
   for (const quality of jpegQualities) {
-    const encoded = await sharp(Buffer.from(rgba), {
-      raw: { width: profile.sheetWidthPx, height: profile.sheetHeightPx, channels: 4 },
-      limitInputPixels: profile.sheetWidthPx * profile.sheetHeightPx,
-    })
-      .flatten({ background: { r: 255, g: 255, b: 255 } })
-      .extend({ ...padding, background: { r: 255, g: 255, b: 255 } })
-      .jpeg({ quality, chromaSubsampling: '4:2:0', progressive: false, mozjpeg: false })
-      .toBuffer();
-    if (encoded.byteLength <= profile.jpegMaxBytes) {
-      return { bytes: new Uint8Array(encoded), quality };
+    const bytes = await encodePreviewAtQuality(preview, quality);
+    if (bytes.byteLength <= profile.jpegMaxBytes) {
+      const generationQc = await verifyPrintJpeg(preview, bytes);
+      return { kind: 'print-raster-jpeg', bytes, sha256: sha256(bytes), quality, preview, colorEvidence, generationQc };
     }
   }
   throw new Error(`JPEG cannot fit within ${profile.jpegMaxBytes} bytes (1 MiB profile limit).`);
@@ -64,7 +90,7 @@ function maskRaster(mask: Uint8Array, profile: PrintProfile) {
   return { width: profile.sheetWidthPx, height: profile.sheetHeightPx, data };
 }
 
-function encodeCut(mask: Uint8Array, profile: PrintProfile) {
+function prepareCut(mask: Uint8Array, profile: PrintProfile): PreparedCutArtifact {
   if (!Number.isInteger(profile.knifePressure) || profile.knifePressure < 1 || profile.knifePressure > 100) {
     throw new Error('Knife pressure must be an integer from 1 through 100.');
   }
@@ -105,25 +131,17 @@ function encodeCut(mask: Uint8Array, profile: PrintProfile) {
       }
     }
   }
-  return { bytes: new TextEncoder().encode(result.plt), stats: result.stats };
+  const bytes = new TextEncoder().encode(result.plt);
+  return { kind: 'cut-path-plt', bytes, sha256: sha256(bytes), sourceMaskSha256: sha256(mask), stats: result.stats };
 }
 
-export async function preparePhysicalArtifacts(input: VerifiedArtifact): Promise<PreparedPhysicalArtifacts> {
+export async function generateVerifiedPhysicalOutputs(input: VerifiedArtifact) {
   const receipt = parseArtifactReceipt(input.receipt);
   const verified = await verifyArtifactBytes(input.bytes, receipt);
   const decoded = await decodeLogicalSourceBundle(verified.bytes, verified.receipt.descriptor);
   const profile = decoded.descriptor.profile;
-  const cut = encodeCut(decoded.mask, profile);
-  const jpeg = await encodePrinterJpeg(decoded.rgba, profile);
-  return {
-    receipt: verified.receipt,
-    profile,
-    jpeg: jpeg.bytes,
-    jpegSha256: sha256(jpeg.bytes),
-    jpegQuality: jpeg.quality,
-    plt: cut.bytes,
-    pltSha256: sha256(cut.bytes),
-    sourceMaskSha256: decoded.descriptor.maskSha256,
-    cutStats: cut.stats,
-  };
+  if (decoded.descriptor.formatVersion !== 2) throw new Error('Physical generation requires trusted sRGB color evidence.');
+  const cut = prepareCut(decoded.mask, profile);
+  const print = await preparePrint(decoded.rgba, decoded.descriptor.colorEvidence, profile);
+  return { receipt: verified.receipt, print, cut };
 }

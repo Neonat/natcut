@@ -2,9 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
+import { isDeepStrictEqual, parseArgs } from 'node:util';
 import sharp from 'sharp';
-import { DEVFEST_SG_V1 } from '../packages/domain/src/print-profile.ts';
+import { z } from 'zod';
+import { SrgbColorEvidenceSchema } from '@natcut/domain';
+import { catalogSpriteId, normalizeSpritePng } from '../packages/render/src/assets.ts';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
@@ -16,26 +18,32 @@ function label(value) {
   return value.trim().normalize('NFC');
 }
 
+const reviewedSourceSchema = z.strictObject({
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  colorEvidence: SrgbColorEvidenceSchema,
+});
+
 async function normalizeSprite(row, directory) {
   const name = label(row.name);
   const scientificName = row.scientificName === undefined ? undefined : label(row.scientificName);
   if (typeof row.file !== 'string' || row.file !== path.basename(row.file) || !/\.png$/i.test(row.file)) {
     throw new Error(`Expected a PNG filename for ${name}.`);
   }
-  const source = sharp(await readFile(path.join(directory, row.file)));
-  const { width, height, format, pages } = await source.metadata();
-  if (format !== 'png' || (pages ?? 1) !== 1) throw new Error(`Expected a still PNG for ${name}.`);
-  const side = Math.min(760, Math.max(width, height));
-  const { data, info } = await source.rotate().toColourspace('srgb').ensureAlpha()
-    .resize(side, side, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-    .raw().toBuffer({ resolveWithObject: true });
-  if (!data.some((value, offset) => offset % 4 === 3 && value >= DEVFEST_SG_V1.alphaThreshold)) {
-    throw new Error(`Artwork for ${name} has no pixels above the print alpha threshold.`);
+  const input = await readFile(path.join(directory, row.file));
+  const reviewed = row.reviewedSource === undefined ? null : reviewedSourceSchema.parse(row.reviewedSource);
+  const source = reviewed ? await readFile(path.join(directory, 'sources', reviewed.sha256 + '.png')) : input;
+  if (reviewed && (hash(source) !== reviewed.sha256 || row.file !== hash(input) + '.png')) {
+    throw new Error(`Reviewed artwork digest mismatch for ${name}.`);
   }
-  const png = await sharp(data, { raw: info }).png().toBuffer();
+  const { format, pages } = await sharp(source).metadata();
+  if (format !== 'png' || (pages ?? 1) !== 1) throw new Error(`Expected a still PNG for ${name}.`);
+  const { png, side, colorEvidence } = await normalizeSpritePng(source, name);
+  if (reviewed && (!png.equals(input) || !isDeepStrictEqual(colorEvidence, reviewed.colorEvidence))) {
+    throw new Error(`Original artwork does not reproduce the approved pixels and profile evidence for ${name}.`);
+  }
   const pngSha256 = hash(png);
-  const id = 'sprite/' + hash(JSON.stringify([name, scientificName ?? null, pngSha256]));
-  return { entry: { id, name, ...(scientificName ? { scientificName } : {}), pngSha256, width: side, height: side }, png };
+  const entry = { name, ...(scientificName ? { scientificName } : {}), pngSha256, colorEvidence, width: side, height: side };
+  return { entry: { id: catalogSpriteId(entry), ...entry }, png };
 }
 
 function processIsAlive(pid) {

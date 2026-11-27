@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { deriveRibbonRegistrationStatus } from '@natcut/printer/physical-qc';
+import { journalUnavailable, requireMutableAttempt } from './physical-evidence.mjs';
 
 const operatorPageUrl = new URL('../public/index.html', import.meta.url);
 const webUsbClientUrl = new URL('../public/webusb-client.js', import.meta.url);
@@ -14,25 +16,53 @@ function sendJson(response, status, body, extraHeaders = {}) {
   response.end(JSON.stringify(body));
 }
 
-function readJsonBody(request, maximumBytes = 4096) {
+function readJsonBody(request, maximumBytes = 4096, rejectDuplicateKeys = false) {
   return new Promise((resolve, reject) => {
-    if (request.headers['content-type'] !== 'application/json') {
-      reject(Object.assign(new Error('Expected application/json.'), { code: 'BAD_REQUEST' }));
+    const badRequest = message => reject(Object.assign(new Error(message), { code: 'BAD_REQUEST' }));
+    if (request.headers['content-type']?.split(';')[0].trim() !== 'application/json') {
+      badRequest('Expected application/json.');
       return;
     }
     const chunks = [];
     let length = 0;
     request.on('data', (chunk) => {
       length += chunk.length;
-      if (length > maximumBytes) request.destroy(Object.assign(new Error('Request body is too large.'), { code: 'BAD_REQUEST' }));
+      if (length > maximumBytes) badRequest('Request body is too large.');
       else chunks.push(chunk);
     });
     request.on('end', () => {
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-      catch { reject(Object.assign(new Error('Invalid JSON body.'), { code: 'BAD_REQUEST' })); }
+      if (length > maximumBytes) return;
+      try {
+        const source = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+        let members = 0;
+        const body = JSON.parse(source, rejectDuplicateKeys ? (_key, value) => {
+          if (value && typeof value === 'object' && !Array.isArray(value)) members += Object.keys(value).length;
+          return value;
+        } : undefined);
+        if (rejectDuplicateKeys) {
+          // Count key tokens in the validated JSON before accepting JSON.parse's last-member-wins result.
+          let keys = 0;
+          for (const match of source.matchAll(/"(?:\\.|[^"\\])*"\s*(:)?/g)) {
+            if (match[1] === ':') keys++;
+          }
+          if (keys !== members) return badRequest('Duplicate JSON field.');
+        }
+        resolve(body);
+      } catch { badRequest('Invalid JSON body.'); }
     });
     request.on('error', reject);
   });
+}
+
+const evidenceErrors = {
+  BAD_REQUEST: 400, OBSERVATION_CONFLICT: 409, ATTEMPT_LOCKED: 409, ATTEMPT_ALREADY_STARTED: 409, JOURNAL_UNAVAILABLE: 503,
+};
+
+function sendEvidenceError(response, error) {
+  const status = evidenceErrors[error?.code];
+  if (!status) return false;
+  sendJson(response, status, { ok: false, error: { code: error.code, message: error.message } });
+  return true;
 }
 
 function publicError(error) {
@@ -48,6 +78,9 @@ export function createServer({
   getSnapshot,
   readOperatorPage = () => readFile(operatorPageUrl),
   readWebUsbClient = () => readFile(webUsbClientUrl),
+  getPhysicalAttemptEvidence = () => { throw journalUnavailable(); },
+  recordCompletedAttempt,
+  recordRibbonRegistrationQc,
   preparePhysicalProof,
   sendPhysicalProof,
   browserPhysicalCoordinator,
@@ -98,6 +131,28 @@ export function createServer({
       return;
     }
 
+    if (request.method === 'GET' && pathname === '/api/physical-proof/evidence') {
+      try {
+        const evidence = getPhysicalAttemptEvidence();
+        const qc = evidence?.ribbonRegistrationQc;
+        sendJson(response, 200, { ok: true, evidence, ribbonOverall: qc ? deriveRibbonRegistrationStatus(qc.channels) : null });
+      } catch { sendEvidenceError(response, journalUnavailable()); }
+      return;
+    }
+
+    if (request.method === 'POST' &&
+        (pathname === '/api/physical-proof/record-completed' || pathname === '/api/physical-proof/physical-qc')) {
+      try {
+        const input = await readJsonBody(request, 65536, true);
+        const append = pathname === '/api/physical-proof/record-completed' ? recordCompletedAttempt : recordRibbonRegistrationQc;
+        if (!append) throw journalUnavailable();
+        sendJson(response, 200, { ok: true, record: append(input) });
+      } catch (error) {
+        if (!sendEvidenceError(response, error)) sendEvidenceError(response, journalUnavailable());
+      }
+      return;
+    }
+
     if (request.method === 'POST' && pathname === '/api/physical-proof/prepare') {
       try {
         const input = await readJsonBody(request);
@@ -106,7 +161,11 @@ export function createServer({
           return;
         }
         const proof = await queueProof();
-        sendJson(response, 200, { ok: true, proof: proof.summary, sendEnabled: physicalSendEnabled });
+        let sendEnabled = false;
+        if (physicalSendEnabled && !physicalSendStarted) {
+          try { sendEnabled = getPhysicalAttemptEvidence() === null; } catch { sendEnabled = false; }
+        }
+        sendJson(response, 200, { ok: true, proof: proof.summary, sendEnabled });
       } catch (error) {
         sendJson(response, error?.code === 'BAD_REQUEST' ? 400 : 500, {
           ok: false, error: { code: error?.code ?? 'PROOF_PREPARATION_FAILED', message: error?.message ?? 'Proof preparation failed.' },
@@ -118,12 +177,9 @@ export function createServer({
     if (request.method === 'POST' && pathname === '/api/physical-proof/send') {
       try {
         const input = await readJsonBody(request);
+        requireMutableAttempt(getPhysicalAttemptEvidence, true);
         if (!physicalSendEnabled) {
           sendJson(response, 403, { ok: false, error: { code: 'SEPARATE_APPROVAL_REQUIRED', message: 'The exact printer write still requires separate approval.' } });
-          return;
-        }
-        if (physicalSendStarted) {
-          sendJson(response, 409, { ok: false, error: { code: 'ATTEMPT_ALREADY_STARTED', message: 'This server process will not resend a physical proof.' } });
           return;
         }
         const proof = await queueProof();
@@ -134,10 +190,17 @@ export function createServer({
           return;
         }
         if (typeof sendPhysicalProof !== 'function') throw new Error('Physical proof transport is unavailable.');
+        if (physicalSendStarted) {
+          throw Object.assign(new Error('This attempt has already started.'), { code: 'ATTEMPT_ALREADY_STARTED' });
+        }
         physicalSendStarted = true;
-        const result = await serializePrinter(() => sendPhysicalProof(input, proof));
+        const result = await serializePrinter(() => {
+          requireMutableAttempt(getPhysicalAttemptEvidence, true);
+          return sendPhysicalProof(input, proof);
+        });
         sendJson(response, 409, { ok: false, result });
       } catch (error) {
+        if (sendEvidenceError(response, error)) return;
         sendJson(response, 500, { ok: false, error: { code: 'PHYSICAL_ATTEMPT_FAILED', message: error?.message ?? 'Physical attempt failed.' } });
       }
       return;
@@ -146,6 +209,8 @@ export function createServer({
     if (request.method === 'POST' && pathname.startsWith('/api/physical-proof/browser/')) {
       try {
         const input = await readJsonBody(request);
+        const action = pathname.slice('/api/physical-proof/browser/'.length);
+        requireMutableAttempt(getPhysicalAttemptEvidence, action === 'begin');
         if (!physicalSendEnabled) {
           sendJson(response, 403, { ok: false, error: { code: 'SEPARATE_APPROVAL_REQUIRED', message: 'The exact printer write still requires separate approval.' } });
           return;
@@ -155,7 +220,6 @@ export function createServer({
           return;
         }
         if (!browserPhysicalCoordinator) throw new Error('Browser physical coordinator is unavailable.');
-        const action = pathname.slice('/api/physical-proof/browser/'.length);
         if (action === 'begin') {
           const attempt = browserPhysicalCoordinator.begin(input, preparedProof);
           physicalSendStarted = true;
@@ -190,6 +254,7 @@ export function createServer({
         }
         sendJson(response, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'Browser physical route not found.' } });
       } catch (error) {
+        if (sendEvidenceError(response, error)) return;
         sendJson(response, physicalSendStarted ? 409 : 400, {
           ok: false, error: { code: 'BROWSER_PHYSICAL_STOPPED', message: error?.message ?? 'Browser physical attempt stopped.' },
         });
@@ -224,7 +289,7 @@ export function createServer({
         return;
       }
       response.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' });
-      response.end(preparedProof.jpeg ?? preparedProof.artifacts?.jpeg);
+      response.end(preparedProof.artifacts.print.bytes);
       return;
     }
 
@@ -275,23 +340,23 @@ export function createServer({
 
 async function start() {
   const [
-    { findByIds },
     { openUsbSession },
     { readPrinterSnapshot },
     { createPhysicalProofRuntime },
     { createBrowserPhysicalCoordinator },
   ] = await Promise.all([
-    import('usb'),
     import('./usb-session.mjs'),
     import('./snapshot.mjs'),
     import('./physical-proof-runtime.mjs'),
     import('./browser-physical-coordinator.mjs'),
   ]);
-  const openSession = () => openUsbSession({ usbModule: { findByIds } });
+  const openSession = async () => {
+    const { findByIds } = await import('usb');
+    return openUsbSession({ usbModule: { findByIds } });
+  };
   const physical = createPhysicalProofRuntime({
     approvalFingerprint: process.env.NATCUT_APPROVED_PHYSICAL_FINGERPRINT,
     journalPath: process.env.NATCUT_TRANSPORT_JOURNAL,
-    proofImagePath: process.env.NATCUT_PROOF_IMAGE,
     openSession,
   });
   const browserPhysicalCoordinator = createBrowserPhysicalCoordinator({
@@ -308,7 +373,7 @@ async function start() {
   const host = process.env.NATCUT_HOST ?? '127.0.0.1';
   const port = Number(process.env.NATCUT_PORT ?? 4173);
   server.listen(port, host, () => {
-    console.log(`NatCut physical proof dashboard: http://${host}:${port}`);
+    console.log(`NatCut physical proof dashboard: http://${host}:${server.address().port}`);
     console.log(physical.physicalSendEnabled ? 'Exact physical write enabled.' : 'Physical write locked; preparation only.');
   });
 }

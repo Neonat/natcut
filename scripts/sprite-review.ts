@@ -6,7 +6,8 @@ import path from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 import sharp from 'sharp';
 import { z } from 'zod';
-import { DEVFEST_SG_V1 } from '../packages/domain/src/print-profile.ts';
+import type { SrgbColorEvidence } from '@natcut/domain';
+import { normalizeSpritePng } from '../packages/render/src/assets.ts';
 
 const plantName = z.string().max(128).trim().min(1).normalize().max(128);
 const imagePath = z.string().min(1);
@@ -24,6 +25,7 @@ type ManifestPlant = z.infer<typeof manifestSchema>['plants'][number];
 type ReviewPlant = Omit<ManifestPlant, 'reference' | 'candidates'> & {
   reference: string;
   candidates: string[];
+  candidateSources: Record<string, { sha256: string; colorEvidence: SrgbColorEvidence }>;
 };
 type ReviewPacket = { version: 1; key: string; plants: ReviewPlant[] };
 
@@ -102,23 +104,18 @@ async function normalizeImage(root: string, filename: string, name: string, role
   try {
     const bytes = await localImage(root, filename);
     const image = sharp(bytes, imageOptions);
-    const { width, height, format, pages } = await image.metadata();
+    const { format, pages } = await image.metadata();
     const animated = (pages ?? 1) !== 1 || (format === 'png' && hasPngAnimation(bytes));
     if (role === 'reference') {
       if (animated || !referenceFormats.includes(format ?? '')) throw new Error('Expected a still raster image.');
-      return await image.rotate().toColourspace('srgb').resize(760, 760, { fit: 'inside', withoutEnlargement: true })
+      const jpeg = await image.rotate().toColourspace('srgb').resize(760, 760, { fit: 'inside', withoutEnlargement: true })
         .flatten({ background: '#fffdf4' }).jpeg({ quality: 88 }).toBuffer();
+      return { bytes: jpeg, source: null, original: null };
     }
     if (format !== 'png' || animated || !/\.png$/i.test(filename)) throw new Error('Expected a still PNG.');
 
-    const side = Math.min(760, Math.max(width, height));
-    const { data, info } = await image.rotate().toColourspace('srgb').ensureAlpha()
-      .resize(side, side, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .raw().toBuffer({ resolveWithObject: true });
-    if (!data.some((value, offset) => offset % 4 === 3 && value >= DEVFEST_SG_V1.alphaThreshold)) {
-      throw new Error('No pixels meet the print alpha threshold.');
-    }
-    return await sharp(data, { raw: info }).png().toBuffer();
+    const { png, colorEvidence } = await normalizeSpritePng(bytes, name, imageOptions.limitInputPixels);
+    return { bytes: png, source: { sha256: sha256(bytes), colorEvidence }, original: bytes };
   } catch (error) {
     throw new Error(`${name}: ${role} image ${JSON.stringify(filename)}. ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -320,8 +317,9 @@ const reviewScript = `
   exportButton.addEventListener('click', () => {
     const state = readProgress();
     if (completeCount(state) !== total) return;
-    const roster = packet.plants.map(({ name, scientificName }, index) => ({
+    const roster = packet.plants.map(({ name, scientificName, candidateSources }, index) => ({
       name, ...(scientificName ? { scientificName } : {}), file: state.approved[index],
+      reviewedSource: candidateSources[state.approved[index]],
     }));
     const url = URL.createObjectURL(new Blob([JSON.stringify(roster, null, 2) + '\\n'], { type: 'application/json' }));
     const link = document.createElement('a');
@@ -386,27 +384,32 @@ async function buildPacket(input: string, out: string) {
   await mkdir(path.dirname(out), { recursive: true });
   const stage = await mkdtemp(path.join(path.dirname(out), '.sprite-review-'));
   try {
+    await mkdir(path.join(stage, 'sources'));
     for (const plant of manifest.plants) {
       const { name, scientificName } = plant;
       const nameKey = name.toLowerCase();
       if (names.has(nameKey)) throw new Error(`Duplicate plant name: ${name}.`);
       names.add(nameKey);
 
-      const photo = await normalizeImage(root, plant.reference, name, 'reference');
+      const { bytes: photo } = await normalizeImage(root, plant.reference, name, 'reference');
       const reference = `${sha256(photo)}.jpg`;
       if (!files.has(reference)) await writeFile(path.join(stage, reference), photo);
       files.add(reference);
 
       const candidates: string[] = [];
+      const candidateSources: ReviewPlant['candidateSources'] = {};
       for (const filename of plant.candidates) {
-        const sprite = await normalizeImage(root, filename, name, 'candidate');
+        const { bytes: sprite, source, original } = await normalizeImage(root, filename, name, 'candidate');
         const candidate = `${sha256(sprite)}.png`;
         if (files.has(candidate)) throw new Error(`${name}: duplicate candidate artwork in ${JSON.stringify(filename)}.`);
         await writeFile(path.join(stage, candidate), sprite);
         files.add(candidate);
         candidates.push(candidate);
+        if (!source || !original) throw new Error('Missing original candidate evidence.');
+        candidateSources[candidate] = source;
+        await writeFile(path.join(stage, 'sources', source.sha256 + '.png'), original);
       }
-      plants.push({ name, ...(scientificName ? { scientificName } : {}), reference, candidates });
+      plants.push({ name, ...(scientificName ? { scientificName } : {}), reference, candidates, candidateSources });
     }
 
     const key = sha256(JSON.stringify([source, plants]));

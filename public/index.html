@@ -22,6 +22,15 @@
     }
 
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    .qc-panel { margin-block-end: 1.5rem; padding: 1.25rem; }
+    .qc-panel h2 { margin-block: 0 0.5rem; }
+    .qc-panel form { display: grid; gap: 0.8rem; }
+    .qc-panel label { display: grid; gap: 0.35rem; }
+    .qc-panel input, .qc-panel select, .qc-panel textarea { min-width: 0; padding: 0.5rem; font: inherit; }
+    .qc-panel button { justify-self: start; }
+    .qc-channels { display: flex; flex-wrap: wrap; gap: 1rem; }
+    #checkpoint, #qc-history { overflow-wrap: anywhere; white-space: pre-line; }
 
     body {
       min-block-size: 100vh;
@@ -248,14 +257,66 @@
   </header>
   <main>
     <div class="masthead">
-      <h1>Printer status</h1>
-      <div class="masthead-actions">
-        <button id="connect-webusb" type="button">Connect printer in Chrome</button>
-        <button id="refresh" type="button">Refresh status</button>
+      <h1>Physical proof</h1>
+      <div class="masthead-actions" id="connection-controls" hidden>
+        <button id="connect-webusb" type="button" disabled>Connect printer in Chrome</button>
+        <button id="refresh" type="button" disabled>Refresh status</button>
       </div>
     </div>
 
-    <section class="panel" aria-labelledby="connection">
+    <section class="panel qc-panel" aria-labelledby="attempt-title">
+      <h2 id="attempt-title">Physical attempt</h2>
+      <p id="attempt-status" role="status">Reading the local transport journal…</p>
+      <p id="checkpoint"></p>
+      <p id="owner-report" hidden>Owner report, 28 November 2026. Transport, cut alignment and kiss cut passed.
+        Print quality failed due to printer ribbon registration. The attempt is permanently locked.
+        No individual cyan, magenta or yellow result was supplied.</p>
+      <div id="locked-result" hidden>
+        <h3 id="locked-heading">Attempt locked. No resend.</h3>
+        <dl>
+          <div class="datum"><dt>Transport</dt><dd>Passed</dd></div>
+          <div class="datum"><dt>Cut alignment</dt><dd>Passed</dd></div>
+          <div class="datum"><dt>Kiss cut</dt><dd>Passed</dd></div>
+          <div class="datum"><dt>Print quality</dt><dd>Failed due to printer ribbon registration</dd></div>
+        </dl>
+      </div>
+      <form id="record-outcome" hidden>
+        <p>Confirm that the checkpoint above identifies the sheet reported on 28 November 2026.
+          Recording permanently locks the owner’s observation. Transport, cut alignment and kiss cut passed.
+          Print quality failed due to printer ribbon registration.</p>
+        <label>Actual observation time (UTC)
+          <input id="observed-at" type="text" required placeholder="YYYY-MM-DDTHH:mm:ss.sssZ"
+            pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z">
+        </label>
+        <button id="record-completed" type="submit">Record completed attempt</button>
+      </form>
+    </section>
+
+    <section id="ribbon-qc" class="panel qc-panel" aria-labelledby="qc-heading" hidden>
+      <h2 id="qc-heading">Post-print ribbon registration QC</h2>
+      <p>Cyan, magenta, and yellow ribbon-registration artifacts arise inside the printer. This is a physical
+        print defect, not an image-generation failure. Software generation QC cannot prevent it.</p>
+      <p id="qc-history" hidden></p>
+      <form id="physical-qc-form" hidden>
+        <div class="qc-channels">
+          <label>Cyan
+            <select id="cyan"><option value="uncertain">Uncertain</option><option value="pass">Pass</option><option value="fail">Fail</option></select>
+          </label>
+          <label>Magenta
+            <select id="magenta"><option value="uncertain">Uncertain</option><option value="pass">Pass</option><option value="fail">Fail</option></select>
+          </label>
+          <label>Yellow
+            <select id="yellow"><option value="uncertain">Uncertain</option><option value="pass">Pass</option><option value="fail">Fail</option></select>
+          </label>
+        </div>
+        <label>Evidence type <select id="qc-kind"><option value="operator_note">Operator note</option><option value="photo_reference">Photo reference</option></select></label>
+        <label>Evidence reference (optional) <input id="qc-reference" maxlength="512"></label>
+        <label>Inspection notes (optional) <textarea id="qc-notes" maxlength="2000" rows="2"></textarea></label>
+        <button id="record-qc" type="submit">Record ribbon registration QC</button>
+      </form>
+    </section>
+
+    <section id="printer-status" class="panel" aria-labelledby="connection" hidden>
       <div class="state-line">
         <span class="indicator" id="indicator" aria-hidden="true"></span>
         <h2 id="connection">Not connected</h2>
@@ -274,8 +335,8 @@
     <section class="panel proof-panel" aria-labelledby="proof-title">
       <div class="proof-heading">
         <div>
-          <h2 id="proof-title">Physical cut test</h2>
-          <p>Build and inspect first. Sending stays locked until this exact job is separately approved.</p>
+          <h2 id="proof-title">Generation preview</h2>
+          <p>Inspect the sRGB print JPEG and the separate blade path.</p>
         </div>
         <button id="prepare-proof" type="button">Prepare proof</button>
       </div>
@@ -297,10 +358,11 @@
             <div class="datum"><dt>Cut expansion</dt><dd id="proof-radius">—</dd></div>
             <div class="datum"><dt>Print JPEG</dt><dd><code id="proof-jpeg">—</code></dd></div>
             <div class="datum"><dt>Cut PLT</dt><dd><code id="proof-plt">—</code></dd></div>
+            <div class="datum"><dt>Software generation QC</dt><dd id="generation-qc">—</dd></div>
             <div class="datum"><dt>Approval fingerprint</dt><dd><code id="proof-fingerprint">—</code></dd></div>
           </dl>
-          <p id="proof-message" role="status" aria-live="polite">Nothing has been sent to the printer.</p>
-          <div class="proof-actions">
+          <p id="proof-message" role="status" aria-live="polite">Prepare the diagnostic to inspect its generation QC.</p>
+          <div class="proof-actions" id="proof-controls" hidden>
             <button id="send-proof" type="button" disabled>Send one sheet</button>
           </div>
         </div>
@@ -333,6 +395,101 @@
     let preparedProof = null;
     let webUsbSession = null;
     let sendStarted = false;
+    let journalEmpty = false;
+    let physicalEvidence = null;
+    const byId = id => document.getElementById(id);
+
+    function updatePrinterControls(empty) {
+      journalEmpty = empty;
+      byId('proof-controls').hidden = !empty;
+      byId('connection-controls').hidden = !empty;
+      byId('printer-status').hidden = !empty;
+      refreshButton.disabled = !empty || sendStarted;
+      connectButton.disabled = !empty || sendStarted || !supportsWebUsb();
+      sendButton.disabled = !empty || sendStarted || !preparedProof?.sendEnabled;
+      if (empty && !supportsWebUsb()) fields.message.textContent = 'Open this page in Chrome to connect with WebUSB.';
+    }
+
+    async function loadEvidence() {
+      try {
+        const response = await fetch('/api/physical-proof/evidence', { cache: 'no-store' });
+        const body = await response.json();
+        if (!response.ok || !body.ok) throw new Error('Original transport journal unavailable.');
+        physicalEvidence = body.evidence;
+        const checkpoint = physicalEvidence?.attempt;
+        const outcome = physicalEvidence?.outcome;
+        const qc = physicalEvidence?.ribbonRegistrationQc;
+        updatePrinterControls(physicalEvidence === null);
+        byId('checkpoint').textContent = checkpoint
+          ? `Submission ${checkpoint.submissionId} · Printer job ${checkpoint.printerJobId ?? 'unknown'} · ${checkpoint.evidenceHash}` : '';
+        byId('locked-result').hidden = !outcome;
+        byId('owner-report').hidden = !!outcome;
+        if (outcome) proofMessage.textContent = 'Offline preparation is available for inspecting the generation diagnostic.';
+        byId('record-outcome').hidden = !checkpoint?.fullyUploaded || !!outcome;
+        byId('ribbon-qc').hidden = !outcome;
+        byId('physical-qc-form').hidden = !outcome || !!qc;
+        byId('qc-history').hidden = !qc;
+        if (qc) {
+          const evidence = qc.evidence.map(item => `${item.kind === 'photo_reference' ? 'Photo reference' : 'Operator note'} — ${item.reference}`);
+          byId('qc-history').textContent = [
+            `Overall — ${body.ribbonOverall}`, `Cyan — ${qc.channels.cyan} · Magenta — ${qc.channels.magenta} · Yellow — ${qc.channels.yellow}`,
+            ...evidence, qc.notes, `Recorded ${qc.recordedAt}`,
+          ].filter(Boolean).join('\n');
+        }
+        byId('attempt-status').textContent = outcome ? `Observed ${outcome.observedAt}` : checkpoint?.fullyUploaded
+          ? 'Upload acknowledged. The physical observation is pending.' : checkpoint
+          ? `Operator reconciliation required. ${checkpoint.reason ?? checkpoint.phase} · ${checkpoint.acknowledgedFrames} frames acknowledged.`
+          : 'This journal contains no physical attempt.';
+        return true;
+      } catch {
+        physicalEvidence = null;
+        updatePrinterControls(false);
+        for (const id of ['locked-result', 'record-outcome', 'ribbon-qc', 'physical-qc-form', 'qc-history']) byId(id).hidden = true;
+        byId('owner-report').hidden = false;
+        byId('checkpoint').textContent = '';
+        byId('attempt-status').textContent = 'Original transport journal unavailable. The owner reported a locked attempt on 28 November 2026. Its journal identity is unconfirmed.';
+        return false;
+      }
+    }
+
+    async function appendObservation(path, record, button) {
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/physical-proof/' + path, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(record),
+        });
+        const body = await response.json();
+        if (!response.ok || !body.ok) throw new Error(body.error?.message ?? 'Recording failed.');
+        await loadEvidence();
+      } catch (error) {
+        const restored = await loadEvidence();
+        if (restored) byId('attempt-status').textContent += ' ' + error.message;
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    byId('record-outcome').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!physicalEvidence?.attempt.fullyUploaded || physicalEvidence.outcome || byId('record-completed').disabled) return;
+      const { evidenceHash, submissionId, printerJobId } = physicalEvidence.attempt;
+      await appendObservation('record-completed', {
+        recordVersion: 1, evidenceHash, submissionId, printerJobId, observedAt: byId('observed-at').value,
+        transport: 'passed', cutAlignment: 'passed', kissCut: 'passed',
+        printQuality: { status: 'failed', cause: 'printer_ribbon_registration' }, disposition: 'locked_no_resend',
+      }, byId('record-completed'));
+    });
+    byId('physical-qc-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!physicalEvidence?.outcome || physicalEvidence.ribbonRegistrationQc || byId('record-qc').disabled) return;
+      const reference = byId('qc-reference').value.trim();
+      await appendObservation('physical-qc', {
+        recordVersion: 1, evidenceHash: physicalEvidence.attempt.evidenceHash, recordedAt: new Date().toISOString(),
+        channels: { cyan: byId('cyan').value, magenta: byId('magenta').value, yellow: byId('yellow').value },
+        evidence: reference ? [{ kind: byId('qc-kind').value, reference }] : [],
+        notes: byId('qc-notes').value.trim() || null,
+      }, byId('record-qc'));
+    });
 
     function setText(element, value) {
       element.textContent = value ?? '—';
@@ -353,6 +510,7 @@
     }
 
     async function refreshStatus() {
+      if (!journalEmpty) return;
       if (!webUsbSession) {
         fields.message.textContent = 'Connect the printer in Chrome first.';
         return;
@@ -375,6 +533,7 @@
     }
 
     async function connectPrinter() {
+      if (!journalEmpty) return;
       if (!supportsWebUsb()) {
         fields.connection.textContent = 'Chrome required';
         fields.connection.classList.add('error');
@@ -415,7 +574,7 @@
         });
         const body = await response.json();
         if (!response.ok || !body.ok) throw new Error(body.error?.message ?? 'Proof preparation failed.');
-        preparedProof = body.proof;
+        preparedProof = { ...body.proof, sendEnabled: body.sendEnabled };
         setText(document.querySelector('#proof-title'), preparedProof.label);
         setText(document.querySelector('#proof-media'), `${preparedProof.media} · ${preparedProof.raster.width}×${preparedProof.raster.height}`);
         setText(document.querySelector('#proof-cut'), `${preparedProof.stickerCount} contours · KP${preparedProof.knifePressure} · ${preparedProof.copies} copy`);
@@ -427,10 +586,12 @@
         proofPreview.dataset.ready = 'true';
         cutOverlay.src = `/api/physical-proof/cut-preview.svg?fingerprint=${preparedProof.approvalFingerprint}`;
         cutOverlay.dataset.ready = 'true';
-        sendButton.disabled = !body.sendEnabled;
-        proofMessage.textContent = body.sendEnabled
+        const qc = preparedProof.generationQc;
+        if (qc) setText(byId('generation-qc'), `${qc.version} · RGB MAE (thousandths) ${qc.maeMilli.join('/')} · P99 ${qc.p99} · ${qc.highErrorPpm} ppm above 32 · worst tile bias ${qc.worstTileBias}`);
+        sendButton.disabled = !journalEmpty || !body.sendEnabled || sendStarted;
+        proofMessage.textContent = !sendButton.disabled
           ? 'Exact write approval is loaded. Review the preview, then click Send one sheet once.'
-          : 'Prepared only—nothing sent. The exact printer write still needs separate approval.';
+          : 'Generated from the verified pixels and cut mask.';
       } catch (error) {
         proofMessage.textContent = error.name === 'TimeoutError' ? 'Proof preparation timed out.' : error.message;
       } finally {
@@ -454,7 +615,7 @@
     }
 
     async function sendProof() {
-      if (!preparedProof || !webUsbSession || sendStarted ||
+      if (!journalEmpty || !preparedProof || !webUsbSession || sendStarted ||
           !window.confirm('Send this exact one-sheet print-and-cut job now? It will not be retried automatically.')) return;
       sendStarted = true;
       sendButton.disabled = true;
@@ -465,6 +626,7 @@
       let attemptId = null;
       let holdReason = 'declaration_outcome_unknown';
       try {
+        if (!await loadEvidence() || !journalEmpty) return;
         const snapshot = await webUsbSession.protocol.snapshot();
         renderSnapshot(snapshot);
         if (snapshot.status.state === 40 || snapshot.status.state === 60 || snapshot.status.alerts.length || snapshot.activeJobs.length) {
@@ -504,7 +666,9 @@
           try { await postCheckpoint('hold', { attemptId, reason: holdReason }); } catch {
           }
         }
-        proofMessage.textContent = `${error.message} Do not resend; reconcile the attempt first.`;
+        proofMessage.textContent = error.message;
+      } finally {
+        await loadEvidence();
       }
     }
 
@@ -512,10 +676,7 @@
     refreshButton.addEventListener('click', refreshStatus);
     prepareButton.addEventListener('click', prepareProof);
     sendButton.addEventListener('click', sendProof);
-    if (!supportsWebUsb()) {
-      connectButton.disabled = true;
-      fields.message.textContent = 'Open this page in Chrome to connect with WebUSB.';
-    }
+    void loadEvidence();
   </script>
 </body>
 </html>

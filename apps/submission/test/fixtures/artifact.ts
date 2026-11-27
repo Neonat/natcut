@@ -1,8 +1,9 @@
-import { DEVFEST_SG_V1, encodeLogicalSourceBundle } from '@natcut/domain';
+import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, encodeLogicalSourceBundle } from '@natcut/domain';
 import type { CreateSubmissionInput } from '../../src/repository.ts';
 
 const { sheetWidthPx: width, sheetHeightPx: height } = DEVFEST_SG_V1;
 export const bundle = await encodeLogicalSourceBundle({
+  colorEvidence: NATIVE_SRGB_EVIDENCE,
   profile: DEVFEST_SG_V1, width, height,
   rgba: new Uint8Array(width * height * 4), mask: new Uint8Array(width * height),
   renderVersion: 'fixture-v1', geometryVersion: 'natcut-geometry-v1',

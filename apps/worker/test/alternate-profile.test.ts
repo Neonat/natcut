@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { expect, it, vi } from 'vitest';
-import { encodeLogicalSourceBundle, resolvePrintProfile } from '@natcut/domain';
+import { NATIVE_SRGB_EVIDENCE, encodeLogicalSourceBundle, resolvePrintProfile } from '@natcut/domain';
 import { verifyArtifactBytes } from '@natcut/artifacts';
 import { JobStore, runWorkerOnce, SimulatedPrinter } from '../src/index.ts';
 import { claimFixture } from './fixtures/submission.ts';
@@ -25,6 +25,7 @@ it('journals the accepted profile snapshot and source dimensions for another reg
   const claim = claimFixture('alternate-profile');
   const ticket = claim.submission;
   const bundle = await encodeLogicalSourceBundle({
+    colorEvidence: NATIVE_SRGB_EVIDENCE,
     profile, width: 4, height: 3, rgba: new Uint8Array(48), mask: new Uint8Array(12),
     renderVersion: ticket.manifest.renderVersion, geometryVersion: ticket.validation.geometryVersion,
   });

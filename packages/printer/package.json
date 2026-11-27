@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./physical-qc": "./src/physical-qc.ts",
     "./transport-attempt": "./src/transport-attempt.ts"
   },
   "scripts": { "typecheck": "tsc -p tsconfig.json" },
@@ -12,7 +13,8 @@
     "@natcut/artifacts": "*",
     "@natcut/domain": "*",
     "better-sqlite3": "^13.2.0",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13"

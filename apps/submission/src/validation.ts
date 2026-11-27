@@ -41,7 +41,7 @@ export function createTrustedArtifactPreparer(
     const { combinedMask, contours, report } = await evaluateCutGeometry(masks, manifest.cutMarginMm, profile);
     const bundle = await encodeLogicalSourceBundle({
       profile, width: raster.width, height: raster.height,
-      rgba: raster.rgba, mask: combinedMask.data,
+      colorEvidence: raster.colorEvidence, rgba: raster.rgba, mask: combinedMask.data,
       renderVersion: manifest.renderVersion, geometryVersion: report.geometryVersion,
     });
     return { profile, raster, combinedMask, contours, report, bundle };
