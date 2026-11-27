@@ -57,8 +57,9 @@ export function assertPlanWithinSheet(plan: PlannedComposition): void {
 export function planComposition(
   manifest: CompositionManifest,
   profile: PrintProfile,
+  runtimeSpriteId?: string,
 ): PlannedComposition {
-  assertSupportedRecipe(manifest);
+  assertSupportedRecipe(manifest, runtimeSpriteId);
   const layers: PlannedLayer[] = [];
 
   if (manifest.trainerAssetId === null) {

@@ -255,12 +255,14 @@ it('revalidates fetched candidate PNG through the merged trusted sRGB boundary',
   const stage = vi.fn(async ({ png }: { png: Buffer }) => `sprite/${createHash('sha256').update(png).digest('hex')}`);
   const registrar = createTrustedCandidateRegistrar({ stage });
   const untagged = await sharp(Buffer.from([119, 255, 0, 255]), { raw: { width: 1, height: 1, channels: 4 } }).png().toBuffer();
-  await expect(registrar.stage({ plantJobId: 'job-1', candidate: candidateMeta, bytes: untagged })).rejects.toThrow(/untagged/i);
+  await expect(registrar.stage({ flowKey: key, generationIntentId: 'intent-1',
+    plantJobId: 'job-1', candidate: candidateMeta, bytes: untagged })).rejects.toThrow(/untagged/i);
   expect(stage).not.toHaveBeenCalled();
   const tagged = await sharp(Buffer.from([119, 255, 0, 255]), {
     raw: { width: 1, height: 1, channels: 4 },
   }).withIccProfile('srgb').png().toBuffer();
-  const assetId = await registrar.stage({ plantJobId: 'job-1', candidate: candidateMeta, bytes: tagged });
+  const assetId = await registrar.stage({ flowKey: key, generationIntentId: 'intent-1',
+    plantJobId: 'job-1', candidate: candidateMeta, bytes: tagged });
   expect(assetId).toMatch(/^sprite\/[a-f0-9]{64}$/);
   expect(stage.mock.calls[0]![0]).toMatchObject({ plantJobId: 'job-1', candidateId: 'candidate-1' });
   expect(() => assertSupportedRecipe({ ...catalogManifest, spriteAssetId: assetId })).toThrow(/unsupported catalog composition/i);

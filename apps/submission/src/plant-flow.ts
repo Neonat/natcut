@@ -21,18 +21,23 @@ export type StartPlantFlowInput = PlantFlowKey & {
 };
 
 export interface TrustedCandidateRegistrar {
-  stage(input: { plantJobId: string; candidate: PlantCandidate; bytes: Buffer }): Promise<string>;
+  stage(input: { flowKey: PlantFlowKey; generationIntentId: string;
+    plantJobId: string; candidate: PlantCandidate; bytes: Buffer }): Promise<string>;
 }
 
 export function createTrustedCandidateRegistrar(writer: {
-  stage(input: { png: Buffer; pngSha256: string; colorEvidence: Awaited<ReturnType<typeof normalizeSpritePng>>['colorEvidence'];
-    plantJobId: string; candidateId: string; sourceObjectGeneration: string }): Promise<string>;
+  stage(input: { sourcePng: Buffer; sourceSha256: string; sourceByteLength: number;
+    png: Buffer; pngSha256: string; colorEvidence: Awaited<ReturnType<typeof normalizeSpritePng>>['colorEvidence'];
+    flowKey: PlantFlowKey; generationIntentId: string; plantJobId: string;
+    candidateId: string; sourceObjectGeneration: string }): Promise<string>;
 }): TrustedCandidateRegistrar {
   return {
-    async stage({ plantJobId, candidate, bytes }) {
+    async stage({ flowKey, generationIntentId, plantJobId, candidate, bytes }) {
       const normalized = await normalizeSpritePng(bytes, candidate.candidateId, 20_000_000);
-      return writer.stage({ png: normalized.png, pngSha256: sourcePhotoDigest(normalized.png),
-        colorEvidence: normalized.colorEvidence, plantJobId, candidateId: candidate.candidateId,
+      return writer.stage({ sourcePng: bytes, sourceSha256: candidate.sha256, sourceByteLength: candidate.byteLength,
+        png: normalized.png, pngSha256: sourcePhotoDigest(normalized.png),
+        colorEvidence: normalized.colorEvidence, flowKey, generationIntentId,
+        plantJobId, candidateId: candidate.candidateId,
         sourceObjectGeneration: candidate.objectGeneration });
     },
   };
@@ -209,7 +214,8 @@ export function createPlantFlowCoordinator(deps: {
       try {
         natcutAssetId = await withinDeadline(observed, async signal => {
           const bytes = await deps.sprout.candidate(flow.plantJobId!, status.candidate!, signal);
-          return deps.registrar.stage({ plantJobId: flow.plantJobId!, candidate: status.candidate!, bytes });
+          return deps.registrar.stage({ flowKey: key, generationIntentId: flow.generationIntentId,
+            plantJobId: flow.plantJobId!, candidate: status.candidate!, bytes });
         });
       } catch (error) {
         if (!(error instanceof PlantDeadlineError) && !(error instanceof TypeError) &&

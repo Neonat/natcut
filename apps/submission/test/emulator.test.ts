@@ -1,12 +1,18 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { cert, getApps as getAdminApps, initializeApp as initializeAdminApp } from 'firebase-admin/app';
 import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import { deleteApp, initializeApp } from 'firebase/app';
 import { connectAuthEmulator, getAuth, signInAnonymously } from 'firebase/auth';
 import { connectFirestoreEmulator, doc, getFirestore, setDoc } from 'firebase/firestore';
 import { beforeAll, describe, expect, it } from 'vitest';
+import sharp from 'sharp';
+import { catalogManifest, normalizeSpritePng } from '@natcut/render';
+import { NATIVE_SRGB_EVIDENCE } from '@natcut/domain';
 import { IdempotencyConflictError, RequeueForbiddenError, createSubmissionRepository, createSurveyRepository } from '../src/index.ts';
 import { createPlantFlowRepository, PlantFlowConflictError } from '../src/plant-flow-repository.ts';
+import { createRuntimeSpriteRegistry, RuntimeSpriteIntegrityError, type RuntimeSpriteObjectStore } from '../src/runtime-sprite.ts';
+import { createAcceptedRuntimeArtifactPreparer } from '../src/runtime-preparation.ts';
+import { createTrustedArtifactPreparer } from '../src/validation.ts';
 import { artifact, submissionInput as input } from './fixtures/artifact.ts';
 
 const emulatorEnabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST && process.env.FIREBASE_AUTH_EMULATOR_HOST);
@@ -98,6 +104,69 @@ emulatorDescribe('Firebase emulator integration', () => {
     expect((await repository.recordAck(key, first.generationIntentId, winner.accepted!.decisionId, 'confirmed')).sproutAck).toBe('confirmed');
     expect((await repository.recordAck(key, first.generationIntentId, winner.accepted!.decisionId, 'needs_reconciliation')).sproutAck).toBe('confirmed');
     await expect(repository.recordAck(key, first.generationIntentId, 'wrong-decision', 'confirmed')).rejects.toBeInstanceOf(PlantFlowConflictError);
+  }, 20_000);
+
+  it('keeps a staged generated sprite out of print preparation until its exact acceptance and pinned generation', async () => {
+    const firestore = database();
+    const flows = createPlantFlowRepository(firestore);
+    const key = { eventId: 'runtime-event', visitorSessionId: 'runtime-visitor', captureId: 'runtime-capture' };
+    const flow = await flows.reserve({ ...key, requestFingerprint: 'a'.repeat(64),
+      liveDeadlineAt: '2099-01-01T00:00:00.000Z', fallbackAssetId: catalogManifest.spriteAssetId });
+    await flows.bind(key, flow.generationIntentId, 'runtime-job');
+    await flows.observe(key, flow.generationIntentId, 'eligible');
+    const source = await sharp(Buffer.from([119, 255, 0, 255]), {
+      raw: { width: 1, height: 1, channels: 4 },
+    }).withIccProfile('srgb').png().toBuffer();
+    const normalized = await normalizeSpritePng(source, 'runtime-candidate');
+    let generation = '17';
+    let stored = Buffer.from(normalized.png);
+    const objects: RuntimeSpriteObjectStore = {
+      async publishCreateOnly() { return { generation }; },
+      async readExact(_path, requested) {
+        if (requested !== generation) throw new RuntimeSpriteIntegrityError('Generation is missing.');
+        return Buffer.from(stored);
+      },
+    };
+    const registry = createRuntimeSpriteRegistry({ firestore, flows, objects });
+    const staged = { flowKey: key, generationIntentId: flow.generationIntentId,
+      plantJobId: 'runtime-job', candidateId: 'candidate-1', sourceObjectGeneration: '9',
+      sourcePng: source, sourceSha256: createHash('sha256').update(source).digest('hex'), sourceByteLength: source.length,
+      png: normalized.png, pngSha256: createHash('sha256').update(normalized.png).digest('hex'),
+      colorEvidence: normalized.colorEvidence };
+    await expect(registry.stage({ ...staged, colorEvidence: NATIVE_SRGB_EVIDENCE }))
+      .rejects.toThrow(/color evidence differs/i);
+    await expect(registry.stage({ ...staged, sourceSha256: '0'.repeat(64) }))
+      .rejects.toThrow(/source candidate digest/i);
+    const assetId = await registry.stage(staged);
+    expect(await registry.stage(staged)).toBe(assetId);
+    const runtimeManifest = { ...catalogManifest, spriteAssetId: assetId, renderVersion: 'runtime-catalog-v1' };
+    await expect(registry.loadAccepted(key, assetId)).rejects.toThrow(/no matching confirmed/i);
+    await expect(createAcceptedRuntimeArtifactPreparer(registry)(key, runtimeManifest)).rejects.toThrow(/no matching confirmed/i);
+    await expect(createTrustedArtifactPreparer()(runtimeManifest)).rejects.toThrow(/unsupported render version/i);
+    const decision = { decisionId: 'runtime-decision', decidedAt: '2026-11-28T00:00:01.000Z',
+      outcome: 'generated_accepted' as const, candidateId: 'candidate-1', natcutAssetId: assetId,
+      reason: 'candidate_approved_before_deadline' as const };
+    await flows.commit(key, flow.generationIntentId, decision);
+    await expect(registry.loadAccepted(key, assetId)).rejects.toThrow(/no matching confirmed/i);
+    await flows.recordAck(key, flow.generationIntentId, decision.decisionId, 'confirmed');
+    await expect(registry.loadAccepted({ ...key, captureId: 'different' }, assetId))
+      .rejects.toThrow(/no matching confirmed/i);
+    expect(await registry.stage(staged)).toBe(assetId);
+    await expect(registry.stage({ ...staged, candidateId: 'other-candidate' }))
+      .rejects.toThrow(/different candidate/i);
+    const loaded = await registry.loadAccepted(key, assetId);
+    expect(loaded.colorEvidence).toEqual(normalized.colorEvidence);
+    const prepared = await createAcceptedRuntimeArtifactPreparer(registry)(key, runtimeManifest);
+    expect(prepared.bundle.descriptor.formatVersion).toBe(2);
+    if (prepared.bundle.descriptor.formatVersion !== 2) throw new Error('Expected a v2 receipt.');
+    for (const sourceEvidence of normalized.colorEvidence.sources) {
+      expect(prepared.bundle.descriptor.colorEvidence.sources).toContainEqual(sourceEvidence);
+    }
+    stored = Buffer.from(stored);
+    stored[stored.length - 10] = stored[stored.length - 10]! ^ 1;
+    await expect(registry.loadAccepted(key, assetId)).rejects.toThrow(/digest or length|Invalid PNG/i);
+    generation = '18';
+    await expect(registry.loadAccepted(key, assetId)).rejects.toThrow(/Generation is missing/i);
   }, 20_000);
 
   it('counts queued tickets with future or malformed receipts without decoding unrelated artifacts', async () => {
