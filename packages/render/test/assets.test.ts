@@ -47,6 +47,39 @@ function tagPng(bytes: Buffer, type: string, value: Buffer) {
   return Buffer.concat([bytes.subarray(0, 33), chunk, bytes.subarray(33)]);
 }
 
+function sixteenBitSrgbPng() {
+  const chunk = (type: string, value: Buffer) => {
+    const result = Buffer.alloc(12 + value.length);
+    result.writeUInt32BE(value.length, 0);
+    result.write(type, 4);
+    value.copy(result, 8);
+    result.writeUInt32BE(crc32(result.subarray(4, -4)), result.length - 4);
+    return result;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(1, 0);
+  ihdr.writeUInt32BE(1, 4);
+  ihdr[8] = 16;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    chunk('IHDR', ihdr),
+    chunk('sRGB', Buffer.from([0])),
+    chunk('IDAT', deflateSync(Buffer.from([0, 0x77, 0x77, 0xff, 0xff, 0, 0]))),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+it('rejects tagged 16-bit sRGB samples before claiming they were preserved', async () => {
+  const png8 = tagPng(await sharp(Buffer.from([119, 255, 0]), {
+    raw: { width: 1, height: 1, channels: 3 },
+  }).png().toBuffer(), 'sRGB', Buffer.from([0]));
+  expect(Array.from((await loadRgbaAsset(png8, '8-bit')).rgba)).toEqual([119, 255, 0, 255]);
+  const png16 = sixteenBitSrgbPng();
+  expect(await sharp(png16).metadata()).toMatchObject({ depth: 'ushort', space: 'rgb16' });
+  await expect(loadRgbaAsset(png16, '16-bit')).rejects.toThrow(/bit depth.*8-bit/i);
+});
+
 it('accepts an explicit PNG sRGB declaration and rejects conflicting or duplicate declarations', async () => {
   const png = await swatch().png().toBuffer();
   const declared = tagPng(png, 'sRGB', Buffer.from([0]));

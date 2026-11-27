@@ -60,6 +60,9 @@ async function decodeAsset(input: Buffer, id: string, normalizedCatalog: boolean
   const bytes = Buffer.from(input);
   const image = sharp(bytes, { failOn: 'warning', ...(limitInputPixels === undefined ? {} : { limitInputPixels }) });
   const metadata = await image.metadata();
+  if (metadata.depth !== 'uchar') {
+    throw new Error('Unsupported source bit depth: trusted sRGB import requires 8-bit samples.');
+  }
   const icc = metadata.icc;
   const sourceProfileSha256 = icc ? sha256(icc) : null;
   const sourceSpace = sourceProfileSha256 ? recognizedIccSpace(sourceProfileSha256) : undefined;
@@ -77,8 +80,7 @@ async function decodeAsset(input: Buffer, id: string, normalizedCatalog: boolean
   } else if (!pngSrgb && !normalizedCatalog) {
     throw new Error('Untagged image requires a recognized color profile.');
   }
-  // libvips applies embedded ICC conversion in the decode pipeline. Specify the
-  // destination profile explicitly (also for 16-bit input) and reject codec warnings.
+  // libvips applies embedded ICC conversion in the decode pipeline.
   const { data, info } = await image.autoOrient().withIccProfile('srgb', { attach: false })
     .toColourspace('srgb').ensureAlpha().raw({ depth: 'uchar' }).toBuffer({ resolveWithObject: true });
   if (info.channels !== 4) throw new Error('Expected an RGBA8 raster after sRGB conversion.');

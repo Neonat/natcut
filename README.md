@@ -240,7 +240,7 @@ npm run test:e2e
 
 ### Verify generation QC offline
 
-New `logical/v2` receipts carry the sorted, deduplicated set of source color spaces, ICC digests and actions used in the composition, including native branding. External artwork needs a recognized ICC profile or an unambiguous PNG sRGB declaration. The importer preserves sRGB and converts recognized Display P3 or CMYK to sRGB. Untagged external artwork fails. Older `logical/v1` receipts and paths remain readable. Physical generation requires v2 color evidence.
+New `logical/v2` receipts carry the sorted, deduplicated set of source color spaces, ICC digests and actions used in the composition, including native branding. External artwork needs a recognized ICC profile or an unambiguous PNG sRGB declaration and 8-bit samples. The importer preserves sRGB and converts recognized Display P3 or CMYK to sRGB. Untagged and higher bit-depth external artwork fails at import; convert higher bit-depth sources to tagged 8-bit sRGB before review. Older `logical/v1` receipts and paths remain readable. Physical generation requires v2 color evidence.
 
 The print constructor consumes only RGBA color samples and their provenance. Its reference is the opaque, white-composited, padded sRGB RGB8 raster supplied to the JPEG encoder. The cut constructor consumes the expanded mask and produces a separate PLT. The display overlay is built from the finished JPEG and PLT. The former arbitrary-PNG physical-proof input is disabled.
 

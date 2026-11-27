@@ -88,7 +88,7 @@ The vendored tracer comments describe `KP` as `0–3`, but the current device-le
 
 ## Software generation QC
 
-For a reviewed sprite, retain the preview PNG, `roster.json` and its original tagged PNG under `sources/`. Import re-verifies the original digest and normalization. Unknown ICC profiles, conflicting declarations and untagged external artwork fail. Recognized Display P3 and CMYK inputs convert to sRGB. Existing packaged artwork is accepted through its digest-addressed normalized catalog. The v2 receipt includes the canonical set of source spaces, ICC digests and preserve/convert actions from all composed layers.
+For a reviewed sprite, retain the preview PNG, `roster.json` and its original tagged PNG under `sources/`. Import re-verifies the original digest and normalization. Unknown ICC profiles, conflicting declarations, untagged external artwork, and higher bit-depth samples fail. Normalize a 16-bit source to tagged 8-bit sRGB before review. Recognized Display P3 and CMYK 8-bit inputs convert to sRGB. Existing packaged artwork is accepted through its digest-addressed normalized catalog. The v2 receipt includes the canonical set of source spaces, ICC digests and preserve/convert actions from all composed layers.
 
 Inspect `outputs.jpeg.colorEvidence` and `outputs.jpeg.generationQc` in `evidence.json`. Only trusted RGBA8 enters the print raster. Only the verified binary mask enters the PLT. The red overlay is created for display from these two finished artifacts. A standalone uploaded PNG cannot be used in the physical proof.
 
