@@ -68,6 +68,28 @@ emulatorDescribe('survey repository', () => {
     expect(retry.survey.cuteRating).toBe(4);
     expect(retry.survey.email).toBeNull();
     expect((await firestore.collection('marketingLeads').where('email', '==', 'later@example.com').get()).empty).toBe(true);
+
+    await seedSubmission('foreign-after-survey', 'another-owner');
+    await seedSubmission('queued-after-survey', 'visitor-retry', 'queued');
+    await expect(repository.submit(input('visitor-retry', 'foreign-after-survey'))).rejects.toBeInstanceOf(SurveyUnavailableError);
+    await expect(repository.submit(input('visitor-retry', 'queued-after-survey'))).rejects.toBeInstanceOf(SurveyUnavailableError);
+  });
+
+  it('reports owner-authenticated eligibility and restores an accepted receipt', async () => {
+    await seedSubmission('collected-status', 'visitor-status');
+    expect(await repository.status({ ownerUid: 'visitor-status', eventId, stickerSubmissionId: 'collected-status' })).toEqual({
+      eligible: true,
+      submitted: false,
+    });
+    expect(await repository.status({ ownerUid: 'intruder', eventId, stickerSubmissionId: 'collected-status' })).toEqual({
+      eligible: false,
+      submitted: false,
+    });
+    await repository.submit(input('visitor-status', 'collected-status'));
+    expect(await repository.status({ ownerUid: 'visitor-status', eventId, stickerSubmissionId: 'collected-status' })).toEqual({
+      eligible: true,
+      submitted: true,
+    });
   });
 
   it('serializes concurrent tabs and creates only the winning marketing lead', async () => {

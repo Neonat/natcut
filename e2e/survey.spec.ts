@@ -38,6 +38,13 @@ test('stores feedback independently from an optional normalized marketing email'
   const optOutSurveyId = optOutSurvey.name.split('/').pop();
   expect((await collection(request, 'marketingLeads')).some((document) =>
     document.fields.optionalSubmissionId?.stringValue === optOutSurveyId)).toBe(false);
+  await optOutPage.reload();
+  await expect(optOutPage.getByText('Thanks for your feedback!')).toBeVisible();
+  const sharedLinkContext = await browser.newContext();
+  const sharedLinkPage = await sharedLinkContext.newPage();
+  await sharedLinkPage.goto(optOutPage.url());
+  await expect(sharedLinkPage.getByRole('heading', { name: 'Sticker collected' })).toBeVisible();
+  await expect(sharedLinkPage.getByRole('checkbox', { name: /product updates/i })).toHaveCount(0);
 
   const optInContext = await browser.newContext();
   const optInPage = await optInContext.newPage();
@@ -59,4 +66,5 @@ test('stores feedback independently from an optional normalized marketing email'
 
   await optOutContext.close();
   await optInContext.close();
+  await sharedLinkContext.close();
 });

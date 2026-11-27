@@ -153,6 +153,13 @@ class MemorySurveyRepository implements SurveyRepository {
     this.records.set(key, result);
     return result;
   }
+
+  async status(input: Pick<SurveyInput, 'ownerUid' | 'eventId' | 'stickerSubmissionId'>) {
+    const submission = this.submissions.records.get(input.stickerSubmissionId);
+    const eligible = Boolean(submission && submission.ownerUid === input.ownerUid
+      && submission.eventId === input.eventId && submission.publicStatus === 'collected');
+    return { eligible, submitted: eligible && this.records.has(`${input.eventId}:${input.ownerUid}`) };
+  }
 }
 
 describe('submission routes', () => {
@@ -280,6 +287,7 @@ describe('submission routes', () => {
     { stickerSubmissionId: 'submission-1', cuteRating: 5, marketingOptIn: true },
     { stickerSubmissionId: 'submission-1', cuteRating: 5, marketingOptIn: true, email: 'not-an-email' },
     { stickerSubmissionId: 'submission-1', cuteRating: 5, marketingOptIn: false, extra: true },
+    { stickerSubmissionId: 'nested/ticket', cuteRating: 5, marketingOptIn: false },
   ])('rejects an invalid or contradictory survey: %j', async (payload) => {
     expect((await submitSurvey(payload)).statusCode).toBe(400);
   });
@@ -312,6 +320,21 @@ describe('submission routes', () => {
     expect(first.statusCode).toBe(201);
     expect(retry.statusCode).toBe(200);
     expect(retry.json()).toEqual({ surveyId: first.json().surveyId, created: false });
+  });
+
+  it('authenticates survey eligibility and restores the submitted receipt', async () => {
+    const stickerSubmissionId = await collectedSubmission();
+    const status = (token = 'alice-token', id = stickerSubmissionId) => app.inject({
+      method: 'GET',
+      url: `/v1/surveys/status?stickerSubmissionId=${encodeURIComponent(id)}`,
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    expect((await status('')).statusCode).toBe(401);
+    expect((await status('invalid')).statusCode).toBe(401);
+    expect((await status('bob-token')).json()).toEqual({ eligible: false, submitted: false });
+    expect((await status()).json()).toEqual({ eligible: true, submitted: false });
+    await submitSurvey({ stickerSubmissionId, cuteRating: 5, marketingOptIn: false });
+    expect((await status()).json()).toEqual({ eligible: true, submitted: true });
   });
 
   it('rejects missing and invalid authentication', async () => {

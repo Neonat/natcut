@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { SurveyRequest, VisitorApi } from '../api.ts';
 
 const ratings = [1, 2, 3, 4, 5] as const;
@@ -10,8 +10,25 @@ export function SurveyCard(props: { stickerSubmissionId: string; api: VisitorApi
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [eligible, setEligible] = useState(false);
+  const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const emailIsValid = validEmail.test(email.trim());
+
+  useEffect(() => {
+    let current = true;
+    void props.api.getSurveyStatus(props.stickerSubmissionId)
+      .then((status) => {
+        if (!current) return;
+        setEligible(status.eligible);
+        setSubmitted(status.submitted);
+        setChecked(true);
+      })
+      .catch(() => { if (current) setChecked(true); });
+    return () => { current = false; };
+  }, [props.api, props.stickerSubmissionId]);
+
+  if (!checked || !eligible) return null;
 
   if (submitted) {
     return <section className="survey-card survey-thanks" aria-live="polite"><strong>Thanks for your feedback!</strong></section>;
@@ -43,7 +60,7 @@ export function SurveyCard(props: { stickerSubmissionId: string; api: VisitorApi
         <div className="rating-options">
           {ratings.map((value) => (
             <label key={value}>
-              <input type="radio" name="cute-rating" value={value} aria-label={`${value} ${value === 1 ? 'star' : 'stars'}`}
+              <input type="radio" name="cute-rating" value={value} aria-label={`${value} ${value === 1 ? 'star' : 'stars'}`} disabled={submitting}
                 checked={rating === value} onChange={() => setRating(value)} />
               <span aria-hidden="true">★</span>
             </label>
@@ -51,12 +68,12 @@ export function SurveyCard(props: { stickerSubmissionId: string; api: VisitorApi
         </div>
       </fieldset>
       <label className="marketing-choice">
-        <input type="checkbox" checked={marketingOptIn} onChange={(event) => setMarketingOptIn(event.target.checked)} />
+        <input type="checkbox" checked={marketingOptIn} disabled={submitting} onChange={(event) => setMarketingOptIn(event.target.checked)} />
         <span>Email me Sprout product updates <small>Optional</small></span>
       </label>
       {marketingOptIn ? (
         <label className="email-field">Email
-          <input type="email" value={email} autoComplete="email" onChange={(event) => setEmail(event.target.value)} />
+          <input type="email" value={email} autoComplete="email" disabled={submitting} onChange={(event) => setEmail(event.target.value)} />
         </label>
       ) : null}
       {error ? <div className="notice error" role="alert">{error}</div> : null}

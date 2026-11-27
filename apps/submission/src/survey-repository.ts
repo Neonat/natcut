@@ -36,6 +36,7 @@ export class SurveyUnavailableError extends Error {
 
 export interface SurveyRepository {
   submit(input: SurveyInput): Promise<SubmitSurveyResult>;
+  status(input: Pick<SurveyInput, 'ownerUid' | 'eventId' | 'stickerSubmissionId'>): Promise<{ eligible: boolean; submitted: boolean }>;
 }
 
 function documentId(...parts: string[]): string {
@@ -44,6 +45,14 @@ function documentId(...parts: string[]): string {
 
 export function createSurveyRepository(firestore: Firestore): SurveyRepository {
   return {
+    async status(input) {
+      const submission = (await firestore.collection('submissions').doc(input.stickerSubmissionId).get()).data();
+      const eligible = Boolean(submission && submission.ownerUid === input.ownerUid
+        && submission.eventId === input.eventId && submission.publicStatus === 'collected');
+      if (!eligible) return { eligible: false, submitted: false };
+      const surveyId = documentId(input.eventId, input.ownerUid);
+      return { eligible: true, submitted: (await firestore.collection('surveys').doc(surveyId).get()).exists };
+    },
     async submit(input) {
       const surveyId = documentId(input.eventId, input.ownerUid);
       const surveyRef = firestore.collection('surveys').doc(surveyId);
@@ -53,14 +62,13 @@ export function createSurveyRepository(firestore: Firestore): SurveyRepository {
 
       return firestore.runTransaction(async (transaction) => {
         const existing = await transaction.get(surveyRef);
-        if (existing.exists) {
-          return { surveyId, survey: SurveyRecordSchema.parse(existing.data()), created: false };
-        }
-
         const submission = await transaction.get(submissionRef);
         const data = submission.data();
         if (!submission.exists || data?.ownerUid !== input.ownerUid || data.eventId !== input.eventId || data.publicStatus !== 'collected') {
           throw new SurveyUnavailableError();
+        }
+        if (existing.exists) {
+          return { surveyId, survey: SurveyRecordSchema.parse(existing.data()), created: false };
         }
 
         const lead = leadRef ? await transaction.get(leadRef) : null;

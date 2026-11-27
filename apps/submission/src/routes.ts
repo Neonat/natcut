@@ -20,6 +20,7 @@ import type { ValidateManifest } from './validation.ts';
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const CuteRatingSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]);
+const FirestoreDocumentIdSchema = z.string().trim().min(1).max(256).regex(/^[^/]+$/);
 const CreateBodySchema = z
   .object({
     manifest: CompositionManifestSchema,
@@ -39,12 +40,12 @@ const CreateBodySchema = z
 
 const SurveyBodySchema = z.discriminatedUnion('marketingOptIn', [
   z.object({
-    stickerSubmissionId: z.string().trim().min(1).max(256),
+    stickerSubmissionId: FirestoreDocumentIdSchema,
     cuteRating: CuteRatingSchema,
     marketingOptIn: z.literal(false),
   }).strict(),
   z.object({
-    stickerSubmissionId: z.string().trim().min(1).max(256),
+    stickerSubmissionId: FirestoreDocumentIdSchema,
     cuteRating: CuteRatingSchema,
     marketingOptIn: z.literal(true),
     email: z.string().trim().email().max(254),
@@ -190,6 +191,24 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
       if (error instanceof SurveyUnavailableError) return reply.code(409).send({ error: 'SURVEY_NOT_AVAILABLE' });
       throw error;
     }
+  });
+
+  app.get(route('/v1/surveys/status'), async (request, reply) => {
+    const token = bearerTokenFromHeader(request.headers.authorization);
+    if (!token) return reply.code(401).send({ error: 'AUTH_REQUIRED' });
+    let visitor: Awaited<ReturnType<VerifyBearerToken>>;
+    try {
+      visitor = await deps.verifyBearerToken(token);
+    } catch {
+      return reply.code(401).send({ error: 'INVALID_AUTH' });
+    }
+    const parsed = z.object({ stickerSubmissionId: FirestoreDocumentIdSchema }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: 'INVALID_SURVEY_STATUS' });
+    return deps.surveyRepository.status({
+      ownerUid: visitor.uid,
+      eventId: deps.eventId,
+      stickerSubmissionId: parsed.data.stickerSubmissionId,
+    });
   });
 
   app.get<{ Params: { id: string } }>(route('/v1/submissions/:id/status'), async (request, reply) => {

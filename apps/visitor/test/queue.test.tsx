@@ -21,6 +21,7 @@ function api(publicStatus: PublicQueueStatus['publicStatus'] = 'queued'): Visito
     getStatus: vi.fn().mockResolvedValue(status(publicStatus)),
     leave: vi.fn().mockResolvedValue({ submissionId: 'submission-1', publicStatus: 'cancelled' }),
     submitSurvey: vi.fn().mockResolvedValue({ surveyId: 'survey-1', created: true }),
+    getSurveyStatus: vi.fn().mockResolvedValue({ eligible: true, submitted: false }),
   } as unknown as VisitorApi;
 }
 
@@ -47,6 +48,22 @@ describe('queue page', () => {
     view.unmount();
     render(<QueuePage submissionId="submission-1" statusToken="token" api={api('collected')} />);
     expect(await screen.findByRole('heading', { name: /are the stickers cute/i })).toBeTruthy();
+  });
+
+  it('hides marketing fields from a non-owner and restores thanks for the original session', async () => {
+    const otherApi = api('collected');
+    vi.mocked(otherApi.getSurveyStatus).mockResolvedValue({ eligible: false, submitted: false });
+    const view = render(<QueuePage submissionId="submission-1" statusToken="token" api={otherApi} />);
+    await screen.findByRole('heading', { name: /sticker collected/i });
+    await waitFor(() => expect(otherApi.getSurveyStatus).toHaveBeenCalled());
+    expect(screen.queryByRole('checkbox', { name: /product updates/i })).toBeNull();
+
+    view.unmount();
+    const ownerApi = api('collected');
+    vi.mocked(ownerApi.getSurveyStatus).mockResolvedValue({ eligible: true, submitted: true });
+    render(<QueuePage submissionId="submission-1" statusToken="token" api={ownerApi} />);
+    expect(await screen.findByText(/thanks for your feedback/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /send feedback/i })).toBeNull();
   });
 
   it('requires a rating and submits opt-out feedback without an email field', async () => {
@@ -99,6 +116,26 @@ describe('queue page', () => {
     fireEvent.click(screen.getByRole('button', { name: /send feedback/i }));
     expect(await screen.findByText(/thanks for your feedback/i)).toBeTruthy();
     expect(screen.getByRole('heading', { name: /sticker collected/i })).toBeTruthy();
+  });
+
+  it('freezes the displayed rating and consent choices while sending', async () => {
+    const visitorApi = api('collected');
+    let finish!: () => void;
+    vi.mocked(visitorApi.submitSurvey).mockReturnValue(new Promise((resolve) => {
+      finish = () => resolve({ surveyId: 'survey-1', created: true });
+    }));
+    render(<QueuePage submissionId="submission-1" statusToken="token" api={visitorApi} />);
+    const rating = await screen.findByRole('radio', { name: '5 stars' });
+    const optIn = screen.getByRole('checkbox', { name: /email me sprout product updates/i });
+    fireEvent.click(rating);
+    fireEvent.click(optIn);
+    fireEvent.change(screen.getByRole('textbox', { name: /email/i }), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /send feedback/i }));
+    expect(rating).toHaveProperty('disabled', true);
+    expect(optIn).toHaveProperty('disabled', true);
+    expect(screen.getByRole('textbox', { name: /email/i })).toHaveProperty('disabled', true);
+    finish();
+    expect(await screen.findByText(/thanks for your feedback/i)).toBeTruthy();
   });
 
   it('refreshes explicitly and uses the same refresh for a pull-down gesture', async () => {
