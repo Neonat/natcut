@@ -27,7 +27,7 @@ export const projects = [
     test: {
       name: 'worker',
       root: './apps/worker',
-      include: ['test/**/*.test.ts'],
+      include: ['test/**/*.test.{ts,mjs}'],
       environment: 'node',
     },
   },

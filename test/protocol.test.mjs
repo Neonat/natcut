@@ -110,6 +110,36 @@ test('maps identity, status, alerts and active jobs into one snapshot', async ()
   ]);
 });
 
+test('physical idle proof recognizes this PixCut firmware empty job-list shape', async () => {
+  const { io } = scriptedIo((request) => {
+    if (request.method === 'get-job-id-list') return { id: request.id, result: { 'job-id-list': '' } };
+    if (request.params.includes('model')) return { id: request.id, result: ['DHP700', 'DHP700W#EU1', '1.0.31_0074', 'x05', 5009] };
+    return { id: request.id, result: ['30', '2000', '::0'] };
+  });
+  const proof = await new ReadOnlyPixCut(io).physicalIdleProof();
+  assert.deepEqual(proof, {
+    firmwareShapeVerified: true,
+    status: { state: 30, sub: 2000, alerts: [] },
+    activeJobs: [],
+  });
+});
+
+test('physical idle proof rejects malformed job and alert replies instead of treating them as empty', async () => {
+  for (const malformed of [null, {}, [], { 'job-id-list': null }, { other: '' }]) {
+    const { io } = scriptedIo((request) => {
+      if (request.method === 'get-job-id-list') return { id: request.id, result: malformed };
+      if (request.params.includes('model')) return { id: request.id, result: ['DHP700', 'DHP700W#EU1', '1.0.31_0074', 'x05', 5009] };
+      return { id: request.id, result: ['20', '2000', '::0'] };
+    });
+    await assert.rejects(new ReadOnlyPixCut(io).physicalIdleProof(), /Unrecognized printer job-list/);
+  }
+  const { io } = scriptedIo((request) => {
+    if (request.params.includes('model')) return { id: request.id, result: ['DHP700', 'DHP700W#EU1', '1.0.31_0074', 'x05', 5009] };
+    return { id: request.id, result: ['20', '2000', null] };
+  });
+  await assert.rejects(new ReadOnlyPixCut(io).physicalIdleProof(), /Unrecognized printer status or alert/);
+});
+
 test('serializes concurrent read-only requests', async () => {
   let firstResolved = false;
   const writes = [];

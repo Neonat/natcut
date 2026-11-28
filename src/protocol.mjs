@@ -148,6 +148,34 @@ export class ReadOnlyPixCut {
       .filter((value) => value > 0) ?? [];
   }
 
+  // The physical sender needs stronger evidence than the diagnostics snapshot:
+  // malformed or unknown reply shapes must never mean an empty printer queue.
+  async physicalIdleProof() {
+    const identity = await this.identify();
+    if (identity.model !== 'DHP700' || typeof identity.sku !== 'string' || !identity.sku.startsWith('DHP700')) {
+      throw new Error('Unexpected PixCut identity for physical send.');
+    }
+    const properties = await this.#getProps(['printer-state', 'printer-sub-state', 'printer-state-alerts']);
+    const stateText = String(properties['printer-state']);
+    const subText = String(properties['printer-sub-state']);
+    const alertsText = properties['printer-state-alerts'];
+    if (!/^\d{1,3}$/.test(stateText) || !/^\d{1,4}$/.test(subText) ||
+        typeof alertsText !== 'string' || !/^::(?:0|[1-9]\d{0,5})$/.test(alertsText)) {
+      throw new Error('Unrecognized printer status or alert response for physical send.');
+    }
+    const response = await this.#request('get-job-id-list', {});
+    const result = response.result;
+    if (!result || typeof result !== 'object' || Array.isArray(result) ||
+        Object.keys(result).length !== 1 || typeof result['job-id-list'] !== 'string') {
+      throw new Error('Unrecognized printer job-list response for physical send.');
+    }
+    return {
+      firmwareShapeVerified: true,
+      status: { state: Number(stateText), sub: Number(subText), alerts: alertsText === '::0' ? [] : [Number(alertsText.slice(2))] },
+      activeJobs: result['job-id-list'] === '' ? [] : [result['job-id-list']],
+    };
+  }
+
   async snapshot() {
     const identity = await this.identify();
     const status = await this.status();
