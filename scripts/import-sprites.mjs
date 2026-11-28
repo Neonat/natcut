@@ -43,7 +43,33 @@ async function normalizeSprite(row, directory) {
   }
   const pngSha256 = hash(png);
   const entry = { name, ...(scientificName ? { scientificName } : {}), pngSha256, colorEvidence, width: side, height: side };
-  return { entry: { id: catalogSpriteId(entry), ...entry }, png };
+  const variants = [];
+  if (row.phraseFiles !== undefined) {
+    if (!Array.isArray(row.phraseFiles) || row.phraseFiles.length !== 2) {
+      throw new Error(`Expected exactly two phrase PNGs for ${name}.`);
+    }
+    for (const file of row.phraseFiles) {
+      if (typeof file !== 'string' || file !== path.basename(file) || !/\.png$/i.test(file)) {
+        throw new Error(`Expected a phrase PNG filename for ${name}.`);
+      }
+      const { png: companion, side: companionSide, colorEvidence: companionColor } =
+        await normalizeSpritePng(await readFile(path.join(directory, file)), name + ' phrase');
+      const digest = hash(companion);
+      variants.push({
+        entry: { id: 'sprite/variant/' + digest, pngSha256: digest,
+          colorEvidence: companionColor, width: companionSide, height: companionSide },
+        png: companion,
+      });
+    }
+    if (new Set(variants.map((variant) => variant.entry.pngSha256)).size !== 2) {
+      throw new Error(`Duplicate phrase artwork for ${name}.`);
+    }
+  }
+  return {
+    entry: { id: catalogSpriteId(entry), ...entry,
+      ...(variants.length ? { variants: variants.map((variant) => variant.entry) } : {}) },
+    png, variants,
+  };
 }
 
 function processIsAlive(pid) {
@@ -117,11 +143,15 @@ async function publish(input, out) {
   const images = new Map();
   const names = new Set();
   for (const row of rows) {
-    const { entry, png } = await normalizeSprite(row, path.dirname(input));
+    const { entry, png, variants } = await normalizeSprite(row, path.dirname(input));
     const key = entry.name.toLowerCase();
     if (names.has(key) || images.has(entry.pngSha256)) throw new Error(`Duplicate plant name or artwork: ${entry.name}.`);
     names.add(key);
     images.set(entry.pngSha256, png);
+    for (const variant of variants) {
+      if (images.has(variant.entry.pngSha256)) throw new Error(`Duplicate artwork: ${entry.name}.`);
+      images.set(variant.entry.pngSha256, variant.png);
+    }
     entries.push(entry);
   }
 
