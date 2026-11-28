@@ -132,6 +132,28 @@ async function publishVerifiedReady(
   }
 }
 
+// Publish an operator-observed physical completion without claiming another ticket.
+// The caller must first stage an exact, durable ready transition.
+export async function publishStagedReady(
+  store: JobStore,
+  cloud: CloudQueue,
+  workerId: string,
+  submissionId: string,
+): Promise<WorkerResult> {
+  const guardToken = randomUUID();
+  if (!store.tryAcquireExecutionGuard(guardToken, process.pid)) return { kind: 'busy', submissionId };
+  try {
+    const outcome = await publishVerifiedReady(store, cloud, workerId, submissionId, guardToken);
+    if (outcome) return outcome;
+    const job = store.getBySubmissionId(submissionId);
+    return job?.state === 'ready' && job.completionAcknowledgedAt
+      ? { kind: 'completed', submissionId }
+      : { kind: 'needs_reconciliation', submissionId };
+  } finally {
+    store.releaseExecutionGuard(guardToken);
+  }
+}
+
 function publicStatusFor(state: LocalJobState): 'next' | 'printing' | 'ready' {
   if (state === 'ready') return 'ready';
   if (['declaring', 'uploading_cut', 'uploading_image', 'printing', 'cutting'].includes(state)) return 'printing';
@@ -279,7 +301,7 @@ export async function runLocalJob(
     let staged = publicStatusFor(authoritativeJob.state);
     let completionPending: WorkerResult | null = null;
     try {
-      await deps.executor.execute(authoritativeJob, async (state, changedAt) => {
+      await deps.executor.execute(authoritativeJob, async (state, changedAt, reason) => {
         const nextPublic = publicStatusFor(state);
         if (staged === 'next' && nextPublic === 'printing') {
           const journalExecutionToken = deps.store.getOrCreateExecutionToken(job.submissionId);
@@ -299,7 +321,7 @@ export async function runLocalJob(
             throw new ExecutionFenceError('needs_reconciliation');
           }
           staged = 'printing';
-          deps.store.transition(job.submissionId, state, changedAt);
+          deps.store.transition(job.submissionId, state, changedAt, reason);
           return;
         }
         if (nextPublic === 'ready' && staged !== 'ready') {
@@ -310,7 +332,7 @@ export async function runLocalJob(
           if (completion?.kind === 'needs_reconciliation') throw new ExecutionFenceError('needs_reconciliation');
           if (completion?.kind === 'waiting_for_cloud') completionPending = completion;
         } else {
-          deps.store.transition(job.submissionId, state, changedAt);
+          deps.store.transition(job.submissionId, state, changedAt, reason);
         }
       });
       if (completionPending) return completionPending;
