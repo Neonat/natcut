@@ -40,6 +40,12 @@ describe('visitor simulation', () => {
 });
 
 describe('queue page', () => {
+  it('explains a token-free link opened without the original tab storage', () => {
+    const visitorApi = api();
+    render(<QueuePage submissionId="submission-1" statusToken="" api={visitorApi} />);
+    expect(screen.getByRole('heading', { name: /open your original queue tab/i })).toBeTruthy();
+    expect(visitorApi.getStatus).not.toHaveBeenCalled();
+  });
   it('offers feedback only after the sticker is collected', async () => {
     const view = render(<QueuePage submissionId="submission-1" statusToken="token" api={api('ready')} />);
     await screen.findByRole('heading', { name: /ready for pickup/i });

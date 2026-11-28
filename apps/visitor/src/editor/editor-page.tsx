@@ -71,7 +71,7 @@ export function EditorPage(props: EditorPageProps) {
     try { statusToken = sessionStorage.getItem(`natcut:status:${accepted.submissionId}`); }
     catch { return; }
     if (!statusToken) return;
-    const path = `/queue/${accepted.submissionId}#token=${statusToken}`;
+    const path = `/queue/${accepted.submissionId}`;
     if (props.onNavigate) props.onNavigate(path);
     else window.location.assign(path);
   }, []);
@@ -120,7 +120,7 @@ export function EditorPage(props: EditorPageProps) {
         try { sessionStorage.setItem(`natcut:draft:${accepted.submissionId}`, JSON.stringify(manifest)); }
         catch { /* A full tab store should still open the accepted ticket. */ }
       }
-      const path = `/queue/${accepted.submissionId}#token=${accepted.statusToken}`;
+      const path = `/queue/${accepted.submissionId}`;
       if (props.onNavigate) props.onNavigate(path);
       else window.location.assign(path);
     } catch (cause) {

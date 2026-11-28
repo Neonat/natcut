@@ -217,7 +217,7 @@ describe('mobile editor', () => {
     loadVisibleArtwork(reloaded.container);
     fireEvent.click(screen.getByRole('button', { name: /join print queue/i }));
 
-    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/queue/${accepted.submissionId}#token=${accepted.statusToken}`));
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/queue/${accepted.submissionId}`));
     expect(submitSubmission).toHaveBeenCalledTimes(2);
     expect(submitSubmission.mock.calls[1]![0].idempotencyKey).toBe(submitSubmission.mock.calls[0]![0].idempotencyKey);
     const stored = JSON.parse(sessionStorage.getItem('natcut:submission-attempt:v1')!);
@@ -240,7 +240,7 @@ describe('mobile editor', () => {
     const recoveredNavigation = vi.fn();
     render(<EditorPage submitSubmission={submitSubmission} previewReportOverride={{ ...warningReport(), severity: 'ok', issues: [] }} onNavigate={recoveredNavigation} />);
 
-    await waitFor(() => expect(recoveredNavigation).toHaveBeenCalledWith(`/queue/${accepted.submissionId}#token=${accepted.statusToken}`));
+    await waitFor(() => expect(recoveredNavigation).toHaveBeenCalledWith(`/queue/${accepted.submissionId}`));
     expect(submitSubmission).toHaveBeenCalledTimes(1);
   });
 
