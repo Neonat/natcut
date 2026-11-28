@@ -83,7 +83,10 @@ it('previews the accepted generated sprite through its private blob URL', async 
   });
   fireEvent.click(screen.getByRole('button', { name: /create my sprite/i }));
   expect(await screen.findByRole('heading', { name: /your sprite sticker/i })).toBeTruthy();
-  expect(document.querySelector('.sticker-preview image')?.getAttribute('href')).toBe('blob:accepted-sprite');
+  expect(screen.getByRole('heading', { name: 'Three memes' })).toBeTruthy();
+  expect(Array.from(document.querySelectorAll('.sticker-preview image')).some(
+    image => image.getAttribute('href') === 'blob:accepted-sprite',
+  )).toBe(true);
   expect(api.acceptedSprite).toHaveBeenCalledOnce();
 });
 

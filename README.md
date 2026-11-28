@@ -104,12 +104,12 @@ Scan the QR on a real phone to verify the network between devices.
 
 ### Import a named sprite roster
 
-Monstera and Prickly pear are the two rehearsal fixtures. To supply event artwork, put a JSON roster beside the source PNGs in a local folder outside the repository. Each row names one sprite and its PNG. A scientific name is optional.
+The active catalog contains eleven reviewed plant sprites. Prickly pear is archived for historical submission receipts and is not a visitor choice. To supply event artwork, put a JSON roster beside the source PNGs in a local folder outside the repository. Each row names one sprite and its PNG. A scientific name is optional.
 
 ```json
 [
   { "name": "Monstera", "scientificName": "Monstera deliciosa", "file": "monstera.png" },
-  { "name": "Prickly pear", "file": "prickly-pear.png" }
+  { "name": "Sunflower", "file": "sunflower.png" }
 ]
 ```
 
@@ -118,6 +118,8 @@ npm run sprites:import -- --input /path/to/approved-art/roster.json
 ```
 
 Each batch supplies the complete picker roster. The importer fits each image on a transparent square up to 760 pixels across and publishes the catalog in `packages/render/catalog`. Use `--out <directory>` to inspect a separate catalog. Commit the generated index and PNGs together. Changed names or artwork receive new IDs. Earlier IDs retain their artwork for accepted tickets and offline proof.
+
+The visitor's reviewed catalog path defaults to the three-design meme sheet. The old one- and two-sticker layout controls are hidden. Eight-pose selection needs trusted, individually reviewed pose sheets and remains a release gate; do not present the existing review montage as a printable option.
 
 ### Review sprite candidates offline
 
