@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { geometryIssuesHash, manifestHash, type CompositionManifest, type GeometryReport, type LogicalSourceBundle, type PublicStatus, type Submission } from '@natcut/domain';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { artifact, bundle } from './fixtures/artifact.ts';
+import { catalogManifest } from '@natcut/render';
+import type { createPlantFlowCoordinator } from '../src/plant-flow.ts';
 import {
   IdempotencyConflictError,
   RequeueForbiddenError,
@@ -206,6 +208,52 @@ describe('submission routes', () => {
       now: () => '2026-11-23T12:00:00.000Z',
     });
   });
+
+  it.each(['catalog_fallback_accepted', 'generated_accepted'] as const)(
+    'binds the first %s ticket to the capture across retries and changed layouts', async outcome => {
+      const runtimeId = `sprite/runtime/${'a'.repeat(64)}`;
+      const accepted = outcome === 'generated_accepted'
+        ? { outcome, natcutAssetId: runtimeId }
+        : { outcome, catalogAssetId: catalogManifest.spriteAssetId };
+      const chosen = outcome === 'generated_accepted'
+        ? { ...catalogManifest, renderVersion: 'runtime-catalog-v1', spriteAssetId: runtimeId }
+        : catalogManifest;
+      const server = buildSubmissionServer({
+        eventId: 'devfest-sg', statusTokenSecret: 'test-secret-at-least-32-bytes-long', repository,
+        surveyRepository, verifyBearerToken: async token => {
+          if (token !== 'alice-token') throw new Error('auth');
+          return { uid: 'alice' };
+        },
+        prepareArtifact, publisher: { publish },
+        plant: {
+          policyVersion: 'policy-v1',
+          captureSource: {
+            async findOwned(uid, _eventId, captureId) {
+              return uid === 'alice' && captureId === 'capture' ? { captureId, visitorSessionId: 'session' } : null;
+            },
+            async resolveConfirmed() { return null; },
+          },
+          coordinator: { async advance() { return { state: 'accepted', generationIntentId: 'intent',
+            decision: accepted, sproutAck: outcome === 'generated_accepted' ? 'confirmed' : 'pending' }; } } as unknown as ReturnType<typeof createPlantFlowCoordinator>,
+          verifyRuntimeAcceptance: async () => {},
+          prepareRuntimeArtifact: async () => ({ report: report(), bundle }),
+        },
+      });
+      const post = (idempotencyKey: string, recipe: object) => server.inject({ method: 'POST',
+        url: '/v1/plant-jobs/capture/submissions', headers: { authorization: 'Bearer alice-token' },
+        payload: { idempotencyKey, manifest: recipe } });
+      try {
+        const first = await post('phone-first', chosen);
+        expect(first.statusCode).toBe(201);
+        const recovered = await post('phone-reloaded', chosen);
+        expect(recovered.statusCode).toBe(200);
+        expect(recovered.json().submissionId).toBe(first.json().submissionId);
+        expect((await post('new-layout', { ...chosen, sheetVariant: 'duo' })).statusCode).toBe(409);
+        expect(repository.records.size).toBe(1);
+        expect(publish).toHaveBeenCalledOnce();
+      } finally { await server.close(); }
+    },
+  );
 
   it('accepts packaged sprites and rejects unsupported versions, roles and catalog combinations before writing tickets', async () => {
     const index = (await import('../../../packages/render/catalog/index.json', { with: { type: 'json' } })).default;

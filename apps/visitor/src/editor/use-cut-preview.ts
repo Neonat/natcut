@@ -2,7 +2,7 @@ import type { CompositionManifest, GeometryReport } from '@natcut/domain';
 import { useEffect, useRef, useState } from 'react';
 
 export type ContourPreview = Array<{ x: number; y: number }>;
-export type CutPreviewRequest = { revision: number; exact: true; manifest: CompositionManifest };
+export type CutPreviewRequest = { revision: number; exact: true; manifest: CompositionManifest; runtimeSpriteUrl?: string };
 export type CutPreviewResult = { revision: number; manifestFingerprint?: string } & (
   | { report: GeometryReport; contours: ContourPreview[]; error?: never }
   | { error: string; report?: never; contours?: never }
@@ -17,6 +17,7 @@ export class CutPreviewCoordinator {
     private readonly post: (request: CutPreviewRequest) => void,
     private readonly apply: (result: CutPreviewResult) => void,
     private readonly debounceMs = 180,
+    private readonly runtimeSpriteUrl?: string,
   ) {}
 
   move(manifest: CompositionManifest) {
@@ -25,7 +26,7 @@ export class CutPreviewCoordinator {
     this.latestRequested = revision;
     this.timer = setTimeout(() => {
       this.timer = null;
-      this.post({ revision, exact: true, manifest });
+      this.post({ revision, exact: true, manifest, ...(this.runtimeSpriteUrl ? { runtimeSpriteUrl: this.runtimeSpriteUrl } : {}) });
     }, this.debounceMs);
   }
 
@@ -34,7 +35,7 @@ export class CutPreviewCoordinator {
     this.timer = null;
     const revision = ++this.revision;
     this.latestRequested = revision;
-    this.post({ revision, exact: true, manifest });
+    this.post({ revision, exact: true, manifest, ...(this.runtimeSpriteUrl ? { runtimeSpriteUrl: this.runtimeSpriteUrl } : {}) });
   }
 
   receive(result: CutPreviewResult) {
@@ -58,13 +59,13 @@ function defaultWorker(): WorkerPort | null {
   return new Worker(new URL('../workers/cut-preview.worker.ts', import.meta.url), { type: 'module' });
 }
 
-export function useCutPreview(workerFactory: () => WorkerPort | null = defaultWorker) {
+export function useCutPreview(workerFactory: (() => WorkerPort | null) | undefined = defaultWorker, runtimeSpriteUrl?: string) {
   const [result, setResult] = useState<CutPreviewResult | null>(null);
   const coordinator = useRef<CutPreviewCoordinator | null>(null);
 
   useEffect(() => {
     const port = workerFactory();
-    const next = new CutPreviewCoordinator((request) => port?.postMessage(request), setResult);
+    const next = new CutPreviewCoordinator((request) => port?.postMessage(request), setResult, 180, runtimeSpriteUrl);
     coordinator.current = next;
     const listener = (event: MessageEvent<CutPreviewResult>) => next.receive(event.data);
     port?.addEventListener('message', listener);
@@ -73,7 +74,7 @@ export function useCutPreview(workerFactory: () => WorkerPort | null = defaultWo
       port?.removeEventListener('message', listener);
       port?.terminate?.();
     };
-  }, [workerFactory]);
+  }, [workerFactory, runtimeSpriteUrl]);
 
   return {
     result,

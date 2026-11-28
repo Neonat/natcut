@@ -57,22 +57,30 @@ export function assertPlanWithinSheet(plan: PlannedComposition): void {
 export function planComposition(
   manifest: CompositionManifest,
   profile: PrintProfile,
+  runtimeSpriteId?: string,
 ): PlannedComposition {
-  assertSupportedRecipe(manifest);
+  assertSupportedRecipe(manifest, runtimeSpriteId);
   const layers: PlannedLayer[] = [];
 
   if (manifest.trainerAssetId === null) {
-    layers.push({
-      id: 'sprite',
-      member: 'sprite',
-      assetId: manifest.spriteAssetId,
-      cutGroupId: cutGroupFor(manifest, 'sprite'),
-      x: 220,
-      y: 470,
-      width: 760,
-      height: 760,
-      zIndex: 10,
-    });
+    const placements = manifest.sheetVariant === 'trio'
+      ? [{ x: 360, y: 110, size: 480 }, { x: 360, y: 700, size: 480 }, { x: 360, y: 1290, size: 480 }]
+      : manifest.sheetVariant === 'duo'
+        ? [{ x: 300, y: 260, size: 600 }, { x: 300, y: 1080, size: 600 }]
+        : [{ x: 220, y: 470, size: 760 }];
+    for (const [index, placement] of placements.entries()) {
+      layers.push({
+        id: index === 0 ? 'sprite' : `sprite-${index + 1}`,
+        member: 'sprite',
+        assetId: manifest.spriteAssetId,
+        cutGroupId: cutGroupFor(manifest, 'sprite'),
+        x: placement.x,
+        y: placement.y,
+        width: placement.size,
+        height: placement.size,
+        zIndex: 10,
+      });
+    }
   } else {
     layers.push(
       {

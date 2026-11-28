@@ -52,16 +52,19 @@ export function spriteChoices(
   return selected && !active.some((entry) => entry.id === selectedId) ? Object.freeze([...active, selected]) : active;
 }
 
-export function assertSupportedRecipe(manifest: CompositionManifest): void {
+export function assertSupportedRecipe(manifest: CompositionManifest, runtimeSpriteId?: string): void {
   if (manifest.renderVersion === 'fixture-v1') {
     if (manifest.spriteAssetId !== legacySprite || (manifest.trainerAssetId !== null && manifest.trainerAssetId !== legacyTrainer)) {
       throw new Error('Unknown fixture layer asset.');
     }
     return;
   }
-  if (manifest.renderVersion !== 'catalog-v1') throw new Error('Unsupported render version.');
+  const runtime = manifest.renderVersion === 'runtime-catalog-v1' &&
+    runtimeSpriteId !== undefined && manifest.spriteAssetId === runtimeSpriteId &&
+    /^sprite\/runtime\/[a-f0-9]{64}$/.test(runtimeSpriteId);
+  if (manifest.renderVersion !== 'catalog-v1' && !runtime) throw new Error('Unsupported render version.');
   const [main, brand] = manifest.cutGroups;
-  if (!byId.has(manifest.spriteAssetId) || manifest.theme !== 'default' || manifest.brandingVariant !== 'logo'
+  if (!(runtime || byId.has(manifest.spriteAssetId)) || manifest.theme !== 'default' || manifest.brandingVariant !== 'logo'
     || manifest.trainerAssetId !== null || manifest.cutGroups.length !== 2
     || main?.id !== 'main' || main.members.length !== 1 || main.members[0] !== 'sprite'
     || brand?.id !== 'brand' || brand.members.length !== 1 || brand.members[0] !== 'branding') {

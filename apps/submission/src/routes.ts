@@ -20,6 +20,9 @@ import {
 } from './repository.ts';
 import { SurveyUnavailableError, type SurveyRepository } from './survey-repository.ts';
 import type { PreparedTrustedArtifact } from './validation.ts';
+import type { PlantFlowKey } from './plant-flow-repository.ts';
+import { registerPlantRoutes, type PlantRouteDependencies } from './plant-routes.ts';
+import { registerPlantCaptureRoute } from './plant-capture-routes.ts';
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const CuteRatingSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]);
@@ -40,6 +43,7 @@ const CreateBodySchema = z
     requeuedFrom: FirestoreDocumentIdSchema.nullable().optional(),
   })
   .strict();
+const RuntimeCreateBodySchema = CreateBodySchema.omit({ requeuedFrom: true });
 
 const SurveyBodySchema = z.discriminatedUnion('marketingOptIn', [
   z.object({
@@ -66,6 +70,11 @@ export type SubmissionServerDependencies = {
   now?: () => string;
   corsOrigin?: boolean | string | RegExp;
   routePrefix?: '' | `/${string}`;
+  plant?: Omit<PlantRouteDependencies, 'eventId' | 'verifyBearerToken' | 'submitRuntime'> & {
+    verifyRuntimeAcceptance: (flowKey: PlantFlowKey, manifest: CompositionManifest) => Promise<unknown>;
+    prepareRuntimeArtifact: (flowKey: PlantFlowKey, manifest: CompositionManifest) => Promise<Pick<PreparedTrustedArtifact, 'report' | 'bundle'>>;
+  };
+  plantCapture?: { confirm(ownerUid: string, eventId: string, captureId: string, raw: Buffer): Promise<{ captureId: string; status: 'confirmed' }> };
 };
 
 function hashToken(token: string): string {
@@ -123,6 +132,9 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
     if (!parsed.success) return reply.code(400).send({ error: 'INVALID_SUBMISSION', details: parsed.error.issues });
 
     const { manifest, idempotencyKey, warningAcknowledgement } = parsed.data;
+    if (manifest.renderVersion === 'runtime-catalog-v1') {
+      return reply.code(422).send({ error: 'RUNTIME_ARTWORK_REQUIRES_ACCEPTED_FLOW' });
+    }
     const lookup = {
       ownerUid: visitor.uid, eventId: deps.eventId, idempotencyKey,
       manifestHash: await manifestHash(manifest), requeuedFrom: parsed.data.requeuedFrom ?? null,
@@ -253,6 +265,84 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
     if (result === 'not-found') return reply.code(404).send({ error: 'SUBMISSION_NOT_FOUND' });
     if (result === 'locked') return reply.code(409).send({ error: 'QUEUE_LEAVE_LOCKED' });
     return { submissionId: request.params.id, publicStatus: 'cancelled' };
+  });
+
+  if (deps.plant) {
+    const plant = deps.plant;
+    registerPlantRoutes(app, routePrefix, {
+      ...plant, eventId: deps.eventId, verifyBearerToken: deps.verifyBearerToken,
+      async submitRuntime(ownerUid, flowKey, body) {
+        const parsed = RuntimeCreateBodySchema.safeParse(body);
+        if (!parsed.success) {
+          return { statusCode: 400, payload: { error: 'INVALID_PLANT_SUBMISSION' } };
+        }
+        const { manifest, warningAcknowledgement } = parsed.data;
+        const state = await plant.coordinator.advance(flowKey);
+        if (state.state !== 'accepted' ||
+          (state.decision.outcome === 'generated_accepted' && state.sproutAck !== 'confirmed')) {
+          return { statusCode: 409, payload: { error: 'PLANT_ARTWORK_NOT_ACCEPTED' } };
+        }
+        const generated = state.decision.outcome === 'generated_accepted';
+        if (state.decision.outcome === 'generated_accepted') {
+          if (manifest.renderVersion !== 'runtime-catalog-v1' || manifest.spriteAssetId !== state.decision.natcutAssetId) {
+            return { statusCode: 409, payload: { error: 'PLANT_ARTWORK_MISMATCH' } };
+          }
+          try { await plant.verifyRuntimeAcceptance(flowKey, manifest); }
+          catch { return { statusCode: 409, payload: { error: 'RUNTIME_ARTWORK_NOT_ACCEPTED' } }; }
+        } else if (manifest.renderVersion !== 'catalog-v1' || manifest.spriteAssetId !== state.decision.catalogAssetId) {
+          return { statusCode: 409, payload: { error: 'PLANT_ARTWORK_MISMATCH' } };
+        }
+        // The capture owns one physical ticket. A new client nonce or layout cannot create another.
+        const scopedKey = 'plant-' + createHash('sha256').update(`${flowKey.eventId}\0${flowKey.visitorSessionId}\0${flowKey.captureId}`).digest('hex');
+        const lookup = { ownerUid, eventId: deps.eventId, idempotencyKey: scopedKey,
+          manifestHash: await manifestHash(manifest), requeuedFrom: null };
+        const publicStatusToken = statusToken(deps.statusTokenSecret, ownerUid, deps.eventId, scopedKey);
+        const accepted = (submission: Submission, created: boolean) => ({ statusCode: created ? 201 : 200, payload: {
+          submissionId: submission.id, queueNumber: submission.queueNumber, jobsAhead: submission.jobsAhead,
+          publicStatus: submission.publicStatus, statusToken: publicStatusToken,
+        } });
+        try {
+          const existing = await deps.repository.findAccepted(lookup);
+          if (existing) return accepted(existing, false);
+          let prepared;
+          try { prepared = generated
+            ? await plant.prepareRuntimeArtifact(flowKey, manifest)
+            : await deps.prepareArtifact(manifest); }
+          catch { return { statusCode: 409, payload: { error: 'RUNTIME_ARTWORK_UNAVAILABLE' } }; }
+          let validation = prepared.report;
+          if (!validation.valid || validation.severity === 'error') {
+            return { statusCode: 422, payload: { error: 'INVALID_GEOMETRY', validation } };
+          }
+          const acceptedAt = now();
+          if (validation.severity === 'warning') {
+            if (!warningAcknowledgement ||
+              warningAcknowledgement.geometryVersion !== validation.geometryVersion ||
+              warningAcknowledgement.rasterHash !== validation.rasterHash ||
+              warningAcknowledgement.manifestHash !== lookup.manifestHash ||
+              warningAcknowledgement.issuesHash !== await geometryIssuesHash(validation.issues)) {
+              return { statusCode: 409, payload: { error: 'WARNING_ACKNOWLEDGEMENT_REQUIRED', validation } };
+            }
+            validation = { ...validation, acknowledgedByVisitor: true, acknowledgedAt: acceptedAt };
+          }
+          let artifact;
+          try { artifact = await publishWithDeadline(deps.publisher, prepared.bundle); }
+          catch { return { statusCode: 503, payload: { error: 'ARTIFACT_STORAGE_UNAVAILABLE' } }; }
+          const profile = prepared.bundle.descriptor.profile;
+          const result = await deps.repository.create({ ...lookup, manifest, artifact,
+            printSpec: { profileId: profile.id, profileVersion: profile.version, cutMarginMm: manifest.cutMarginMm },
+            validation, publicStatusTokenHash: hashToken(publicStatusToken), acceptedAt });
+          return accepted(result.submission, result.created);
+        } catch (error) {
+          if (error instanceof IdempotencyConflictError) return { statusCode: 409, payload: { error: 'IDEMPOTENCY_CONFLICT' } };
+          throw error;
+        }
+      },
+    });
+  }
+
+  if (deps.plantCapture) registerPlantCaptureRoute(app, routePrefix, {
+    eventId: deps.eventId, verifyBearerToken: deps.verifyBearerToken,
+    confirm: deps.plantCapture.confirm,
   });
 
   return app;

@@ -15,11 +15,15 @@ type PreviewProps = {
   unavailable?: boolean;
   reloadKey?: number;
   onArtworkState?: (state: ArtworkState) => void;
+  runtimeSpriteUrl?: string;
 };
 
-export function CutPreview({ manifest, contours, unavailable, reloadKey = 0, onArtworkState }: PreviewProps) {
-  const plan = planComposition(manifest, DEVFEST_SG_V1);
-  const artworkKey = `${plan.layers.map((layer) => assetPngFilename(layer.assetId)).join(':')}:${reloadKey}`;
+export function CutPreview({ manifest, contours, unavailable, reloadKey = 0, onArtworkState, runtimeSpriteUrl }: PreviewProps) {
+  const plan = planComposition(manifest, DEVFEST_SG_V1,
+    manifest.renderVersion === 'runtime-catalog-v1' ? manifest.spriteAssetId : undefined);
+  const assetUrl = (assetId: string) => assetId === manifest.spriteAssetId && runtimeSpriteUrl
+    ? runtimeSpriteUrl : `/${assetPngFilename(assetId)}?reload=${reloadKey}`;
+  const artworkKey = `${plan.layers.map((layer) => assetUrl(layer.assetId)).join(':')}:${reloadKey}`;
   const loadState = useRef({ key: artworkKey, layers: new Set<string>() });
   if (loadState.current.key !== artworkKey) loadState.current = { key: artworkKey, layers: new Set() };
   const dilationPx = (manifest.cutMarginMm * 300) / 25.4;
@@ -52,7 +56,7 @@ export function CutPreview({ manifest, contours, unavailable, reloadKey = 0, onA
         {plan.layers.map((layer) => (
           <g key={`${layer.id}:${artworkKey}`} filter="url(#paper-shadow)">
             <image
-              href={`/${assetPngFilename(layer.assetId)}?reload=${reloadKey}`}
+              href={assetUrl(layer.assetId)}
               x={layer.x}
               y={layer.y}
               width={layer.width}

@@ -11,13 +11,15 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@fastify/cors": "^11.2.0",
     "@natcut/artifacts": "*",
     "@natcut/cut-geometry": "*",
     "@natcut/domain": "*",
     "@natcut/render": "*",
-    "@fastify/cors": "^11.2.0",
     "fastify": "^5.12.8",
     "firebase-admin": "14.5.1",
+    "google-auth-library": "^11.3.4",
+    "sharp": "^0.35.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {

@@ -7,6 +7,7 @@ import { DEVFEST_SG_V1, CompositionManifestSchema, NATIVE_SRGB_EVIDENCE } from '
 import { describe, expect, it } from 'vitest';
 import {
   assetPngFilename,
+  catalogManifest,
   loadPackagedAssets,
   planComposition,
   renderCutGroupMasks,
@@ -93,6 +94,21 @@ describe('planComposition', () => {
       expect(layer.y).toBeGreaterThanOrEqual(0);
       expect(layer.x + layer.width).toBeLessThanOrEqual(1_200);
       expect(layer.y + layer.height).toBeLessThanOrEqual(2_100);
+    }
+  });
+
+  it('places one, two, or three separate sprite prints on the same 4 by 7 sheet', () => {
+    const expected = { classic: 1, duo: 2, trio: 3 } as const;
+    for (const [variant, count] of Object.entries(expected)) {
+      const selected = CompositionManifestSchema.parse({ ...catalogManifest, sheetVariant: variant });
+      const plan = planComposition(selected, DEVFEST_SG_V1);
+      const spriteLayers = plan.layers.filter(layer => layer.member === 'sprite');
+      expect(spriteLayers).toHaveLength(count);
+      expect(new Set(spriteLayers.map(layer => layer.id)).size).toBe(count);
+      for (let index = 1; index < spriteLayers.length; index++) {
+        expect(spriteLayers[index]!.y - (spriteLayers[index - 1]!.y + spriteLayers[index - 1]!.height)).toBeGreaterThan(60);
+      }
+      expect(spriteLayers.at(-1)!.y + spriteLayers.at(-1)!.height).toBeLessThan(1850);
     }
   });
 
