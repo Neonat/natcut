@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { commonPlantLabel } from '@natcut/domain';
 import { sprites, normalizeSpritePng } from '@natcut/render';
 import { LIVE_DEADLINE_MS, PLANT_ID_THRESHOLD_BPS, PLANT_JOB_CONTRACT_VERSION,
   SourcePhotoReceiptSchema, requestIdentity, sourcePhotoDigest,
@@ -49,7 +50,8 @@ export type PlantFlowResult =
   | { state: 'waiting'; generationIntentId: string; remainingMs: number }
   | { state: 'identification_review'; generationIntentId: string; suggestions: { name: string; scoreBps: number }[] }
   | { state: 'candidate_available'; generationIntentId: string; candidate: PlantCandidate; remainingMs: number }
-  | { state: 'accepted'; generationIntentId: string; decision: PlantOutcome; sproutAck: 'confirmed' | 'pending' | 'needs_reconciliation' }
+  | { state: 'accepted'; generationIntentId: string; decision: PlantOutcome; plantLabel: string;
+      sproutAck: 'confirmed' | 'pending' | 'needs_reconciliation' }
   | { state: 'needs_reconciliation'; generationIntentId: string };
 
 export function createPlantFlowCoordinator(deps: {
@@ -110,7 +112,8 @@ export function createPlantFlowCoordinator(deps: {
   function reportAccepted(flow: PlantFlow): PlantFlowResult {
     if (!flow.accepted || !flow.plantJobId) return reconcile(flow);
     return { state: 'accepted', generationIntentId: flow.generationIntentId,
-      decision: flow.accepted, sproutAck: flow.sproutAck };
+      decision: flow.accepted, plantLabel: commonPlantLabel(flow.identificationSuggestions[0]?.name),
+      sproutAck: flow.sproutAck };
   }
 
   async function commitFallback(flow: PlantFlow, reason: 'deadline_elapsed' | 'identification_below_threshold' | 'generation_failed' | 'operator_fallback') {
@@ -197,7 +200,7 @@ export function createPlantFlowCoordinator(deps: {
         ['generation_queued', 'generating', 'candidate_ready', 'generation_failed', 'late_completed'].includes(status.state)
           ? 'eligible' : 'unknown';
       const observed = eligibility === 'unknown' ? flow : await deps.repository.observe(key, flow.generationIntentId,
-        eligibility, status.state === 'below_threshold' ? status.identification?.suggestions ?? [] : undefined);
+        eligibility, status.identification?.suggestions ?? []);
       if (observed.accepted) return reportAccepted(observed);
       if (observed.eligibility === 'needs_reconciliation') return reconcile(observed);
       if (status.state === 'below_threshold') return { state: 'identification_review',

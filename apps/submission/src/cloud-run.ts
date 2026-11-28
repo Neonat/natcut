@@ -6,7 +6,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { GoogleAuth } from 'google-auth-library';
 import { createGcsArtifactPublisher, NATCUT_ARTIFACT_BUCKET } from '@natcut/artifacts';
-import type { CompositionManifest } from '@natcut/domain';
+import { commonPlantLabel, type CompositionManifest } from '@natcut/domain';
 import { loadPackagedAssets } from '@natcut/render';
 import { createFirebaseBearerVerifier } from './auth.ts';
 import { createSubmissionRepository, resolveSubmissionFirestoreSelection } from './repository.ts';
@@ -107,7 +107,13 @@ export async function createCloudRunSubmissionServer(
       ...(coordinator && registry && policyVersion ? { plant: {
         captureSource: captures, coordinator, policyVersion,
         ...(environment.SPROUT_REFERENCE_SET_ID ? { referenceSetId: environment.SPROUT_REFERENCE_SET_ID } : {}),
-        verifyRuntimeAcceptance: (key: Parameters<typeof registry.assertAccepted>[0], manifest: CompositionManifest) => registry.assertAccepted(key, manifest.spriteAssetId),
+        verifyRuntimeAcceptance: async (key: Parameters<typeof registry.assertAccepted>[0], manifest: CompositionManifest) => {
+          const flow = await flows!.get(key);
+          if (!flow || manifest.plantLabel !== commonPlantLabel(flow.identificationSuggestions[0]?.name)) {
+            throw new Error('Runtime plant label differs from private identification.');
+          }
+          return registry.assertAccepted(key, manifest.spriteAssetId);
+        },
         prepareRuntimeArtifact: createAcceptedRuntimeArtifactPreparer(registry, artwork),
         readAcceptedSprite: (key: Parameters<typeof registry.readAcceptedPng>[0], assetId: string) => registry.readAcceptedPng(key, assetId),
         previewCandidate: createPlantCandidatePreview({ flows: flows!, sprout: sprout! }),

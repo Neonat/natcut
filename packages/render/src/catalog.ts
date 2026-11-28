@@ -51,7 +51,6 @@ const legacySpritePng = '95edfb98885bc6df75799ea892270ff06c1d90b469cf627f7d30428
 const wordmarkPng = 'c4c26dc37bfc264b6818fa6bef96b8a1e32d07f9a97d7c0af33c5b702b617a9b';
 const approvedDevfestPng = '398b6a7890a1c8b09dd632c4f571cc0f1b7d93f85a040d2fefa345eea95a19be';
 const approvedSproutPng = '8482b9ee369f0d4f82200c202163b3f6eec769c32ef3cfb7f80b202461592561';
-const liveCardPng = '81029cd22190b9ffcf5a58e12c821916c304bc133d1e6f43961b5c391e943af7';
 const legacyPngs = new Map([
   [legacySprite, legacySpritePng],
   [legacyTrainer, legacySpritePng],
@@ -60,7 +59,6 @@ const legacyPngs = new Map([
   ['branding/logo-and-sprites', wordmarkPng],
   ['branding/devfest-approved-v1', approvedDevfestPng],
   ['branding/sprout-approved-v1', approvedSproutPng],
-  ['decoration/live-card-v1', liveCardPng],
 ]);
 
 export const legacyManifest: CompositionManifest = {
@@ -94,6 +92,7 @@ export function assertSupportedRecipe(manifest: CompositionManifest, runtimeSpri
     runtimeSpriteId !== undefined && manifest.spriteAssetId === runtimeSpriteId &&
     /^sprite\/runtime\/[a-f0-9]{64}$/.test(runtimeSpriteId);
   if (manifest.renderVersion !== 'catalog-v1' && !runtime) throw new Error('Unsupported render version.');
+  if (!runtime && manifest.plantLabel !== undefined) throw new Error('Plant labels require accepted runtime artwork.');
   const [main, brand] = manifest.cutGroups;
   if (!(runtime || byId.has(manifest.spriteAssetId)) || manifest.theme !== 'default' || manifest.brandingVariant !== 'logo'
     || manifest.trainerAssetId !== null || manifest.cutGroups.length !== 2

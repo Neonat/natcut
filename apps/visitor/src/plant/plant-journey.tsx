@@ -115,7 +115,8 @@ export function PlantJourney({ api, onNavigate }: { api: PlantVisitorApi; onNavi
       <button onClick={() => void api.acceptedSprite(captureId).then(blob => setSpriteUrl(URL.createObjectURL(blob))).catch(() => setError('Preview unavailable'))}>Retry preview</button>
       {error && <p role="alert">{error}</p>}</main>;
     const manifest = status.decision.outcome === 'generated_accepted'
-      ? { ...catalogManifest, renderVersion: 'runtime-catalog-v1', spriteAssetId: status.decision.natcutAssetId }
+      ? { ...catalogManifest, renderVersion: 'runtime-catalog-v1', spriteAssetId: status.decision.natcutAssetId,
+          plantLabel: status.plantLabel }
       : { ...catalogManifest, spriteAssetId: status.decision.catalogAssetId };
     const submit = (request: SubmissionRequest): Promise<SubmissionResponse> => api.submitPlant(captureId, request);
     return <EditorPage initialManifest={manifest} submitSubmission={submit} onNavigate={onNavigate} lockSpriteChoice

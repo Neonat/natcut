@@ -1,7 +1,8 @@
 /// <reference lib="webworker" />
 import { buildDistanceField, evaluateCutGeometry } from '@natcut/cut-geometry';
 import { canonicalManifestJson, DEVFEST_SG_V1, type CompositionManifest } from '@natcut/domain';
-import { assetPngFilename, planComposition, renderCutGroupMasks, type RgbaAsset } from '@natcut/render/browser';
+import { assetPngFilename, isRuntimeLetteringId, planComposition, renderCutGroupMasks,
+  runtimeLetteringAsset, type RgbaAsset } from '@natcut/render/browser';
 import type { CutPreviewRequest, CutPreviewResult } from '../editor/use-cut-preview.ts';
 
 async function loadAsset(url: string, id: string): Promise<RgbaAsset> {
@@ -42,6 +43,8 @@ async function processPreview({ revision, manifest, runtimeSpriteUrl }: CutPrevi
     const plan = planComposition(manifest, DEVFEST_SG_V1,
       manifest.renderVersion === 'runtime-catalog-v1' ? manifest.spriteAssetId : undefined);
     const assets = new Map(await Promise.all([...new Set(plan.layers.map(layer => layer.assetId))].map(async assetId => {
+      if (isRuntimeLetteringId(assetId)) return [assetId,
+        runtimeLetteringAsset(assetId, manifest.plantLabel)] as const;
       const url = assetId === manifest.spriteAssetId && runtimeSpriteUrl
         ? runtimeSpriteUrl : `/${assetPngFilename(assetId)}`;
       return [assetId, await loadAsset(url, assetId)] as const;

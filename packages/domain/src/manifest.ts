@@ -25,6 +25,7 @@ export const CompositionManifestSchema = z
     trainerAssetId: z.string().trim().min(1).max(256).nullable(),
     theme: z.enum(['default', 'hugging', 'battling', 'side-by-side']),
     sheetVariant: z.enum(['classic', 'duo', 'trio']).optional(),
+    plantLabel: z.string().trim().min(1).max(32).regex(/^[A-Z0-9 ]+$/).optional(),
     brandingVariant: z.enum(['logo', 'logo-and-sprites', 'logo-and-species']),
     cutGroups: z.array(CutGroupSchema).min(1).max(64),
     cutMarginMm: finiteNumber.min(0.5).max(3),

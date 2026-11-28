@@ -5,6 +5,7 @@ import type {
 } from '@natcut/domain';
 
 import { assertSupportedRecipe, catalogSpriteEntry, spriteArtworkIds } from './catalog.ts';
+import { RUNTIME_NAME_ID, RUNTIME_PHRASE_A_ID, RUNTIME_PHRASE_B_ID } from './runtime-lettering.ts';
 
 export type PlannedLayer = {
   id: string;
@@ -17,6 +18,7 @@ export type PlannedLayer = {
   height: number;
   zIndex: number;
   flipX?: boolean;
+  creamHaloPx?: number;
 };
 
 export type PlannedComposition = {
@@ -68,8 +70,8 @@ export function planComposition(
     const runtime = manifest.renderVersion === 'runtime-catalog-v1';
     const placements: { x: number; y: number; size: number; flipX?: boolean }[] = manifest.sheetVariant === 'trio'
       ? runtime
-        ? [{ x: 330, y: 50, size: 540, flipX: false }, { x: 220, y: 700, size: 390, flipX: false },
-          { x: 625, y: 1280, size: 390, flipX: true }]
+        ? [{ x: 350, y: 60, size: 500, flipX: false }, { x: 145, y: 700, size: 500, flipX: false },
+          { x: 145, y: 1250, size: 500, flipX: true }]
         : [{ x: 360, y: 70, size: 480 }, { x: 360, y: 660, size: 480 }, { x: 360, y: 1250, size: 480 }]
       : manifest.sheetVariant === 'duo'
         ? [{ x: 300, y: 260, size: 600 }, { x: 300, y: 1080, size: 600 }]
@@ -86,18 +88,17 @@ export function planComposition(
         height: placement.size,
         zIndex: 10,
         ...(placement.flipX === undefined ? {} : { flipX: placement.flipX }),
+        ...(runtime && manifest.sheetVariant === 'trio' ? { creamHaloPx: 8 } : {}),
       });
     }
     if (runtime && manifest.sheetVariant === 'trio') {
-      for (const [index, y] of [690, 1270].entries()) {
-        layers.push({ id: `sprite-card-${index + 2}`, member: 'sprite', assetId: 'decoration/live-card-v1',
-          cutGroupId: cutGroupFor(manifest, 'sprite'), x: 170, y, width: 860, height: 410, zIndex: 5 });
-      }
       layers.push(
-        { id: 'sprite-card-sprout', member: 'sprite', assetId: 'branding/sprout-approved-v1',
-          cutGroupId: cutGroupFor(manifest, 'sprite'), x: 620, y: 805, width: 350, height: 130, zIndex: 20 },
-        { id: 'sprite-card-devfest', member: 'sprite', assetId: 'branding/devfest-approved-v1',
-          cutGroupId: cutGroupFor(manifest, 'sprite'), x: 235, y: 1390, width: 350, height: 119, zIndex: 20 },
+        { id: 'sprite-name', member: 'sprite', assetId: RUNTIME_NAME_ID,
+          cutGroupId: cutGroupFor(manifest, 'sprite'), x: 210, y: 500, width: 780, height: 130, zIndex: 20 },
+        { id: 'sprite-phrase-a', member: 'sprite', assetId: RUNTIME_PHRASE_A_ID,
+          cutGroupId: cutGroupFor(manifest, 'sprite'), x: 470, y: 840, width: 550, height: 260, zIndex: 20 },
+        { id: 'sprite-phrase-b', member: 'sprite', assetId: RUNTIME_PHRASE_B_ID,
+          cutGroupId: cutGroupFor(manifest, 'sprite'), x: 470, y: 1390, width: 550, height: 260, zIndex: 20 },
       );
     }
   } else {
@@ -127,9 +128,10 @@ export function planComposition(
     );
   }
 
-  const approvedTrio = manifest.renderVersion === 'catalog-v1' && manifest.sheetVariant === 'trio'
-    && catalogSpriteEntry(manifest.spriteAssetId)?.variants !== undefined;
-  if (approvedTrio) {
+  const brandedTrio = manifest.sheetVariant === 'trio' && (
+    manifest.renderVersion === 'runtime-catalog-v1' ||
+    (manifest.renderVersion === 'catalog-v1' && catalogSpriteEntry(manifest.spriteAssetId)?.variants !== undefined));
+  if (brandedTrio) {
     layers.push(
       { id: 'branding-devfest', member: 'branding', assetId: 'branding/devfest-approved-v1',
         cutGroupId: cutGroupFor(manifest, 'branding'), x: 60, y: 1850, width: 500, height: 170, zIndex: 20 },
