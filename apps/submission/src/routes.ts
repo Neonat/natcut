@@ -22,6 +22,7 @@ import { SurveyUnavailableError, type SurveyRepository } from './survey-reposito
 import type { PreparedTrustedArtifact } from './validation.ts';
 import type { PlantFlowKey } from './plant-flow-repository.ts';
 import { registerPlantRoutes, type PlantRouteDependencies } from './plant-routes.ts';
+import { registerPlantCaptureRoute } from './plant-capture-routes.ts';
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const CuteRatingSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]);
@@ -73,6 +74,7 @@ export type SubmissionServerDependencies = {
     verifyRuntimeAcceptance: (flowKey: PlantFlowKey, manifest: CompositionManifest) => Promise<unknown>;
     prepareRuntimeArtifact: (flowKey: PlantFlowKey, manifest: CompositionManifest) => Promise<Pick<PreparedTrustedArtifact, 'report' | 'bundle'>>;
   };
+  plantCapture?: { confirm(ownerUid: string, eventId: string, captureId: string, raw: Buffer): Promise<{ captureId: string; status: 'confirmed' }> };
 };
 
 function hashToken(token: string): string {
@@ -324,6 +326,11 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
       },
     });
   }
+
+  if (deps.plantCapture) registerPlantCaptureRoute(app, routePrefix, {
+    eventId: deps.eventId, verifyBearerToken: deps.verifyBearerToken,
+    confirm: deps.plantCapture.confirm,
+  });
 
   return app;
 }

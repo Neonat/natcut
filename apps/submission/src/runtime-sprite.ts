@@ -170,6 +170,15 @@ export function createRuntimeSpriteRegistry(deps: {
 
     assertAccepted: acceptedReceipt,
 
+    async readAcceptedPng(flowKey: PlantFlowKey, assetId: string): Promise<Buffer> {
+      const receipt = await acceptedReceipt(flowKey, assetId);
+      const bytes = await deps.objects.readExact(receipt.objectPath, receipt.objectGeneration);
+      if (bytes.length !== receipt.pngByteLength || sha256(bytes) !== receipt.pngSha256) {
+        throw new RuntimeSpriteIntegrityError('Pinned runtime sprite digest or length mismatch.');
+      }
+      return bytes;
+    },
+
     async loadAccepted(flowKey: PlantFlowKey, assetId: string): Promise<SrgbRgbaAsset> {
       const receipt = await acceptedReceipt(flowKey, assetId);
       const bytes = await deps.objects.readExact(receipt.objectPath, receipt.objectGeneration);

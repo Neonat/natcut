@@ -21,6 +21,7 @@ export type PlantRouteDependencies = {
   coordinator: ReturnType<typeof createPlantFlowCoordinator>;
   verifyBearerToken: VerifyBearerToken;
   submitRuntime: (ownerUid: string, flowKey: PlantFlowKey, body: unknown) => Promise<{ statusCode: number; payload: unknown }>;
+  readAcceptedSprite?: (flowKey: PlantFlowKey, assetId: string) => Promise<Buffer>;
 };
 
 function publicResult(result: PlantFlowResult) {
@@ -113,6 +114,21 @@ export function registerPlantRoutes(app: FastifyInstance, prefix: string, deps: 
     return withOwned(request, reply, async (key, ownerUid) => {
       const result = await deps.submitRuntime(ownerUid, key, request.body);
       return reply.code(result.statusCode).send(result.payload);
+    });
+  });
+  if (deps.readAcceptedSprite) app.get(route('/v1/plant-jobs/:captureId/accepted-sprite'), async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store');
+    return withOwned(request, reply, async key => {
+      const state = await deps.coordinator.advance(key);
+      if (state.state !== 'accepted' || state.decision.outcome !== 'generated_accepted' || state.sproutAck !== 'confirmed') {
+        return reply.code(409).send({ error: 'SPRITE_NOT_ACCEPTED' });
+      }
+      try {
+        const bytes = await deps.readAcceptedSprite!(key, state.decision.natcutAssetId);
+        return reply.type('image/png').send(bytes);
+      } catch {
+        return reply.code(409).send({ error: 'SPRITE_UNAVAILABLE' });
+      }
     });
   });
 }

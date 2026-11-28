@@ -4,13 +4,22 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
+import { GoogleAuth } from 'google-auth-library';
 import { createGcsArtifactPublisher, NATCUT_ARTIFACT_BUCKET } from '@natcut/artifacts';
+import type { CompositionManifest } from '@natcut/domain';
 import { loadPackagedAssets } from '@natcut/render';
 import { createFirebaseBearerVerifier } from './auth.ts';
 import { createSubmissionRepository, resolveSubmissionFirestoreSelection } from './repository.ts';
 import { createSurveyRepository } from './survey-repository.ts';
 import { buildSubmissionServer } from './routes.ts';
 import { createTrustedArtifactPreparer } from './validation.ts';
+import { createPlantCaptureStore } from './plant-capture-store.ts';
+import { createPlantFlowRepository } from './plant-flow-repository.ts';
+import { createPlantFlowCoordinator, createTrustedCandidateRegistrar } from './plant-flow.ts';
+import { createSproutPlantJobClient } from './sprout-client.ts';
+import { createRuntimeSpriteRegistry } from './runtime-sprite.ts';
+import { createGcsRuntimeSpriteObjectStore } from './runtime-sprite-gcs.ts';
+import { createAcceptedRuntimeArtifactPreparer } from './runtime-preparation.ts';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
 export { NATCUT_ARTIFACT_BUCKET };
@@ -65,6 +74,24 @@ export async function createCloudRunSubmissionServer(
     ?? initializeApp({ projectId: config.projectId }, 'natcut-submission');
   const firestore = getFirestore(admin, config.databaseId);
   const artwork = path.join(repoRoot, 'packages/render/catalog/artwork');
+  const bucket = getStorage(admin).bucket(config.artifactBucket);
+  const captures = createPlantCaptureStore(firestore, bucket);
+  const sproutUrl = environment.SPROUT_PRIVATE_SERVICE_URL;
+  const policyVersion = environment.SPROUT_POLICY_VERSION;
+  if (!!sproutUrl !== !!policyVersion) {
+    throw new Error('SPROUT_PRIVATE_SERVICE_URL and SPROUT_POLICY_VERSION must be configured together.');
+  }
+  if (sproutUrl && new URL(sproutUrl).protocol !== 'https:') {
+    throw new Error('Production Sprout service URL must use HTTPS.');
+  }
+  const flows = sproutUrl ? createPlantFlowRepository(firestore) : null;
+  const registry = flows ? createRuntimeSpriteRegistry({ firestore, flows,
+    objects: createGcsRuntimeSpriteObjectStore(bucket) }) : null;
+  const auth = sproutUrl ? new GoogleAuth() : null;
+  const sprout = sproutUrl && auth ? createSproutPlantJobClient({ serviceUrl: sproutUrl,
+    tokenForAudience: async audience => (await auth.getIdTokenClient(audience)).idTokenProvider.fetchIdToken(audience) }) : null;
+  const coordinator = flows && registry && sprout ? createPlantFlowCoordinator({
+    repository: flows, sprout, registrar: createTrustedCandidateRegistrar(registry) }) : null;
   return {
     config,
     server: buildSubmissionServer({
@@ -74,7 +101,15 @@ export async function createCloudRunSubmissionServer(
       surveyRepository: createSurveyRepository(firestore),
       verifyBearerToken: createFirebaseBearerVerifier(getAuth(admin)),
       prepareArtifact: createTrustedArtifactPreparer((plan) => loadPackagedAssets(plan, artwork)),
-      publisher: createGcsArtifactPublisher(getStorage(admin).bucket(config.artifactBucket)),
+      publisher: createGcsArtifactPublisher(bucket),
+      plantCapture: captures,
+      ...(coordinator && registry && policyVersion ? { plant: {
+        captureSource: captures, coordinator, policyVersion,
+        ...(environment.SPROUT_REFERENCE_SET_ID ? { referenceSetId: environment.SPROUT_REFERENCE_SET_ID } : {}),
+        verifyRuntimeAcceptance: (key: Parameters<typeof registry.assertAccepted>[0], manifest: CompositionManifest) => registry.assertAccepted(key, manifest.spriteAssetId),
+        prepareRuntimeArtifact: createAcceptedRuntimeArtifactPreparer(registry, artwork),
+        readAcceptedSprite: (key: Parameters<typeof registry.readAcceptedPng>[0], assetId: string) => registry.readAcceptedPng(key, assetId),
+      } } : {}),
       routePrefix: '/api',
     }),
   };

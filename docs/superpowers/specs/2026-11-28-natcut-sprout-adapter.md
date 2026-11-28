@@ -20,6 +20,19 @@ The source-photo receipt is distinct from NatCut's logical print artifact. It pr
 
 ## Remaining integration gates
 
+The phone upload is `POST /api/v1/plant-captures` with a Firebase bearer token and JSON
+`{captureId,imageBase64}`. The client keeps its generated capture ID across retries.
+NatCut normalizes JPEG, PNG or WEBP input to a tagged sRGB JPEG, strips private metadata,
+pins the exact private object generation, and records an owner-scoped receipt in
+`natcutPlantCaptures`. The upload reply is `{captureId,status:"confirmed"}`.
+Cloud Run registers capture upload by default. It registers plant jobs only when both
+`SPROUT_PRIVATE_SERVICE_URL` and `SPROUT_POLICY_VERSION` are configured. The former
+must be a private HTTPS origin. `SPROUT_REFERENCE_SET_ID` is optional. A confirmed,
+owner-scoped generated sprite can be fetched with the same Firebase bearer token at
+`GET /api/v1/plant-jobs/:captureId/accepted-sprite`; it is unavailable before Sprout
+acknowledges the immutable acceptance. The visitor should fetch its bytes and create
+a local object URL for preview.
+
 - Wire an authenticated NatCut visitor endpoint after the phone capture lane supplies a stable sanitized photo receipt and ownership check.
 - Supply a reviewed private plant capture source with owner checks and immutable sanitized receipt; the portrait capture records are separate.
 - Wire the optional authenticated plant routes, runtime writer/loader and OIDC Sprout client into NatCut Cloud Run after service IAM, retention and event limits are reviewed.
