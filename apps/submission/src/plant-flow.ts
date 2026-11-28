@@ -3,7 +3,7 @@ import { sprites, normalizeSpritePng } from '@natcut/render';
 import { LIVE_DEADLINE_MS, PLANT_ID_THRESHOLD_BPS, PLANT_JOB_CONTRACT_VERSION,
   SourcePhotoReceiptSchema, requestIdentity, sourcePhotoDigest,
   type PlantCandidate, type PlantOutcome, type SourcePhotoReceipt } from './plant-job-contract.ts';
-import { type PlantFlow, type PlantFlowKey, type PlantFlowRepository } from './plant-flow-repository.ts';
+import { PlantFlowConflictError, type PlantFlow, type PlantFlowKey, type PlantFlowRepository } from './plant-flow-repository.ts';
 import { SproutEvidenceConflictError, SproutHttpError, type SproutPlantJobClient } from './sprout-client.ts';
 
 export type PlantFlowClock = { wallNowMs(): number; monoNowMs(): number };
@@ -11,6 +11,7 @@ export const systemPlantFlowClock: PlantFlowClock = {
   wallNowMs: () => Date.now(), monoNowMs: () => performance.now(),
 };
 class PlantDeadlineError extends Error {}
+class PlantCandidateFetchTimeoutError extends Error {}
 
 export type StartPlantFlowInput = PlantFlowKey & {
   sanitizedImage: Buffer;
@@ -67,7 +68,11 @@ export function createPlantFlowCoordinator(deps: {
   const now = () => new Date(clock.wallNowMs()).toISOString();
   const decisionId = (intentId: string) => createHash('sha256').update(`natcut-plant-outcome\0${intentId}`).digest('hex');
   const reconcile = (flow: PlantFlow): PlantFlowResult => ({ state: 'needs_reconciliation', generationIntentId: flow.generationIntentId });
+  const heldCandidateResult = (flow: PlantFlow): PlantFlowResult => ({ state: 'candidate_available',
+    generationIntentId: flow.generationIntentId, candidate: flow.heldCandidate!.candidate,
+    remainingMs: remainingMs(flow) });
   async function deadlineResult(flow: PlantFlow): Promise<PlantFlowResult> {
+    if (flow.heldCandidate) return heldCandidateResult(flow);
     if (flow.eligibility === 'eligible') return commitFallback(flow, 'deadline_elapsed');
     if (flow.eligibility === 'below_threshold') return { state: 'identification_review',
       generationIntentId: flow.generationIntentId, suggestions: flow.identificationSuggestions };
@@ -90,6 +95,18 @@ export function createPlantFlowCoordinator(deps: {
     }
   }
 
+  async function withinCandidateFetch<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { return await Promise.race([
+      operation(controller.signal),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => {
+        controller.abort(); reject(new PlantCandidateFetchTimeoutError('Candidate fetch timed out.'));
+      }, 5_000); }),
+    ]); }
+    finally { clearTimeout(timer); }
+  }
+
   function reportAccepted(flow: PlantFlow): PlantFlowResult {
     if (!flow.accepted || !flow.plantJobId) return reconcile(flow);
     return { state: 'accepted', generationIntentId: flow.generationIntentId,
@@ -99,7 +116,14 @@ export function createPlantFlowCoordinator(deps: {
   async function commitFallback(flow: PlantFlow, reason: 'deadline_elapsed' | 'identification_below_threshold' | 'generation_failed' | 'operator_fallback') {
     const decision: PlantOutcome = { decisionId: decisionId(flow.generationIntentId), decidedAt: now(),
       outcome: 'catalog_fallback_accepted', catalogAssetId: flow.fallbackAssetId, reason };
-    return reportAccepted(await deps.repository.commit(flow, flow.generationIntentId, decision));
+    try { return reportAccepted(await deps.repository.commit(flow, flow.generationIntentId, decision)); }
+    catch (error) {
+      if (!(error instanceof PlantFlowConflictError) || reason !== 'deadline_elapsed') throw error;
+      const latest = await deps.repository.get(flow);
+      if (latest?.heldCandidate) return heldCandidateResult(latest);
+      if (latest?.accepted) return reportAccepted(latest);
+      throw error;
+    }
   }
 
   return {
@@ -120,6 +144,7 @@ export function createPlantFlowCoordinator(deps: {
         fallbackAssetId: input.fallbackAssetId });
       if (flow.accepted) return reportAccepted(flow);
       if (flow.eligibility === 'needs_reconciliation') return reconcile(flow);
+      if (flow.heldCandidate) return heldCandidateResult(flow);
       if (flow.plantJobId) {
         if (flow.eligibility === 'below_threshold') return { state: 'identification_review',
           generationIntentId: flow.generationIntentId, suggestions: flow.identificationSuggestions };
@@ -148,6 +173,7 @@ export function createPlantFlowCoordinator(deps: {
       const flow = await deps.repository.get(key);
       if (!flow) throw new Error('Unknown plant intent.');
       if (flow.accepted) return reportAccepted(flow);
+      if (flow.heldCandidate) return heldCandidateResult(flow);
       if (!flow.plantJobId) return { state: 'needs_create_retry', generationIntentId: flow.generationIntentId };
       if (flow.eligibility === 'needs_reconciliation') return reconcile(flow);
       if (remainingMs(flow) === 0) return deadlineResult(flow);
@@ -177,8 +203,20 @@ export function createPlantFlowCoordinator(deps: {
       if (status.state === 'below_threshold') return { state: 'identification_review',
         generationIntentId: flow.generationIntentId, suggestions: status.identification?.suggestions ?? [] };
       if (remainingMs(observed) === 0) return deadlineResult(observed);
-      if (status.state === 'candidate_ready' && status.candidate) return { state: 'candidate_available',
-        generationIntentId: flow.generationIntentId, candidate: status.candidate, remainingMs: remainingMs(observed) };
+      if (status.state === 'candidate_ready' && status.candidate) {
+        try {
+          const held = await deps.repository.holdCandidate(key, flow.generationIntentId, status.candidate, now());
+          return held.accepted ? reportAccepted(held) : heldCandidateResult(held);
+        } catch (error) {
+          if (!(error instanceof PlantFlowConflictError)) throw error;
+          const latest = await deps.repository.get(key);
+          if (!latest) throw error;
+          if (latest.accepted) return reportAccepted(latest);
+          if (latest.heldCandidate) return heldCandidateResult(latest);
+          if (remainingMs(latest) === 0) return deadlineResult(latest);
+          throw error;
+        }
+      }
       if (status.state === 'generation_failed') return commitFallback(observed, 'generation_failed');
       return { state: 'waiting', generationIntentId: flow.generationIntentId, remainingMs: remainingMs(observed) };
     },
@@ -187,53 +225,42 @@ export function createPlantFlowCoordinator(deps: {
       const flow = await deps.repository.get(key);
       if (!flow || !flow.plantJobId) throw new Error('Plant job is not bound.');
       if (flow.accepted) return reportAccepted(flow);
-      return commitFallback(flow, reason);
+      if (flow.eligibility === 'unknown' || flow.eligibility === 'needs_reconciliation') return reconcile(flow);
+      return commitFallback(flow, flow.eligibility === 'eligible' ? 'operator_fallback' : reason);
     },
 
     async acceptGenerated(key: PlantFlowKey, candidateId: string): Promise<PlantFlowResult> {
-      const flow = await deps.repository.get(key);
+      let flow = await deps.repository.get(key);
       if (!flow || !flow.plantJobId) throw new Error('Plant job is not bound.');
       if (flow.accepted) return reportAccepted(flow);
       if (flow.eligibility === 'needs_reconciliation') return reconcile(flow);
-      if (remainingMs(flow) === 0) return deadlineResult(flow);
-      let status;
-      try {
-        status = await withinDeadline(flow, signal => deps.sprout.status(flow.plantJobId!, signal));
-      } catch (error) {
-        if (!(error instanceof PlantDeadlineError) && !(error instanceof TypeError) &&
-          !(error instanceof SproutHttpError && error.status >= 500)) {
-          await deps.repository.observe(key, flow.generationIntentId, 'needs_reconciliation');
-          return reconcile(flow);
-        }
-        return remainingMs(flow) === 0 ? deadlineResult(flow) : reconcile(flow);
+      if (!flow.heldCandidate) {
+        const result = await this.advance(key);
+        if (result.state !== 'candidate_available') return result;
+        flow = (await deps.repository.get(key))!;
       }
-      if (status.generationIntentId !== flow.generationIntentId || status.outcome || status.state !== 'candidate_ready' ||
-        status.candidate?.candidateId !== candidateId) {
-        await deps.repository.observe(key, flow.generationIntentId, 'needs_reconciliation');
-        return reconcile(flow);
+      if (flow.heldCandidate?.candidate.candidateId !== candidateId) {
+        throw new SproutEvidenceConflictError('Candidate differs from the on-time held candidate.');
       }
-      const observed = await deps.repository.observe(key, flow.generationIntentId, 'eligible');
-      if (observed.accepted) return reportAccepted(observed);
-      if (observed.eligibility === 'needs_reconciliation') return reconcile(observed);
       let natcutAssetId;
       try {
-        natcutAssetId = await withinDeadline(observed, async signal => {
-          const bytes = await deps.sprout.candidate(flow.plantJobId!, status.candidate!, signal);
+        natcutAssetId = await withinCandidateFetch(async signal => {
+          const bytes = await deps.sprout.candidate(flow.plantJobId!, flow.heldCandidate!.candidate, signal);
           return deps.registrar.stage({ flowKey: key, generationIntentId: flow.generationIntentId,
-            plantJobId: flow.plantJobId!, candidate: status.candidate!, bytes });
+            plantJobId: flow.plantJobId!, candidate: flow.heldCandidate!.candidate, bytes });
         });
       } catch (error) {
-        if (!(error instanceof PlantDeadlineError) && !(error instanceof TypeError) &&
+        const latest = await deps.repository.get(key);
+        if (latest?.accepted) return reportAccepted(latest);
+        if (!(error instanceof PlantCandidateFetchTimeoutError) && !(error instanceof TypeError) &&
           !(error instanceof SproutHttpError && error.status >= 500)) {
           await deps.repository.observe(key, flow.generationIntentId, 'needs_reconciliation');
           return reconcile(flow);
         }
-        if (remainingMs(observed) === 0) return deadlineResult(observed);
         throw error;
       }
-      if (remainingMs(observed) === 0) return deadlineResult(observed);
       const decision: PlantOutcome = { decisionId: decisionId(flow.generationIntentId), decidedAt: now(),
-        outcome: 'generated_accepted', candidateId, natcutAssetId, reason: 'candidate_approved_before_deadline' };
+        outcome: 'generated_accepted', candidateId, natcutAssetId, reason: 'candidate_ready_before_deadline' };
       return reportAccepted(await deps.repository.commit(key, flow.generationIntentId, decision));
     },
 

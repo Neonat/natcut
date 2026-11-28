@@ -11,7 +11,7 @@ const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const isoUtc = z.string().datetime({ offset: true });
 const state = z.enum(['received', 'identifying', 'below_threshold', 'generation_queued',
   'generating', 'candidate_ready', 'generation_failed', 'late_completed', 'needs_reconciliation']);
-const reason = z.enum(['candidate_approved_before_deadline', 'deadline_elapsed',
+const reason = z.enum(['candidate_approved_before_deadline', 'candidate_ready_before_deadline', 'deadline_elapsed',
   'identification_below_threshold', 'generation_failed', 'operator_fallback']);
 
 export const SourcePhotoReceiptSchema = z.object({

@@ -19,7 +19,7 @@ class MemoryFlows implements PlantFlowRepository {
   flow: PlantFlow | null = null;
   async reserve(value: PlantFlowKey & { requestFingerprint: string; liveDeadlineAt: string; fallbackAssetId: string }) {
     if (!this.flow) this.flow = { ...value, generationIntentId: 'intent-1', plantJobId: null, eligibility: 'unknown',
-      identificationSuggestions: [], accepted: null, sproutAck: 'pending' };
+      identificationSuggestions: [], heldCandidate: null, accepted: null, sproutAck: 'pending' };
     else if (this.flow.requestFingerprint !== value.requestFingerprint || this.flow.fallbackAssetId !== value.fallbackAssetId) throw new PlantFlowConflictError();
     return this.flow;
   }
@@ -36,6 +36,14 @@ class MemoryFlows implements PlantFlowRepository {
     this.flow = { ...this.flow, eligibility: this.flow.eligibility !== 'unknown' &&
       this.flow.eligibility !== eligibility ? 'needs_reconciliation' : eligibility,
       identificationSuggestions: suggestions ?? this.flow.identificationSuggestions };
+    return this.flow;
+  }
+  async holdCandidate(_key: PlantFlowKey, intentId: string, candidate: PlantCandidate, observedAt: string) {
+    if (!this.flow || this.flow.generationIntentId !== intentId || this.flow.eligibility !== 'eligible' ||
+      Date.parse(observedAt) >= Date.parse(this.flow.liveDeadlineAt)) throw new PlantFlowConflictError();
+    if (this.flow.accepted) return this.flow;
+    if (this.flow.heldCandidate && this.flow.heldCandidate.candidate.candidateId !== candidate.candidateId) throw new PlantFlowConflictError();
+    this.flow = { ...this.flow, heldCandidate: this.flow.heldCandidate ?? { candidate, observedAt } };
     return this.flow;
   }
   async commit(_key: PlantFlowKey, intentId: string, decision: PlantOutcome) {
@@ -140,14 +148,39 @@ it('accepts a trusted candidate before deadline and never replaces it with fallb
   expect(h.stage).toHaveBeenCalledTimes(1);
 });
 
-it('falls back if candidate import finishes after the deadline', async () => {
+it('keeps an on-time candidate available for visitor review after the generation deadline', async () => {
   const h = harness();
   await h.coordinator.begin(input);
   await h.coordinator.advance(key);
   h.setStatus({ state: 'candidate_ready', candidate: candidateMeta });
-  h.stage.mockImplementationOnce(async () => { h.tick(15_001); return 'sprite/late'; });
+  expect(await h.coordinator.advance(key)).toMatchObject({ state: 'candidate_available' });
+  h.tick(15_001);
+  expect(await h.coordinator.advance(key)).toMatchObject({ state: 'candidate_available', candidate: candidateMeta });
   expect(await h.coordinator.acceptGenerated(key, candidateMeta.candidateId)).toMatchObject({ state: 'accepted',
+    decision: { outcome: 'generated_accepted', reason: 'candidate_ready_before_deadline' } });
+});
+
+it('does not expose a candidate first observed after the generation deadline', async () => {
+  const h = harness();
+  await h.coordinator.begin(input);
+  await h.coordinator.advance(key);
+  h.tick(15_000);
+  h.setStatus({ state: 'late_completed', lateResultStored: true, candidate: candidateMeta });
+  expect(await h.coordinator.advance(key)).toMatchObject({ state: 'accepted',
     decision: { outcome: 'catalog_fallback_accepted', reason: 'deadline_elapsed' } });
+  expect(h.repository.flow!.heldCandidate).toBeNull();
+  expect(h.stage).not.toHaveBeenCalled();
+});
+
+it('lets a visitor choose the catalog fallback after an on-time candidate is held', async () => {
+  const h = harness();
+  await h.coordinator.begin(input);
+  h.setStatus({ state: 'candidate_ready', candidate: candidateMeta });
+  await h.coordinator.advance(key);
+  h.tick(15_001);
+  expect(await h.coordinator.acceptFallback(key, 'identification_below_threshold')).toMatchObject({ state: 'accepted',
+    decision: { outcome: 'catalog_fallback_accepted', reason: 'operator_fallback' } });
+  expect(h.stage).not.toHaveBeenCalled();
 });
 
 it('holds a different Sprout outcome for reconciliation and never synthesizes acceptance', async () => {

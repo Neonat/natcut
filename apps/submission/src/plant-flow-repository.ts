@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
-import type { PlantOutcome } from './plant-job-contract.ts';
+import type { PlantCandidate, PlantOutcome } from './plant-job-contract.ts';
 
 export type PlantFlowKey = { eventId: string; visitorSessionId: string; captureId: string };
 export type PlantFlow = PlantFlowKey & {
@@ -11,6 +11,7 @@ export type PlantFlow = PlantFlowKey & {
   plantJobId: string | null;
   eligibility: 'unknown' | 'eligible' | 'below_threshold' | 'needs_reconciliation';
   identificationSuggestions: { name: string; scoreBps: number }[];
+  heldCandidate: { candidate: PlantCandidate; observedAt: string } | null;
   accepted: PlantOutcome | null;
   sproutAck: 'pending' | 'confirmed' | 'needs_reconciliation';
 };
@@ -25,6 +26,8 @@ export interface PlantFlowRepository {
   bind(key: PlantFlowKey, generationIntentId: string, plantJobId: string): Promise<PlantFlow>;
   observe(key: PlantFlowKey, generationIntentId: string, eligibility: PlantFlow['eligibility'],
     suggestions?: PlantFlow['identificationSuggestions']): Promise<PlantFlow>;
+  holdCandidate(key: PlantFlowKey, generationIntentId: string, candidate: PlantCandidate,
+    observedAt: string): Promise<PlantFlow>;
   commit(key: PlantFlowKey, generationIntentId: string, decision: PlantOutcome): Promise<PlantFlow>;
   recordAck(key: PlantFlowKey, generationIntentId: string, decisionId: string,
     ack: 'confirmed' | 'needs_reconciliation'): Promise<PlantFlow>;
@@ -43,7 +46,8 @@ export function createPlantFlowRepository(firestore: Firestore): PlantFlowReposi
         eventId: input.eventId, visitorSessionId: input.visitorSessionId, captureId: input.captureId,
         generationIntentId: randomUUID(), requestFingerprint: input.requestFingerprint,
         liveDeadlineAt: input.liveDeadlineAt, fallbackAssetId: input.fallbackAssetId,
-        plantJobId: null, eligibility: 'unknown', identificationSuggestions: [], accepted: null, sproutAck: 'pending',
+        plantJobId: null, eligibility: 'unknown', identificationSuggestions: [], heldCandidate: null,
+        accepted: null, sproutAck: 'pending',
       };
       return firestore.runTransaction(async transaction => {
         const snapshot = await transaction.get(ref(input));
@@ -89,6 +93,26 @@ export function createPlantFlowRepository(firestore: Firestore): PlantFlowReposi
         return { ...existing, eligibility: next, identificationSuggestions };
       });
     },
+    holdCandidate(key, generationIntentId, candidate, observedAt) {
+      return firestore.runTransaction(async transaction => {
+        const snapshot = await transaction.get(ref(key));
+        if (!snapshot.exists) throw new PlantFlowConflictError();
+        const existing = snapshot.data() as PlantFlow;
+        if (existing.generationIntentId !== generationIntentId || !existing.plantJobId ||
+          existing.eligibility !== 'eligible' || !Number.isFinite(Date.parse(observedAt)) ||
+          Date.parse(observedAt) >= Date.parse(existing.liveDeadlineAt)) throw new PlantFlowConflictError();
+        if (existing.accepted) return existing;
+        if (existing.heldCandidate) {
+          if (existing.heldCandidate && JSON.stringify(existing.heldCandidate.candidate) !== JSON.stringify(candidate)) {
+            throw new PlantFlowConflictError();
+          }
+          return existing;
+        }
+        const heldCandidate = { candidate, observedAt };
+        transaction.update(ref(key), { heldCandidate });
+        return { ...existing, heldCandidate };
+      });
+    },
     commit(key, generationIntentId, decision) {
       return firestore.runTransaction(async transaction => {
         const snapshot = await transaction.get(ref(key));
@@ -97,12 +121,13 @@ export function createPlantFlowRepository(firestore: Firestore): PlantFlowReposi
         if (existing.generationIntentId !== generationIntentId || !existing.plantJobId) throw new PlantFlowConflictError();
         if (existing.accepted) return existing;
         if (existing.eligibility === 'needs_reconciliation' ||
-          (decision.outcome === 'generated_accepted' && existing.eligibility !== 'eligible') ||
-          (decision.reason === 'deadline_elapsed' && existing.eligibility !== 'eligible') ||
-          (decision.reason === 'identification_below_threshold' && existing.eligibility !== 'below_threshold')) {
-          throw new PlantFlowConflictError();
-        }
-        if (decision.outcome === 'generated_accepted' && Date.parse(decision.decidedAt) >= Date.parse(existing.liveDeadlineAt)) {
+          (decision.outcome === 'generated_accepted' && (existing.eligibility !== 'eligible' ||
+            !existing.heldCandidate || existing.heldCandidate.candidate.candidateId !== decision.candidateId ||
+            decision.reason !== 'candidate_ready_before_deadline')) ||
+          (decision.reason === 'deadline_elapsed' && (existing.eligibility !== 'eligible' || existing.heldCandidate)) ||
+          (decision.reason === 'identification_below_threshold' && existing.eligibility !== 'below_threshold') ||
+          (decision.reason === 'operator_fallback' && existing.eligibility !== 'eligible') ||
+          (decision.reason === 'generation_failed' && existing.eligibility !== 'eligible')) {
           throw new PlantFlowConflictError();
         }
         transaction.update(ref(key), { accepted: decision, sproutAck: 'pending' });

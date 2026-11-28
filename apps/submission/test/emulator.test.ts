@@ -91,12 +91,15 @@ emulatorDescribe('Firebase emulator integration', () => {
     await repository.bind(key, first.generationIntentId, 'plant-job-1');
     await expect(repository.bind(key, first.generationIntentId, 'other-job')).rejects.toBeInstanceOf(PlantFlowConflictError);
     await repository.observe(key, first.generationIntentId, 'eligible');
+    await repository.holdCandidate(key, first.generationIntentId, { candidateId: 'candidate-1',
+      sha256: 'a'.repeat(64), byteLength: 1, mediaType: 'image/png', objectGeneration: '1' },
+    '2026-11-28T00:00:14.000Z');
     const fallback = { decisionId: 'decision-1', decidedAt: '2026-11-28T00:00:15.000Z',
       outcome: 'catalog_fallback_accepted' as const, catalogAssetId: input.fallbackAssetId,
-      reason: 'deadline_elapsed' as const };
+      reason: 'operator_fallback' as const };
     const generated = { decisionId: 'decision-2', decidedAt: '2026-11-28T00:00:14.000Z',
       outcome: 'generated_accepted' as const, candidateId: 'candidate-1',
-      natcutAssetId: 'sprite/generated', reason: 'candidate_approved_before_deadline' as const };
+      natcutAssetId: 'sprite/generated', reason: 'candidate_ready_before_deadline' as const };
     const [winner, loser] = await Promise.all([
       repository.commit(key, first.generationIntentId, fallback),
       repository.commit(key, first.generationIntentId, generated),
@@ -117,6 +120,9 @@ emulatorDescribe('Firebase emulator integration', () => {
       liveDeadlineAt: '2099-01-01T00:00:00.000Z', fallbackAssetId: catalogManifest.spriteAssetId });
     await flows.bind(key, flow.generationIntentId, 'runtime-job');
     await flows.observe(key, flow.generationIntentId, 'eligible');
+    await flows.holdCandidate(key, flow.generationIntentId, { candidateId: 'candidate-1',
+      sha256: 'a'.repeat(64), byteLength: 1, mediaType: 'image/png', objectGeneration: '9' },
+    '2026-11-28T00:00:01.000Z');
     const source = await sharp(Buffer.from([119, 255, 0, 255]), {
       raw: { width: 1, height: 1, channels: 4 },
     }).withIccProfile('srgb').png().toBuffer();
@@ -148,7 +154,7 @@ emulatorDescribe('Firebase emulator integration', () => {
     await expect(createTrustedArtifactPreparer()(runtimeManifest)).rejects.toThrow(/unsupported render version/i);
     const decision = { decisionId: 'runtime-decision', decidedAt: '2026-11-28T00:00:01.000Z',
       outcome: 'generated_accepted' as const, candidateId: 'candidate-1', natcutAssetId: assetId,
-      reason: 'candidate_approved_before_deadline' as const };
+      reason: 'candidate_ready_before_deadline' as const };
     await flows.commit(key, flow.generationIntentId, decision);
     await expect(registry.loadAccepted(key, assetId)).rejects.toThrow(/no matching confirmed/i);
     await flows.recordAck(key, flow.generationIntentId, decision.decisionId, 'confirmed');
