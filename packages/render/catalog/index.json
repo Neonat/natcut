@@ -387,24 +387,6 @@
       ]
     },
     {
-      "id": "sprite/733118ad23da606d6d16d00ad11ac3656ace644507e5691120fc8e39915f1e75",
-      "name": "Prickly pear",
-      "pngSha256": "db553d398ec6ffb1396a6277163a385488ba7370dfec64450393f19715ef3637",
-      "colorEvidence": {
-        "outputSpace": "srgb",
-        "pipelineVersion": "natcut-srgb-v1",
-        "sources": [
-          {
-            "sourceSpace": "srgb",
-            "sourceProfileSha256": null,
-            "action": "preserved"
-          }
-        ]
-      },
-      "width": 210,
-      "height": 210
-    },
-    {
       "id": "sprite/dc879d836e279c85b0d81911781dfea24507288ba9aad10042d1e2083b73939c",
       "name": "Snake plant",
       "scientificName": "Dracaena trifasciata",
@@ -632,6 +614,24 @@
       "pngSha256": "95edfb98885bc6df75799ea892270ff06c1d90b469cf627f7d304286ed2503df",
       "width": 192,
       "height": 192
+    },
+    {
+      "id": "sprite/733118ad23da606d6d16d00ad11ac3656ace644507e5691120fc8e39915f1e75",
+      "name": "Prickly pear",
+      "pngSha256": "db553d398ec6ffb1396a6277163a385488ba7370dfec64450393f19715ef3637",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 210,
+      "height": 210
     },
     {
       "id": "sprite/c7e71948f761c05d6361441293e262f6f11ed44de8dee2e3956a39281e91b966",

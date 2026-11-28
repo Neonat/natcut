@@ -39,6 +39,12 @@ function spriteRadio(id: string): HTMLInputElement {
 }
 
 describe('mobile editor', () => {
+  it('offers the approved three-meme sheet without the old size layouts or Prickly pear', () => {
+    render(<EditorPage submitSubmission={vi.fn()} previewReportOverride={warningReport()} />);
+    expect(screen.getByRole('heading', { name: 'Three memes' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /one large sticker|two stickers/i })).toBeNull();
+    expect(sprites.some(sprite => sprite.name === 'Prickly pear')).toBe(false);
+  });
   const alternate = sprites[1];
   const itWithAlternate = alternate ? it : it.skip;
 
@@ -165,7 +171,7 @@ describe('mobile editor', () => {
 
     await waitFor(() => expect(submitSubmission).toHaveBeenCalledTimes(1));
     expect(submitSubmission).toHaveBeenCalledWith(expect.objectContaining({
-      manifest: catalogManifest,
+      manifest: expect.objectContaining({ ...catalogManifest, sheetVariant: 'trio' }),
       warningAcknowledgement: expect.objectContaining({
         geometryVersion: 'natcut-geometry-v1',
         rasterHash: 'a'.repeat(64),

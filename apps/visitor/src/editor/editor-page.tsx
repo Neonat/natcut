@@ -23,6 +23,7 @@ import { useCutPreview } from './use-cut-preview.ts';
 import sproutWordmark from '../assets/sprout-wordmark.png';
 
 export const fixtureManifest = legacyManifest;
+export const visitorSheetManifest: CompositionManifest = { ...catalogManifest, sheetVariant: 'trio' };
 
 export const overlapFixtureManifest: CompositionManifest = CompositionManifestSchema.parse({
   ...fixtureManifest,
@@ -51,7 +52,7 @@ export type EditorPageProps = {
 };
 
 export function EditorPage(props: EditorPageProps) {
-  const initialManifest = props.initialManifest ?? catalogManifest;
+  const initialManifest = props.initialManifest ?? visitorSheetManifest;
   const [manifest, setManifest] = useState(initialManifest);
   const [custom, setCustom] = useState(() => ![1, 1.5, 2].includes(initialManifest.cutMarginMm));
   const [submitting, setSubmitting] = useState(false);
@@ -147,14 +148,8 @@ export function EditorPage(props: EditorPageProps) {
           <SpritePicker selected={manifest.spriteAssetId} reloadKey={assetReload}
             onChange={(spriteAssetId) => update({ ...manifest, spriteAssetId }, true)} />
         )}
-        {manifest.trainerAssetId === null && <div className="sheet-variants" role="group" aria-label="Choose sticker sheet layout">
-          <p className="eyebrow">Your sheet</p><h2>Choose a layout</h2>
-          <div className="sheet-variant-options">
-            {([['classic', 'One large sticker'], ['duo', 'Two stickers'], ['trio', 'Three stickers']] as const).map(([value, label]) =>
-              <button key={value} type="button" className={(manifest.sheetVariant ?? 'classic') === value ? 'selected' : ''}
-                aria-pressed={(manifest.sheetVariant ?? 'classic') === value}
-                onClick={() => update(CompositionManifestSchema.parse({ ...manifest, sheetVariant: value }), true)}>{label}</button>)}
-          </div>
+        {manifest.renderVersion === 'catalog-v1' && <div className="sheet-variants" aria-label="Three memes sticker sheet">
+          <p className="eyebrow">Your sheet</p><h2>Three memes</h2>
         </div>}
         <CutPreview manifest={manifest} contours={current?.contours ?? []} reloadKey={assetReload}
           {...(props.runtimeSpriteUrl ? { runtimeSpriteUrl: props.runtimeSpriteUrl } : {})}
