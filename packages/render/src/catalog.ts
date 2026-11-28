@@ -92,6 +92,7 @@ export function assertSupportedRecipe(manifest: CompositionManifest, runtimeSpri
     runtimeSpriteId !== undefined && manifest.spriteAssetId === runtimeSpriteId &&
     /^sprite\/runtime\/[a-f0-9]{64}$/.test(runtimeSpriteId);
   if (manifest.renderVersion !== 'catalog-v1' && !runtime) throw new Error('Unsupported render version.');
+  if (!runtime && manifest.plantLabel !== undefined) throw new Error('Plant labels require accepted runtime artwork.');
   const [main, brand] = manifest.cutGroups;
   if (!(runtime || byId.has(manifest.spriteAssetId)) || manifest.theme !== 'default' || manifest.brandingVariant !== 'logo'
     || manifest.trainerAssetId !== null || manifest.cutGroups.length !== 2

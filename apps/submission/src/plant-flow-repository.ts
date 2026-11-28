@@ -86,8 +86,8 @@ export function createPlantFlowRepository(firestore: Firestore): PlantFlowReposi
         if (existing.accepted || existing.eligibility === 'needs_reconciliation') return existing;
         const next = existing.eligibility !== 'unknown' && existing.eligibility !== eligibility
           ? 'needs_reconciliation' : eligibility;
-        const identificationSuggestions = next === 'below_threshold' && suggestions ? suggestions : existing.identificationSuggestions;
-        if (next !== existing.eligibility || identificationSuggestions !== existing.identificationSuggestions) {
+        const identificationSuggestions = suggestions?.length ? suggestions : existing.identificationSuggestions;
+        if (next !== existing.eligibility || JSON.stringify(identificationSuggestions) !== JSON.stringify(existing.identificationSuggestions)) {
           transaction.update(ref(key), { eligibility: next, identificationSuggestions });
         }
         return { ...existing, eligibility: next, identificationSuggestions };

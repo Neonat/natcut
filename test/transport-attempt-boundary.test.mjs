@@ -36,6 +36,7 @@ test('transport attempt import graph contains only the approved offline dependen
     'packages/domain/src/canonical-hash.ts',
     'packages/domain/src/geometry.ts',
     'packages/domain/src/manifest.ts',
+    'packages/domain/src/plant-label.ts',
     'packages/domain/src/print-artifact.ts',
     'packages/domain/src/print-profile.ts',
     'packages/domain/src/sha256.ts',

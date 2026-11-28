@@ -4,6 +4,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { DEVFEST_SG_V1, CompositionManifestSchema, NATIVE_SRGB_EVIDENCE } from '@natcut/domain';
+import { evaluateCutGeometry } from '@natcut/cut-geometry';
 import { describe, expect, it } from 'vitest';
 import {
   assetPngFilename,
@@ -12,6 +13,12 @@ import {
   planComposition,
   renderCutGroupMasks,
   renderServerRaster,
+  isRuntimeLetteringId,
+  runtimeLetteringAsset,
+  runtimeLetteringSvgUrl,
+  RUNTIME_NAME_ID,
+  RUNTIME_PHRASE_A_ID,
+  RUNTIME_PHRASE_B_ID,
   spriteChoices,
   spriteArtworkIds,
   sprites,
@@ -127,6 +134,41 @@ describe('planComposition', () => {
     expect(spriteArtworkIds(undefined, base, 'trio')).toEqual([base, base, base]);
   });
 
+  it('gives a live sprite three distinct scale and facing treatments without another asset', () => {
+    const id = `sprite/runtime/${'a'.repeat(64)}`;
+    const selected = CompositionManifestSchema.parse({ ...catalogManifest,
+      spriteAssetId: id, renderVersion: 'runtime-catalog-v1', sheetVariant: 'trio' });
+    const plan = planComposition(selected, DEVFEST_SG_V1, id);
+    const layers = plan.layers.filter(layer => layer.assetId === id);
+    expect(layers.map(layer => layer.assetId)).toEqual([id, id, id]);
+    expect(layers.map(layer => layer.width)).toEqual([500, 500, 500]);
+    expect(layers.map(layer => layer.flipX)).toEqual([false, false, true]);
+    expect(plan.layers.filter(layer => isRuntimeLetteringId(layer.assetId)).map(layer => layer.assetId))
+      .toEqual([RUNTIME_NAME_ID, RUNTIME_PHRASE_A_ID, RUNTIME_PHRASE_B_ID]);
+    expect(plan.layers.filter(layer => layer.assetId.startsWith('branding/'))).toHaveLength(2);
+  });
+
+  it('keeps the full live trio inside printable cut geometry', async () => {
+    const id = `sprite/runtime/${'a'.repeat(64)}`;
+    const selected = CompositionManifestSchema.parse({ ...catalogManifest,
+      spriteAssetId: id, renderVersion: 'runtime-catalog-v1', sheetVariant: 'trio' });
+    const plan = planComposition(selected, DEVFEST_SG_V1, id);
+    const staticPlan = { ...plan, layers: plan.layers.filter(layer => layer.assetId !== id &&
+      !isRuntimeLetteringId(layer.assetId)) };
+    const packaged = new Map(await loadPackagedAssets(staticPlan));
+    const catalogPlan = planComposition(catalogManifest, DEVFEST_SG_V1);
+    const source = (await loadPackagedAssets(catalogPlan)).get(catalogManifest.spriteAssetId)!;
+    packaged.set(id, { ...source, id });
+    for (const layer of plan.layers) if (isRuntimeLetteringId(layer.assetId)) {
+      packaged.set(layer.assetId, runtimeLetteringAsset(layer.assetId, 'FRANGIPANI'));
+    }
+    const report = (await evaluateCutGeometry(renderCutGroupMasks(plan, packaged),
+      selected.cutMarginMm, DEVFEST_SG_V1)).report;
+    expect(report.valid).toBe(true);
+    expect(report.issues.filter(issue => issue.severity === 'error')).toEqual([]);
+    expect(report.contourCount).toBe(5);
+  });
+
   it('brings battling portrait subjects close enough for the overlap-warning fixture', () => {
     const portrait = CompositionManifestSchema.parse({
       ...manifest,
@@ -144,6 +186,36 @@ describe('planComposition', () => {
 });
 
 describe('asset loading and masks', () => {
+  it('uses the same cream sprite halo pixels for print and cut geometry', async () => {
+    const rgba = new Uint8ClampedArray(3 * 3 * 4);
+    rgba[(1 * 3 + 1) * 4] = 190;
+    rgba[(1 * 3 + 1) * 4 + 3] = 255;
+    const asset = { id: 'test-sprite', width: 3, height: 3, rgba, colorEvidence: NATIVE_SRGB_EVIDENCE };
+    const plan: PlannedComposition = { width: 5, height: 5, cutGroupIds: ['main'], layers: [{
+      id: 'sprite', member: 'sprite', assetId: asset.id, cutGroupId: 'main',
+      x: 1, y: 1, width: 3, height: 3, zIndex: 1, creamHaloPx: 1,
+    }] };
+    const assets = new Map([[asset.id, asset]]);
+    const cut = renderCutGroupMasks(plan, assets)[0]!;
+    const print = await renderServerRaster(plan, assets);
+    expect(cut.alpha[1 * 5 + 1]).toBe(255);
+    expect([...print.rgba.slice((1 * 5 + 1) * 4, (1 * 5 + 1) * 4 + 4)])
+      .toEqual([255, 239, 199, 255]);
+    expect([...print.rgba.slice((2 * 5 + 2) * 4, (2 * 5 + 2) * 4 + 4)])
+      .toEqual([190, 0, 0, 255]);
+  });
+  it('renders plant-specific red pixel lettering with a cream contour matte', () => {
+    const frangipani = runtimeLetteringAsset(RUNTIME_NAME_ID, 'FRANGIPANI');
+    const orchid = runtimeLetteringAsset(RUNTIME_NAME_ID, 'ORCHID');
+    expect(frangipani.rgba).not.toEqual(orchid.rgba);
+    expect(frangipani.rgba).toEqual(runtimeLetteringAsset(RUNTIME_NAME_ID, 'FRANGIPANI').rgba);
+    const colors = new Set<string>();
+    for (let i = 0; i < frangipani.rgba.length; i += 4) if (frangipani.rgba[i + 3]) {
+      colors.add(`${frangipani.rgba[i]},${frangipani.rgba[i + 1]},${frangipani.rgba[i + 2]}`);
+    }
+    expect(colors).toEqual(new Set(['255,239,199', '190,29,62']));
+    expect(runtimeLetteringSvgUrl(frangipani)).toMatch(/^data:image\/svg\+xml,/);
+  });
   it('rejects packaged PNG bytes that no longer match a ticket’s immutable asset identity', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'natcut-changed-art-'));
     try {
@@ -184,6 +256,19 @@ describe('asset loading and masks', () => {
 });
 
 describe('renderServerRaster', () => {
+  it('mirrors printable pixels and cut alpha together for a flipped layer', async () => {
+    const asymmetric: SrgbRgbaAsset = { id: 'sprite/asymmetric', colorEvidence: NATIVE_SRGB_EVIDENCE,
+      width: 2, height: 1, rgba: new Uint8ClampedArray([255, 0, 0, 255, 0, 0, 255, 0]) };
+    const plan: PlannedComposition = { width: 2, height: 1, cutGroupIds: ['main'], layers: [{
+      id: 'sprite', member: 'sprite', assetId: asymmetric.id, cutGroupId: 'main',
+      x: 0, y: 0, width: 2, height: 1, zIndex: 0, flipX: true,
+    }] };
+    const catalog: AssetCatalog = new Map([[asymmetric.id, asymmetric]]);
+    const raster = await renderServerRaster(plan, catalog);
+    const mask = renderCutGroupMasks(plan, catalog)[0]!;
+    expect(Array.from(raster.rgba)).toEqual([0, 0, 0, 0, 255, 0, 0, 255]);
+    expect(Array.from(mask.alpha)).toEqual([0, 255]);
+  });
   it('renders identical raster hashes for identical plans', async () => {
     const plan = planComposition(manifest, DEVFEST_SG_V1);
     const first = await renderServerRaster(plan, assets);

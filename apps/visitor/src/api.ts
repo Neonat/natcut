@@ -48,6 +48,7 @@ export type PlantFlowStatus =
   | { state: 'accepted'; generationIntentId: string; decision:
       | { outcome: 'generated_accepted'; natcutAssetId: string }
       | { outcome: 'catalog_fallback_accepted'; catalogAssetId: string };
+      plantLabel: string;
       sproutAck: 'confirmed' | 'pending' | 'needs_reconciliation' };
 
 export interface PlantVisitorApi {
