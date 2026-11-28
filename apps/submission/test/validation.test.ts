@@ -3,6 +3,8 @@ import { expect, it } from 'vitest';
 import { DEVFEST_SG_V1, decodeLogicalSourceBundle } from '@natcut/domain';
 import { catalogManifest, loadPackagedAssets, planComposition, renderServerRaster } from '@natcut/render';
 import { createTrustedArtifactPreparer, createTrustedManifestValidator } from '../src/index.ts';
+import { createAcceptedRuntimeArtifactPreparer } from '../src/runtime-preparation.ts';
+import type { createRuntimeSpriteRegistry } from '../src/runtime-sprite.ts';
 
 const historicalMaskHash = '1465f6f4822228afd53188f8490373156e9005a673cf06a6f3da849ecf90e84d';
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -50,6 +52,21 @@ it.each([['duo', 3], ['trio', 4]] as const)('keeps %s sheet stickers as separate
   expect(prepared.report.valid).toBe(true);
   expect(prepared.report.contourCount).toBeGreaterThanOrEqual(minimumCuts);
   expect(prepared.contours).toHaveLength(prepared.report.contourCount);
+});
+
+it('builds a three-sticker trusted artifact from one accepted runtime sprite', async () => {
+  const runtimeId = `sprite/runtime/${'a'.repeat(64)}`;
+  const staticAssets = await loadPackagedAssets(planComposition(catalogManifest, DEVFEST_SG_V1));
+  const sprite = staticAssets.get(catalogManifest.spriteAssetId)!;
+  const registry = { loadAccepted: async () => ({ ...sprite, id: runtimeId }) } as unknown as
+    Pick<ReturnType<typeof createRuntimeSpriteRegistry>, 'loadAccepted'>;
+  const manifest = { ...catalogManifest, renderVersion: 'runtime-catalog-v1',
+    spriteAssetId: runtimeId, sheetVariant: 'trio' as const };
+  const prepared = await createAcceptedRuntimeArtifactPreparer(registry)(
+    { eventId: 'event', visitorSessionId: 'visitor', captureId: 'capture' }, manifest);
+  expect(prepared.report.valid).toBe(true);
+  expect(prepared.report.contourCount).toBeGreaterThanOrEqual(4);
+  expect(prepared.bundle.descriptor.renderVersion).toBe('runtime-catalog-v1');
 });
 
 it('rejects unpublished profiles and artifact fields supplied in a manifest', async () => {
