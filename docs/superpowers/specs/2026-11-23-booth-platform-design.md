@@ -95,7 +95,7 @@ The existing read-only bridge becomes the foundation of `packages/printer` and t
 
 Anonymous Authentication supplies a stable, opaque UID for a browser session. The app also creates an opaque session record used to enforce one survey per session. No email is required to create a sticker or receive it.
 
-Anonymous sessions are device-local. The status link therefore contains an unguessable public status token so a visitor can reopen their job without exposing operator data or requiring an account.
+Anonymous sessions are device-local. The original status link carried an unguessable public status token in its fragment. The current visitor page removes a legacy fragment after importing it into tab storage and creates new queue URLs without a fragment. The cleaned URL works while that tab's storage survives; portable recovery requires a separate authenticated or HttpOnly-cookie design.
 
 ## Private portrait route
 

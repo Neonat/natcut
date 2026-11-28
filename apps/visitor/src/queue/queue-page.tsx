@@ -24,6 +24,7 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
 
   const refresh = useCallback(async () => {
     if (leavingRef.current) return;
+    if (!props.statusToken) { setLoading(false); return; }
     const generation = ++refreshGeneration.current;
     setLoading(true);
     setError(null);
@@ -80,6 +81,12 @@ export function QueuePage(props: { submissionId: string; statusToken: string; ap
   const detail = props.simulation && status?.publicStatus === 'ready'
     ? 'Simulation complete. No physical sticker was made.'
     : copy?.detail;
+  if (!props.statusToken) return <main className="queue-page" data-testid="queue-page">
+    <header className="brand-bar"><span className="brand-mark">sprout</span><span>Print queue</span></header>
+    <section className="queue-status"><h1>Open your original queue tab</h1>
+      <p>This address alone cannot access your ticket. Return to the tab where you joined the queue, or ask the booth host for help.</p>
+    </section>
+  </main>;
   return (
     <main className="queue-page" data-testid="queue-page" {...pullHandlers}>
       <header className="brand-bar"><span className="brand-mark">sprout</span><span>Print queue</span></header>
