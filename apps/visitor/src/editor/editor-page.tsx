@@ -148,7 +148,7 @@ export function EditorPage(props: EditorPageProps) {
           <SpritePicker selected={manifest.spriteAssetId} reloadKey={assetReload}
             onChange={(spriteAssetId) => update({ ...manifest, spriteAssetId }, true)} />
         )}
-        {manifest.renderVersion === 'catalog-v1' && <div className="sheet-variants" aria-label="Three memes sticker sheet">
+        {['catalog-v1', 'runtime-catalog-v1'].includes(manifest.renderVersion) && <div className="sheet-variants" aria-label="Three memes sticker sheet">
           <p className="eyebrow">Your sheet</p><h2>Three memes</h2>
         </div>}
         <CutPreview manifest={manifest} contours={current?.contours ?? []} reloadKey={assetReload}
