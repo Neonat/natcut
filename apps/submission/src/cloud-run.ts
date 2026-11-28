@@ -20,6 +20,7 @@ import { createSproutPlantJobClient } from './sprout-client.ts';
 import { createRuntimeSpriteRegistry } from './runtime-sprite.ts';
 import { createGcsRuntimeSpriteObjectStore } from './runtime-sprite-gcs.ts';
 import { createAcceptedRuntimeArtifactPreparer } from './runtime-preparation.ts';
+import { createPlantCandidatePreview } from './plant-candidate-preview.ts';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
 export { NATCUT_ARTIFACT_BUCKET };
@@ -109,6 +110,7 @@ export async function createCloudRunSubmissionServer(
         verifyRuntimeAcceptance: (key: Parameters<typeof registry.assertAccepted>[0], manifest: CompositionManifest) => registry.assertAccepted(key, manifest.spriteAssetId),
         prepareRuntimeArtifact: createAcceptedRuntimeArtifactPreparer(registry, artwork),
         readAcceptedSprite: (key: Parameters<typeof registry.readAcceptedPng>[0], assetId: string) => registry.readAcceptedPng(key, assetId),
+        previewCandidate: createPlantCandidatePreview({ flows: flows!, sprout: sprout! }),
       } } : {}),
       routePrefix: '/api',
     }),

@@ -32,6 +32,13 @@ owner-scoped generated sprite can be fetched with the same Firebase bearer token
 `GET /api/v1/plant-jobs/:captureId/accepted-sprite`; it is unavailable before Sprout
 acknowledges the immutable acceptance. The visitor should fetch its bytes and create
 a local object URL for preview.
+Before choosing generated artwork, the visitor can fetch
+`GET /api/v1/plant-jobs/:captureId/candidates/:candidateId` with the same bearer token.
+NatCut checks capture ownership, active flow and candidate identity, downloads through
+the private Sprout client with its digest and length checks, and returns a normalized
+sRGB PNG. This preview neither accepts nor stages a candidate and closes at the
+live deadline. If the visitor chooses the catalog while a candidate is available,
+the fallback reason is recorded as `operator_fallback`.
 
 - Wire an authenticated NatCut visitor endpoint after the phone capture lane supplies a stable sanitized photo receipt and ownership check.
 - Supply a reviewed private plant capture source with owner checks and immutable sanitized receipt; the portrait capture records are separate.

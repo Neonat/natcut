@@ -11,7 +11,8 @@ import { sprites } from '@natcut/render';
 const identifier = z.string().min(1).max(256).regex(/^[A-Za-z0-9_-]+$/);
 const StartBodySchema = z.object({ captureId: identifier, fallbackAssetId: z.string().min(1).max(256) }).strict();
 const CandidateBodySchema = z.object({ candidateId: identifier }).strict();
-const CaptureParamsSchema = z.object({ captureId: identifier }).strict();
+const CaptureParamsSchema = z.object({ captureId: identifier });
+const CandidateParamsSchema = z.object({ captureId: identifier, candidateId: identifier }).strict();
 
 export type PlantRouteDependencies = {
   eventId: string;
@@ -22,6 +23,7 @@ export type PlantRouteDependencies = {
   verifyBearerToken: VerifyBearerToken;
   submitRuntime: (ownerUid: string, flowKey: PlantFlowKey, body: unknown) => Promise<{ statusCode: number; payload: unknown }>;
   readAcceptedSprite?: (flowKey: PlantFlowKey, assetId: string) => Promise<Buffer>;
+  previewCandidate?: (flowKey: PlantFlowKey, candidateId: string) => Promise<Buffer>;
 };
 
 function publicResult(result: PlantFlowResult) {
@@ -103,7 +105,17 @@ export function registerPlantRoutes(app: FastifyInstance, prefix: string, deps: 
   app.post(route('/v1/plant-jobs/:captureId/accept-fallback'), async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store');
     if (request.body && Object.keys(request.body as object).length) return reply.code(400).send({ error: 'INVALID_FALLBACK' });
-    return withOwned(request, reply, async key => publicResult(await deps.coordinator.acceptFallback(key, 'identification_below_threshold')));
+    return withOwned(request, reply, async key => {
+      const state = await deps.coordinator.advance(key);
+      if (state.state === 'accepted') return publicResult(state);
+      if (state.state === 'identification_review') {
+        return publicResult(await deps.coordinator.acceptFallback(key, 'identification_below_threshold'));
+      }
+      if (state.state === 'candidate_available') {
+        return publicResult(await deps.coordinator.acceptFallback(key, 'operator_fallback'));
+      }
+      return reply.code(409).send({ error: 'FALLBACK_NOT_AVAILABLE' });
+    });
   });
   app.post(route('/v1/plant-jobs/:captureId/sync-outcome'), async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store');
@@ -114,6 +126,19 @@ export function registerPlantRoutes(app: FastifyInstance, prefix: string, deps: 
     return withOwned(request, reply, async (key, ownerUid) => {
       const result = await deps.submitRuntime(ownerUid, key, request.body);
       return reply.code(result.statusCode).send(result.payload);
+    });
+  });
+  if (deps.previewCandidate) app.get(route('/v1/plant-jobs/:captureId/candidates/:candidateId'), async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store');
+    const params = CandidateParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'INVALID_CANDIDATE' });
+    return withOwned(request, reply, async key => {
+      try {
+        const png = await deps.previewCandidate!(key, params.data.candidateId);
+        return reply.type('image/png').send(png);
+      } catch {
+        return reply.code(409).send({ error: 'CANDIDATE_PREVIEW_UNAVAILABLE' });
+      }
     });
   });
   if (deps.readAcceptedSprite) app.get(route('/v1/plant-jobs/:captureId/accepted-sprite'), async (request, reply) => {
