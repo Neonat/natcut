@@ -4,7 +4,12 @@ import { PlantJobCreateResponseSchema, PlantJobStatusSchema, PlantOutcomeSchema,
 import { isDeepStrictEqual } from 'node:util';
 
 export class SproutHttpError extends Error {
-  constructor(readonly status: number) { super(`Sprout request failed with HTTP ${status}`); }
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`Sprout request failed with HTTP ${status}`);
+    this.status = status;
+  }
 }
 export class SproutEvidenceConflictError extends Error {
   constructor(message: string) { super(message); }
