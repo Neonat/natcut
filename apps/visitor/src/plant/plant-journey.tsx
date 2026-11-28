@@ -49,7 +49,7 @@ export function PlantJourney({ api, submitCatalog, onNavigate }: { api: PlantVis
   }, [api, captureId, fallbackAssetId, status]);
 
   useEffect(() => {
-    if (!captureId || status?.state !== 'accepted' || status.sproutAck === 'confirmed') return;
+    if (!captureId || status?.state !== 'accepted' || status.sproutAck !== 'pending') return;
     const timer = setTimeout(() => void api.syncOutcome(captureId).then(setStatus).catch(() => {}), 1200);
     return () => clearTimeout(timer);
   }, [api, captureId, status]);
@@ -100,6 +100,8 @@ export function PlantJourney({ api, submitCatalog, onNavigate }: { api: PlantVis
   }
 
   if (status?.state === 'accepted') {
+    if (status.sproutAck === 'needs_reconciliation') return <main className="plant-journey"><h1>We need to check your sprite.</h1>
+      <p>Your choice is saved. Please ask the booth host for help.</p></main>;
     if (status.sproutAck !== 'confirmed') return <main className="plant-journey"><h1>Preparing your sprite</h1>
       <p>Your choice is saved. We’re checking the finished artwork.</p>
       <button disabled={busy} onClick={() => void run(() => api.syncOutcome(captureId))}>Continue</button>

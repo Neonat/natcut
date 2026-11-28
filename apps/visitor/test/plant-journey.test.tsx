@@ -72,3 +72,16 @@ it('shows a generated candidate before the visitor chooses it or the approved ba
   fireEvent.click(screen.getByRole('button', { name: /yes, use this sprite/i }));
   expect(acceptGenerated).toHaveBeenCalledWith(expect.any(String), 'candidate');
 });
+
+it('recovers a confirmed capture after reload when the first job create response was lost', async () => {
+  sessionStorage.setItem('natcut:plant-capture', 'capture-resume');
+  sessionStorage.setItem('natcut:plant-fallback', catalogManifest.spriteAssetId);
+  const begin = vi.fn().mockResolvedValue({ state: 'waiting', generationIntentId: 'intent', remainingMs: 14000 });
+  const api = { capture: vi.fn(), begin,
+    plantStatus: vi.fn().mockRejectedValue(new Error('PLANT_JOB_NOT_FOUND')),
+    acceptGenerated: vi.fn(), acceptFallback: vi.fn(), syncOutcome: vi.fn(),
+    acceptedSprite: vi.fn(), candidatePreview: vi.fn(), submitPlant: vi.fn() } satisfies PlantVisitorApi;
+  render(<PlantJourney api={api} submitCatalog={vi.fn()} onNavigate={vi.fn()} />);
+  expect(await screen.findByText(/a little magic is growing/i)).toBeTruthy();
+  expect(begin).toHaveBeenCalledWith('capture-resume', catalogManifest.spriteAssetId);
+});
