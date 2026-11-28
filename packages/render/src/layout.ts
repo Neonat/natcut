@@ -4,7 +4,7 @@ import type {
   PrintProfile,
 } from '@natcut/domain';
 
-import { assertSupportedRecipe } from './catalog.ts';
+import { assertSupportedRecipe, catalogSpriteEntry, spriteArtworkIds } from './catalog.ts';
 
 export type PlannedLayer = {
   id: string;
@@ -63,6 +63,7 @@ export function planComposition(
   const layers: PlannedLayer[] = [];
 
   if (manifest.trainerAssetId === null) {
+    const artworkIds = spriteArtworkIds(catalogSpriteEntry(manifest.spriteAssetId), manifest.spriteAssetId, manifest.sheetVariant);
     const placements = manifest.sheetVariant === 'trio'
       ? [{ x: 360, y: 110, size: 480 }, { x: 360, y: 700, size: 480 }, { x: 360, y: 1290, size: 480 }]
       : manifest.sheetVariant === 'duo'
@@ -72,7 +73,7 @@ export function planComposition(
       layers.push({
         id: index === 0 ? 'sprite' : `sprite-${index + 1}`,
         member: 'sprite',
-        assetId: manifest.spriteAssetId,
+        assetId: artworkIds[index]!,
         cutGroupId: cutGroupFor(manifest, 'sprite'),
         x: placement.x,
         y: placement.y,
