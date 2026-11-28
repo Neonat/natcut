@@ -4,6 +4,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { DEVFEST_SG_V1, CompositionManifestSchema, NATIVE_SRGB_EVIDENCE } from '@natcut/domain';
+import { evaluateCutGeometry } from '@natcut/cut-geometry';
 import { describe, expect, it } from 'vitest';
 import {
   assetPngFilename,
@@ -137,6 +138,23 @@ describe('planComposition', () => {
     expect(layers.map(layer => layer.width)).toEqual([540, 390, 390]);
     expect(layers.map(layer => layer.flipX)).toEqual([false, false, true]);
     expect(plan.layers.filter(layer => layer.assetId === 'decoration/live-card-v1')).toHaveLength(2);
+  });
+
+  it('keeps the full live trio inside printable cut geometry', async () => {
+    const id = `sprite/runtime/${'a'.repeat(64)}`;
+    const selected = CompositionManifestSchema.parse({ ...catalogManifest,
+      spriteAssetId: id, renderVersion: 'runtime-catalog-v1', sheetVariant: 'trio' });
+    const plan = planComposition(selected, DEVFEST_SG_V1, id);
+    const staticPlan = { ...plan, layers: plan.layers.filter(layer => layer.assetId !== id) };
+    const packaged = new Map(await loadPackagedAssets(staticPlan));
+    const catalogPlan = planComposition(catalogManifest, DEVFEST_SG_V1);
+    const source = (await loadPackagedAssets(catalogPlan)).get(catalogManifest.spriteAssetId)!;
+    packaged.set(id, { ...source, id });
+    const report = (await evaluateCutGeometry(renderCutGroupMasks(plan, packaged),
+      selected.cutMarginMm, DEVFEST_SG_V1)).report;
+    expect(report.valid).toBe(true);
+    expect(report.issues).toEqual([]);
+    expect(report.contourCount).toBe(4);
   });
 
   it('brings battling portrait subjects close enough for the overlap-warning fixture', () => {
