@@ -36,8 +36,9 @@ Before choosing generated artwork, the visitor can fetch
 `GET /api/v1/plant-jobs/:captureId/candidates/:candidateId` with the same bearer token.
 NatCut checks capture ownership, active flow and candidate identity, downloads through
 the private Sprout client with its digest and length checks, and returns a normalized
-sRGB PNG. This preview neither accepts nor stages a candidate and closes at the
-live deadline. If the visitor chooses the catalog while a candidate is available,
+sRGB PNG. This preview neither accepts nor stages a candidate. An on-time candidate
+held by the plant flow remains viewable while the visitor decides after the generation
+deadline; an unheld late candidate is unavailable. If the visitor chooses the catalog while a candidate is available,
 the fallback reason is recorded as `operator_fallback`.
 
 - Wire an authenticated NatCut visitor endpoint after the phone capture lane supplies a stable sanitized photo receipt and ownership check.
