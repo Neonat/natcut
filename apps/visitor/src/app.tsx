@@ -43,7 +43,7 @@ function requeueDraft(id: string) {
 function VisitorRoute({ api, simulation }: { api: VisitorApi; simulation: boolean }) {
   const plantHome = window.location.pathname === '/' && import.meta.env.VITE_NATCUT_PLANT_FLOW_ENABLED === 'true';
   if ((window.location.pathname === '/plant' || plantHome) && api.plant) {
-    return <PlantJourney api={api.plant} submitCatalog={request => api.submit(request)} onNavigate={navigate} />;
+    return <PlantJourney api={api.plant} onNavigate={navigate} />;
   }
   const queueMatch = /^\/queue\/([^/]+)$/.exec(window.location.pathname);
   if (queueMatch) {

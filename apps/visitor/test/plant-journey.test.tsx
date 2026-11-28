@@ -17,7 +17,7 @@ it('uploads a plant, starts the private job, and opens the accepted fallback in 
     static revokeObjectURL() {}
   });
   vi.stubGlobal('Worker', class extends EventTarget { postMessage() {} });
-  render(<PlantJourney api={api} submitCatalog={vi.fn()} onNavigate={vi.fn()} />);
+  render(<PlantJourney api={api} onNavigate={vi.fn()} />);
   fireEvent.change(screen.getByLabelText(/tap to take or upload/i), {
     target: { files: [new File(['plant'], 'plant.jpg', { type: 'image/jpeg' })] },
   });
@@ -40,7 +40,7 @@ it('previews the accepted generated sprite through its private blob URL', async 
     static revokeObjectURL() {}
   });
   vi.stubGlobal('Worker', class extends EventTarget { postMessage() {} });
-  render(<PlantJourney api={api} submitCatalog={vi.fn()} onNavigate={vi.fn()} />);
+  render(<PlantJourney api={api} onNavigate={vi.fn()} />);
   fireEvent.change(screen.getByLabelText(/tap to take or upload/i), {
     target: { files: [new File(['plant'], 'plant.jpg', { type: 'image/jpeg' })] },
   });
@@ -62,7 +62,7 @@ it('shows a generated candidate before the visitor chooses it or the approved ba
     static createObjectURL() { return 'blob:candidate-preview'; }
     static revokeObjectURL() {}
   });
-  render(<PlantJourney api={api} submitCatalog={vi.fn()} onNavigate={vi.fn()} />);
+  render(<PlantJourney api={api} onNavigate={vi.fn()} />);
   fireEvent.change(screen.getByLabelText(/tap to take or upload/i), {
     target: { files: [new File(['plant'], 'plant.jpg', { type: 'image/jpeg' })] },
   });
@@ -81,7 +81,27 @@ it('recovers a confirmed capture after reload when the first job create response
     plantStatus: vi.fn().mockRejectedValue(new Error('PLANT_JOB_NOT_FOUND')),
     acceptGenerated: vi.fn(), acceptFallback: vi.fn(), syncOutcome: vi.fn(),
     acceptedSprite: vi.fn(), candidatePreview: vi.fn(), submitPlant: vi.fn() } satisfies PlantVisitorApi;
-  render(<PlantJourney api={api} submitCatalog={vi.fn()} onNavigate={vi.fn()} />);
+  render(<PlantJourney api={api} onNavigate={vi.fn()} />);
   expect(await screen.findByText(/a little magic is growing/i)).toBeTruthy();
   expect(begin).toHaveBeenCalledWith('capture-resume', catalogManifest.spriteAssetId);
+});
+
+it('lets an accepted catalog fallback proceed while Sprout acknowledgement is pending', async () => {
+  const api = { capture: vi.fn().mockResolvedValue({ captureId: 'capture', status: 'confirmed' }),
+    begin: vi.fn().mockResolvedValue({ state: 'accepted', generationIntentId: 'intent',
+      decision: { outcome: 'catalog_fallback_accepted', catalogAssetId: catalogManifest.spriteAssetId },
+      sproutAck: 'pending' }), plantStatus: vi.fn(), acceptGenerated: vi.fn(), acceptFallback: vi.fn(),
+    syncOutcome: vi.fn().mockRejectedValue(new Error('Sprout unavailable')),
+    acceptedSprite: vi.fn(), candidatePreview: vi.fn(), submitPlant: vi.fn() } satisfies PlantVisitorApi;
+  vi.stubGlobal('URL', class extends URL {
+    static createObjectURL() { return 'blob:plant-photo'; }
+    static revokeObjectURL() {}
+  });
+  vi.stubGlobal('Worker', class extends EventTarget { postMessage() {} });
+  render(<PlantJourney api={api} onNavigate={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText(/tap to take or upload/i), {
+    target: { files: [new File(['plant'], 'plant.jpg', { type: 'image/jpeg' })] },
+  });
+  fireEvent.click(screen.getByRole('button', { name: /create my sprite/i }));
+  expect(await screen.findByRole('heading', { name: /your sprite sticker/i })).toBeTruthy();
 });

@@ -7,8 +7,7 @@ import sproutWordmark from '../assets/sprout-wordmark.png';
 const draftKey = 'natcut:plant-capture';
 const fallbackKey = 'natcut:plant-fallback';
 
-export function PlantJourney({ api, submitCatalog, onNavigate }: { api: PlantVisitorApi;
-  submitCatalog: (request: SubmissionRequest) => Promise<SubmissionResponse>; onNavigate: (path: string) => void }) {
+export function PlantJourney({ api, onNavigate }: { api: PlantVisitorApi; onNavigate: (path: string) => void }) {
   const [captureId, setCaptureId] = useState(() => sessionStorage.getItem(draftKey) ?? '');
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoUrl, setPhotoUrl] = useState('');
@@ -18,6 +17,11 @@ export function PlantJourney({ api, submitCatalog, onNavigate }: { api: PlantVis
   const [candidateUrl, setCandidateUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  function startOver() {
+    sessionStorage.removeItem(draftKey);
+    setCaptureId(''); setPhoto(null); setStatus(null); setError('');
+  }
 
   useEffect(() => {
     if (!photo) return;
@@ -100,22 +104,20 @@ export function PlantJourney({ api, submitCatalog, onNavigate }: { api: PlantVis
   }
 
   if (status?.state === 'accepted') {
-    if (status.sproutAck === 'needs_reconciliation') return <main className="plant-journey"><h1>We need to check your sprite.</h1>
+    const generated = status.decision.outcome === 'generated_accepted';
+    if (generated && status.sproutAck === 'needs_reconciliation') return <main className="plant-journey"><h1>We need to check your sprite.</h1>
       <p>Your choice is saved. Please ask the booth host for help.</p></main>;
-    if (status.sproutAck !== 'confirmed') return <main className="plant-journey"><h1>Preparing your sprite</h1>
+    if (generated && status.sproutAck !== 'confirmed') return <main className="plant-journey"><h1>Preparing your sprite</h1>
       <p>Your choice is saved. We’re checking the finished artwork.</p>
       <button disabled={busy} onClick={() => void run(() => api.syncOutcome(captureId))}>Continue</button>
       {error && <p role="alert">{error}</p>}</main>;
-    const generated = status.decision.outcome === 'generated_accepted';
     if (generated && !spriteUrl) return <main className="plant-journey"><h1>Loading your sprite</h1>
       <button onClick={() => void api.acceptedSprite(captureId).then(blob => setSpriteUrl(URL.createObjectURL(blob))).catch(() => setError('Preview unavailable'))}>Retry preview</button>
       {error && <p role="alert">{error}</p>}</main>;
     const manifest = status.decision.outcome === 'generated_accepted'
       ? { ...catalogManifest, renderVersion: 'runtime-catalog-v1', spriteAssetId: status.decision.natcutAssetId }
       : { ...catalogManifest, spriteAssetId: status.decision.catalogAssetId };
-    const submit = (request: SubmissionRequest): Promise<SubmissionResponse> => generated
-      ? api.submitPlant(captureId, request)
-      : submitCatalog(request);
+    const submit = (request: SubmissionRequest): Promise<SubmissionResponse> => api.submitPlant(captureId, request);
     return <EditorPage initialManifest={manifest} submitSubmission={submit} onNavigate={onNavigate} lockSpriteChoice
       {...(generated ? { runtimeSpriteUrl: spriteUrl } : {})} />;
   }
@@ -126,7 +128,14 @@ export function PlantJourney({ api, submitCatalog, onNavigate }: { api: PlantVis
       <p>Show us a clear photo of your plant. We’ll turn it into a character, then you can finish your sticker.</p></div>
     {!status && <>
       <label className="plant-upload"><input type="file" accept="image/jpeg,image/png,image/webp"
-        onChange={event => setPhoto(event.currentTarget.files?.[0] ?? null)} />
+        onChange={event => {
+          const next = event.currentTarget.files?.[0] ?? null;
+          if (photo && next && (photo.name !== next.name || photo.size !== next.size || photo.lastModified !== next.lastModified)) {
+            sessionStorage.removeItem(draftKey);
+            setCaptureId('');
+          }
+          setPhoto(next);
+        }} />
         {photoUrl ? <img src={photoUrl} alt="Your plant photo" /> : <span>Tap to take or upload a plant photo</span>}</label>
       <p className="plant-hint">For the best result, keep the leaves and flowers in focus.</p>
       <label className="plant-fallback-label">Your backup sprite <span>Ready if generation takes too long</span></label>
@@ -148,9 +157,11 @@ export function PlantJourney({ api, submitCatalog, onNavigate }: { api: PlantVis
     {status?.state === 'identification_review' && <section className="plant-progress"><h2>We couldn’t identify your plant confidently.</h2>
       {status.suggestions[0] && <p>Closest match: {status.suggestions[0].name} ({Math.round(status.suggestions[0].scoreBps / 100)}%).</p>}
       <button className="primary-action" disabled={busy} onClick={() => void run(() => api.acceptFallback(captureId))}>Choose my backup sprite</button>
-      <button className="plant-secondary" onClick={() => { sessionStorage.removeItem(draftKey); setCaptureId(''); setStatus(null); }}>Try another photo</button></section>}
+      <button className="plant-secondary" onClick={startOver}>Try another photo</button></section>}
     {status?.state === 'needs_reconciliation' && <section className="plant-progress"><h2>We need a moment to check your sprite.</h2>
       <p>Your photo is safe. Please ask the booth host for help.</p></section>}
-    {error && <div className="notice error" role="alert">{error}<button onClick={() => void run(() => api.plantStatus(captureId))}>Retry</button></div>}
+    {error && <div className="notice error" role="alert">{error}
+      {status ? <button onClick={() => void run(() => api.plantStatus(captureId))}>Retry status</button> : null}
+      <button onClick={startOver}>Use another photo</button></div>}
   </main>;
 }
