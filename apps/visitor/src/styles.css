@@ -122,6 +122,11 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .plant-eyebrow { color: #4d7658; font-size: .72rem; font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
 .plant-intro h1 { max-width: 480px; margin: 10px 0 14px; color: var(--forest); font-family: Georgia, 'Times New Roman', serif; font-size: clamp(2.7rem, 10vw, 4.2rem); font-weight: 500; letter-spacing: -.055em; line-height: 1.02; }
 .plant-intro p, .plant-progress p { max-width: 440px; color: #52675d; font-size: 1rem; line-height: 1.55; }
+.plant-library-entry { margin: 0 0 26px; padding: 23px; border: 1px solid #b9c9ae; border-radius: 22px; background: #f0f5e8; }
+.plant-library-entry h2 { margin: 8px 0; color: var(--forest); font-family: Georgia, 'Times New Roman', serif; font-size: 1.55rem; font-weight: 500; letter-spacing: -.03em; }
+.plant-library-entry p { margin: 0 0 16px; color: #52675d; font-size: .91rem; line-height: 1.45; }
+.plant-library-entry button { min-height: 46px; width: 100%; border: 1px solid var(--forest); border-radius: 14px; background: var(--forest); color: #fffdf4; font-weight: 800; }
+.plant-library-entry button:focus-visible { outline: 3px solid var(--orange); outline-offset: 3px; }
 .plant-upload { min-height: 270px; display: grid; place-items: center; overflow: hidden; border: 1.5px dashed #7d9a7f; border-radius: 26px; background: #eef1e4; text-align: center; cursor: pointer; }
 .plant-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .plant-upload:has(input:focus-visible) { outline: 3px solid var(--orange); outline-offset: 4px; }
@@ -131,8 +136,10 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .plant-fallback-label { display: block; color: var(--forest); font-weight: 800; }
 .plant-fallback-label span { display: block; margin-top: 4px; color: #65796c; font-size: .78rem; font-weight: 400; }
 .plant-backups { display: flex; gap: 8px; margin: 13px 0 28px; overflow-x: auto; padding: 2px 2px 9px; }
-.plant-backups button { flex: none; min-height: 42px; padding: 0 15px; border: 1px solid #a9baa7; border-radius: 999px; color: var(--forest); background: #fffdf4; font-size: .85rem; font-weight: 750; }
-.plant-backups button.selected { border-color: var(--forest); color: #fffdf4; background: var(--forest); }
+.plant-backups button { flex: none; display: grid; justify-items: center; gap: 5px; width: 94px; min-height: 94px; padding: 8px; border: 1px solid #a9baa7; border-radius: 15px; color: var(--forest); background: #fffdf4; font-size: .77rem; font-weight: 750; }
+.plant-backups button img { width: 56px; height: 56px; object-fit: contain; }
+.plant-backups button.selected { border-color: var(--forest); background: #e8f4bd; box-shadow: inset 0 0 0 1px var(--forest); }
+.plant-backups button:focus-visible { outline: 3px solid var(--orange); outline-offset: 2px; }
 .plant-progress { margin-top: 38px; padding: 26px 23px; border: 1px solid #c3d0bd; border-radius: 24px; background: #fffdf4; box-shadow: 0 15px 35px #17352a12; }
 .plant-progress h2 { margin: 12px 0; color: var(--forest); font-family: Georgia, 'Times New Roman', serif; font-size: 2rem; font-weight: 500; letter-spacing: -.04em; }
 .plant-progress .primary-action { margin-top: 20px; }

@@ -6,6 +6,18 @@ import type { PlantVisitorApi } from '../src/api.ts';
 
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.restoreAllMocks(); });
 
+it('opens the approved sprite editor without starting a plant generation job', () => {
+  const onNavigate = vi.fn();
+  const api = { capture: vi.fn(), begin: vi.fn(), plantStatus: vi.fn(), acceptGenerated: vi.fn(),
+    acceptFallback: vi.fn(), syncOutcome: vi.fn(), acceptedSprite: vi.fn(), candidatePreview: vi.fn(),
+    submitPlant: vi.fn() } satisfies PlantVisitorApi;
+  render(<PlantJourney api={api} onNavigate={onNavigate} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Browse approved sprites' }));
+  expect(onNavigate).toHaveBeenCalledWith('/studio');
+  expect(api.capture).not.toHaveBeenCalled();
+  expect(api.begin).not.toHaveBeenCalled();
+});
+
 it('uploads a plant, starts the private job, and opens the accepted fallback in the sticker editor', async () => {
   const capture = vi.fn().mockResolvedValue({ captureId: 'capture-one', status: 'confirmed' });
   const begin = vi.fn().mockResolvedValue({ state: 'accepted', generationIntentId: 'intent-one',

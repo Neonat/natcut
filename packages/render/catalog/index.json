@@ -2,6 +2,631 @@
   "version": 1,
   "sprites": [
     {
+      "id": "sprite/2406b66db7a4c058ca6b0c2f7f458cc7e5f39366c4d57edd3b0653a0b3b53410",
+      "name": "Aloe vera",
+      "scientificName": "Aloe vera",
+      "pngSha256": "e98e8c06b87322bc742291f440745dcdf179e67ffa78368c75eaf03d4b639750",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/1cb999fe76a645a6eba50b9bd2bd42f81d265d3d08ab2eb8afef88c11ac2aa93",
+          "pngSha256": "1cb999fe76a645a6eba50b9bd2bd42f81d265d3d08ab2eb8afef88c11ac2aa93",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/8d0c7fe79309d38078ddd2277e3eb1eaf8c727dac44fea395221fd1af8f4d095",
+          "pngSha256": "8d0c7fe79309d38078ddd2277e3eb1eaf8c727dac44fea395221fd1af8f4d095",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    },
+    {
+      "id": "sprite/24cd532b66d10bfa938aafb34947ab1e694eb7a7fe7127df3de09badda00037d",
+      "name": "Bird of paradise",
+      "scientificName": "Strelitzia reginae",
+      "pngSha256": "f13805a47c098d968a90601a9c8c33a478b5ec1619f6fe57a297b5f6a1f3ebc3",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/e741f3b18d11c1a13e7c191b2241d082ccd2436d2ad34882f9923143181680cd",
+          "pngSha256": "e741f3b18d11c1a13e7c191b2241d082ccd2436d2ad34882f9923143181680cd",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/011b073f02f0933d20012107f0fc0ee22e0479b255e9a99bb924826503245ade",
+          "pngSha256": "011b073f02f0933d20012107f0fc0ee22e0479b255e9a99bb924826503245ade",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    },
+    {
+      "id": "sprite/d73e537865a466d9677eac7e8fa6786d8884d3f82954aa6b1277bf0fcfd5133e",
+      "name": "Bougainvillea",
+      "scientificName": "Bougainvillea glabra",
+      "pngSha256": "8fc09f1ae21b35cc52dd02e7339795a1ff45438dd7454a2a547136e6d696f894",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/5004bcd1a66d51650e83f4a7bb7cdfeac25c8ca5e992a764840270788d483846",
+          "pngSha256": "5004bcd1a66d51650e83f4a7bb7cdfeac25c8ca5e992a764840270788d483846",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/afea3a4ad411d238481dbc5d65b8cbf6914e12a09566a2a667598d1878093e2d",
+          "pngSha256": "afea3a4ad411d238481dbc5d65b8cbf6914e12a09566a2a667598d1878093e2d",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    },
+    {
+      "id": "sprite/adeb60786185d07c994c29407978b4757f6047ba4d5dfce8e8eb1d4556c89bd7",
+      "name": "Chilli plant",
+      "scientificName": "Capsicum annuum",
+      "pngSha256": "ad02358dab9aebe3c45d0d666c777a60b3e1afe69f918de2beb25d91491f62bf",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/40ee95705a2d1919222668e7d40e7e70472b3f47c51e88e6728a6e20e2ddd6f0",
+          "pngSha256": "40ee95705a2d1919222668e7d40e7e70472b3f47c51e88e6728a6e20e2ddd6f0",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/87492275db72544e65f5ea839a45a1e9c6fa32a78be309630f8bcaeb346d636a",
+          "pngSha256": "87492275db72544e65f5ea839a45a1e9c6fa32a78be309630f8bcaeb346d636a",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    },
+    {
+      "id": "sprite/40de0a615c7d7a0ec88e4a0f8fbe9951cda647699b6e5dc4fe1cd643e112c98e",
+      "name": "Golden barrel cactus",
+      "scientificName": "Kroenleinia grusonii",
+      "pngSha256": "8ed0f158c9f9a605139ac99e463af5a8648064fc69671bedcd29aec180c66e6e",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/50a8a60497d9587f4465ad8697776769b73fc032e442f57d95b82de7b009c597",
+          "pngSha256": "50a8a60497d9587f4465ad8697776769b73fc032e442f57d95b82de7b009c597",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/3f11cc07cafbcc5602757b861f61c81ed5217d8fbe78b55336eb41da625efbf0",
+          "pngSha256": "3f11cc07cafbcc5602757b861f61c81ed5217d8fbe78b55336eb41da625efbf0",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    },
+    {
+      "id": "sprite/d466c83927fdb6ececd7283040f4ba82d7729bc4527aa9614c3ddac707cc1995",
+      "name": "Hibiscus",
+      "scientificName": "Hibiscus rosa-sinensis",
+      "pngSha256": "e356ad38ac81ebf08fc599dc014fdcb651cf9a95bc1ee99db886d4c11dbdd4ac",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/5fbbe6a62a45182ee465eb4ad500210f467124451dc277e03ee0bf137e993a00",
+          "pngSha256": "5fbbe6a62a45182ee465eb4ad500210f467124451dc277e03ee0bf137e993a00",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/b7da9b68429ceb4c564222cc3a1c2306fa72e994f77320ba371f7ee1927b9d13",
+          "pngSha256": "b7da9b68429ceb4c564222cc3a1c2306fa72e994f77320ba371f7ee1927b9d13",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    },
+    {
+      "id": "sprite/39f66d9606754e41e2bb4b66de70c8cea852673cc7fdbb0574d121e8bb22b3ba",
+      "name": "Monstera",
+      "scientificName": "Monstera deliciosa",
+      "pngSha256": "911d6db10d996cd3b43d2a573f3ba95257de08e4c86c34e0623b1502dce49200",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/25677aeed08a73c62a0e1c364b3c8a97abba1d8ad7f4e2d3509adce8ea3ee19d",
+          "pngSha256": "25677aeed08a73c62a0e1c364b3c8a97abba1d8ad7f4e2d3509adce8ea3ee19d",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/5326a7faa6dec2b5b7b02cfb3cb66706a294d39e2809a52d3176cfbeaf609ca2",
+          "pngSha256": "5326a7faa6dec2b5b7b02cfb3cb66706a294d39e2809a52d3176cfbeaf609ca2",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    },
+    {
+      "id": "sprite/733118ad23da606d6d16d00ad11ac3656ace644507e5691120fc8e39915f1e75",
+      "name": "Prickly pear",
+      "pngSha256": "db553d398ec6ffb1396a6277163a385488ba7370dfec64450393f19715ef3637",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 210,
+      "height": 210
+    },
+    {
+      "id": "sprite/dc879d836e279c85b0d81911781dfea24507288ba9aad10042d1e2083b73939c",
+      "name": "Snake plant",
+      "scientificName": "Dracaena trifasciata",
+      "pngSha256": "3649c749a68d53876d728bfe1bc90b53b32a3fa3cefe08b2171f025d3403cee5",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/6a0bbaf011cdeeccc0b894be96c2cecdf93497537806e5684f72d4599c30de20",
+          "pngSha256": "6a0bbaf011cdeeccc0b894be96c2cecdf93497537806e5684f72d4599c30de20",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/eb7ebec07ea79b80f3052e413e92ac064b04ce1e53ae25f792d8b75d9e2c3c39",
+          "pngSha256": "eb7ebec07ea79b80f3052e413e92ac064b04ce1e53ae25f792d8b75d9e2c3c39",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    },
+    {
+      "id": "sprite/b1f452ce9c8b451d3c35edc79480073b4fa025dd0ebc3416a933196227a6cc18",
+      "name": "Strawberry plant",
+      "scientificName": "Fragaria × ananassa",
+      "pngSha256": "0c9d7e19abd33ddd82efa3f381762f8e9d3dae7948b3b5570b47af3c65eb2ef5",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/30d14987f3a681eb4fe1b8e35f74c7e69c07f7d80025d66d47650b2bed364bc0",
+          "pngSha256": "30d14987f3a681eb4fe1b8e35f74c7e69c07f7d80025d66d47650b2bed364bc0",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/b41e3dffcdf63fbac9417546ca5cc8dedac62ccde3923de8d8ecdc65b5c916a2",
+          "pngSha256": "b41e3dffcdf63fbac9417546ca5cc8dedac62ccde3923de8d8ecdc65b5c916a2",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    },
+    {
+      "id": "sprite/0c4e75868690c7fdb655b755f4b7e510ef771675db20ca1ba011e427ce6b8719",
+      "name": "Sunflower",
+      "scientificName": "Helianthus annuus",
+      "pngSha256": "b73d1daee9ffbb6370bf51352864536cd0340341f1bc8f1dae99bbbe72c28b9f",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/150a5d91136ded7bb9d578c9d5c25b45fa28598e1215b6be920c301d7b80cda2",
+          "pngSha256": "150a5d91136ded7bb9d578c9d5c25b45fa28598e1215b6be920c301d7b80cda2",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/1ff347007f13a6faf85d4a844d54013f5f693e410fb3e9558be6830a4397ff94",
+          "pngSha256": "1ff347007f13a6faf85d4a844d54013f5f693e410fb3e9558be6830a4397ff94",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    },
+    {
+      "id": "sprite/abe98451a77af322b7811823f5f326bb44a9bed149cece578fdee30d2821ce95",
+      "name": "Venus flytrap",
+      "scientificName": "Dionaea muscipula",
+      "pngSha256": "24dff7dd18c818dbe9464efd18d028ff3ed4601ae3e5948dc2f6a91033468b55",
+      "colorEvidence": {
+        "outputSpace": "srgb",
+        "pipelineVersion": "natcut-srgb-v1",
+        "sources": [
+          {
+            "sourceSpace": "srgb",
+            "sourceProfileSha256": null,
+            "action": "preserved"
+          }
+        ]
+      },
+      "width": 760,
+      "height": 760,
+      "variants": [
+        {
+          "id": "sprite/variant/b32acc81e0705bc4f37f75c405ea1db14107a581d566f3aef38fcc968c3fab05",
+          "pngSha256": "b32acc81e0705bc4f37f75c405ea1db14107a581d566f3aef38fcc968c3fab05",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        },
+        {
+          "id": "sprite/variant/90656f5e2a1cd43f18bfce9dbbdce5faf7c63df66d9b081a4234bc4a228e5ea5",
+          "pngSha256": "90656f5e2a1cd43f18bfce9dbbdce5faf7c63df66d9b081a4234bc4a228e5ea5",
+          "colorEvidence": {
+            "outputSpace": "srgb",
+            "pipelineVersion": "natcut-srgb-v1",
+            "sources": [
+              {
+                "sourceSpace": "srgb",
+                "sourceProfileSha256": null,
+                "action": "preserved"
+              }
+            ]
+          },
+          "width": 760,
+          "height": 760
+        }
+      ]
+    }
+  ],
+  "archived": [
+    {
       "id": "sprite/48958c07bcb9f30e440c8e1652284aff9b6298a68c69033fdbf22a913115c209",
       "name": "Monstera",
       "pngSha256": "95edfb98885bc6df75799ea892270ff06c1d90b469cf627f7d304286ed2503df",
@@ -15,6 +640,5 @@
       "width": 210,
       "height": 210
     }
-  ],
-  "archived": []
+  ]
 }

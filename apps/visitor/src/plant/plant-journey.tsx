@@ -1,4 +1,4 @@
-import { catalogManifest, sprites } from '@natcut/render/browser';
+import { assetPngFilename, catalogManifest, sprites } from '@natcut/render/browser';
 import { useEffect, useState } from 'react';
 import type { PlantFlowStatus, PlantVisitorApi, SubmissionRequest, SubmissionResponse } from '../api.ts';
 import { EditorPage } from '../editor/editor-page.tsx';
@@ -127,6 +127,12 @@ export function PlantJourney({ api, onNavigate }: { api: PlantVisitorApi; onNavi
     <div className="plant-intro"><span className="plant-eyebrow">01 / YOUR PLANT</span><h1>Meet your new sprite.</h1>
       <p>Show us a clear photo of your plant. We’ll turn it into a character, then you can finish your sticker.</p></div>
     {!status && <>
+      <section className="plant-library-entry" aria-label="Approved sprite library">
+        <span className="plant-eyebrow">READY TO PRINT</span>
+        <h2>Choose a sprite from the garden</h2>
+        <p>Pick an approved plant, choose your sticker layout, and preview the cut before joining the queue.</p>
+        <button type="button" onClick={() => onNavigate('/studio')}>Browse approved sprites</button>
+      </section>
       <label className="plant-upload"><input type="file" accept="image/jpeg,image/png,image/webp"
         onChange={event => {
           const next = event.currentTarget.files?.[0] ?? null;
@@ -141,7 +147,11 @@ export function PlantJourney({ api, onNavigate }: { api: PlantVisitorApi; onNavi
       <label className="plant-fallback-label">Your backup sprite <span>Ready if generation takes too long</span></label>
       <div className="plant-backups">{sprites.map(sprite => <button key={sprite.id} type="button"
         className={fallbackAssetId === sprite.id ? 'selected' : ''}
-        onClick={() => setFallbackAssetId(sprite.id)}>{sprite.name}</button>)}</div>
+        aria-pressed={fallbackAssetId === sprite.id}
+        onClick={() => setFallbackAssetId(sprite.id)}>
+        <img src={`/${assetPngFilename(sprite.id)}`} alt="" loading="lazy" />
+        <span>{sprite.name}</span>
+      </button>)}</div>
       <button className="primary-action" disabled={!photo || busy} onClick={() => void upload()}>{busy ? 'Uploading…' : 'Create my sprite'}</button>
     </>}
     {status?.state === 'waiting' && <section className="plant-progress"><span className="plant-eyebrow">02 / MAKING YOUR SPRITE</span>

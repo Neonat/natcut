@@ -13,6 +13,7 @@ import {
   renderCutGroupMasks,
   renderServerRaster,
   spriteChoices,
+  spriteArtworkIds,
   sprites,
   type AssetCatalog,
   type PlannedComposition,
@@ -110,6 +111,20 @@ describe('planComposition', () => {
       }
       expect(spriteLayers.at(-1)!.y + spriteLayers.at(-1)!.height).toBeLessThan(1850);
     }
+  });
+
+  it('uses two immutable phrase companions on an approved three-design sheet', () => {
+    const base = 'sprite/base';
+    const phraseA = `sprite/variant/${'a'.repeat(64)}`;
+    const phraseB = `sprite/variant/${'b'.repeat(64)}`;
+    const entry: SpriteEntry = { id: base, name: 'Example plant', pngSha256: 'c'.repeat(64), width: 500, height: 500,
+      variants: [
+        { id: phraseA, pngSha256: 'a'.repeat(64), width: 500, height: 500 },
+        { id: phraseB, pngSha256: 'b'.repeat(64), width: 500, height: 500 },
+      ] };
+    expect(spriteArtworkIds(entry, base, 'trio')).toEqual([base, phraseA, phraseB]);
+    expect(spriteArtworkIds(entry, base, 'duo')).toEqual([base, base]);
+    expect(spriteArtworkIds(undefined, base, 'trio')).toEqual([base, base, base]);
   });
 
   it('brings battling portrait subjects close enough for the overlap-warning fixture', () => {

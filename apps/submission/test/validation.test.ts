@@ -7,13 +7,15 @@ import { createAcceptedRuntimeArtifactPreparer } from '../src/runtime-preparatio
 import type { createRuntimeSpriteRegistry } from '../src/runtime-sprite.ts';
 
 const historicalMaskHash = '1465f6f4822228afd53188f8490373156e9005a673cf06a6f3da849ecf90e84d';
+const historicalManifest = { ...catalogManifest,
+  spriteAssetId: 'sprite/48958c07bcb9f30e440c8e1652284aff9b6298a68c69033fdbf22a913115c209' };
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
 it('prepares the packaged server color, expanded mask, contours and a verified V2 bundle', async () => {
-  const plan = planComposition(catalogManifest, DEVFEST_SG_V1);
+  const plan = planComposition(historicalManifest, DEVFEST_SG_V1);
   const assets = await loadPackagedAssets(plan);
   const reference = await renderServerRaster(plan, assets);
-  const prepared = await createTrustedArtifactPreparer()(catalogManifest);
+  const prepared = await createTrustedArtifactPreparer()(historicalManifest);
   const { descriptor, bytes } = prepared.bundle;
   const decoded = await decodeLogicalSourceBundle(bytes, descriptor);
 
@@ -24,10 +26,10 @@ it('prepares the packaged server color, expanded mask, contours and a verified V
   expect(digest(decoded.rgba)).toBe(reference.sha256);
   expect(digest(decoded.mask)).toBe(historicalMaskHash);
   expect(digest(prepared.combinedMask.data)).toBe(historicalMaskHash);
-  expect(descriptor.renderVersion).toBe(catalogManifest.renderVersion);
+  expect(descriptor.renderVersion).toBe(historicalManifest.renderVersion);
   expect(descriptor.geometryVersion).toBe(prepared.report.geometryVersion);
   expect(prepared.contours).toHaveLength(prepared.report.contourCount);
-  expect(await createTrustedManifestValidator()(catalogManifest)).toEqual(prepared.report);
+  expect(await createTrustedManifestValidator()(historicalManifest)).toEqual(prepared.report);
   expect(prepared.report.rasterHash).toBe(historicalMaskHash);
 });
 

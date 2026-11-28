@@ -4,7 +4,7 @@ import type {
   PrintProfile,
 } from '@natcut/domain';
 
-import { assertSupportedRecipe } from './catalog.ts';
+import { assertSupportedRecipe, catalogSpriteEntry, spriteArtworkIds } from './catalog.ts';
 
 export type PlannedLayer = {
   id: string;
@@ -63,8 +63,9 @@ export function planComposition(
   const layers: PlannedLayer[] = [];
 
   if (manifest.trainerAssetId === null) {
+    const artworkIds = spriteArtworkIds(catalogSpriteEntry(manifest.spriteAssetId), manifest.spriteAssetId, manifest.sheetVariant);
     const placements = manifest.sheetVariant === 'trio'
-      ? [{ x: 360, y: 110, size: 480 }, { x: 360, y: 700, size: 480 }, { x: 360, y: 1290, size: 480 }]
+      ? [{ x: 360, y: 70, size: 480 }, { x: 360, y: 660, size: 480 }, { x: 360, y: 1250, size: 480 }]
       : manifest.sheetVariant === 'duo'
         ? [{ x: 300, y: 260, size: 600 }, { x: 300, y: 1080, size: 600 }]
         : [{ x: 220, y: 470, size: 760 }];
@@ -72,7 +73,7 @@ export function planComposition(
       layers.push({
         id: index === 0 ? 'sprite' : `sprite-${index + 1}`,
         member: 'sprite',
-        assetId: manifest.spriteAssetId,
+        assetId: artworkIds[index]!,
         cutGroupId: cutGroupFor(manifest, 'sprite'),
         x: placement.x,
         y: placement.y,
@@ -108,17 +109,28 @@ export function planComposition(
     );
   }
 
-  layers.push({
-    id: 'branding',
-    member: 'branding',
-    assetId: brandingAssetId(manifest),
-    cutGroupId: cutGroupFor(manifest, 'branding'),
-    x: 390,
-    y: 1850,
-    width: 420,
-    height: 105,
-    zIndex: manifest.trainerAssetId === null ? 20 : 30,
-  });
+  const approvedTrio = manifest.renderVersion === 'catalog-v1' && manifest.sheetVariant === 'trio'
+    && catalogSpriteEntry(manifest.spriteAssetId)?.variants !== undefined;
+  if (approvedTrio) {
+    layers.push(
+      { id: 'branding-devfest', member: 'branding', assetId: 'branding/devfest-approved-v1',
+        cutGroupId: cutGroupFor(manifest, 'branding'), x: 60, y: 1850, width: 500, height: 170, zIndex: 20 },
+      { id: 'branding-sprout', member: 'branding', assetId: 'branding/sprout-approved-v1',
+        cutGroupId: cutGroupFor(manifest, 'branding'), x: 640, y: 1830, width: 500, height: 210, zIndex: 20 },
+    );
+  } else {
+    layers.push({
+      id: 'branding',
+      member: 'branding',
+      assetId: brandingAssetId(manifest),
+      cutGroupId: cutGroupFor(manifest, 'branding'),
+      x: 390,
+      y: 1850,
+      width: 420,
+      height: 105,
+      zIndex: manifest.trainerAssetId === null ? 20 : 30,
+    });
+  }
 
   const plan: PlannedComposition = {
     width: profile.sheetWidthPx,
