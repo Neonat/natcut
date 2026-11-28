@@ -12,7 +12,7 @@ import { JobStore } from '../apps/worker/src/job-store.ts';
 import { prepareNextWorkerJob, runLocalJob } from '../apps/worker/src/worker.ts';
 import { ReadOnlyPixCut } from '../src/protocol.mjs';
 import { openUsbSession } from '../src/usb-session.mjs';
-import { completeObservedPhysicalJob, PhysicalQueueExecutor, printerIsIdle } from './physical-queue-bridge.ts';
+import { assertFreshPhysicalSendJournal, completeObservedPhysicalJob, PhysicalQueueExecutor, printerIsIdle } from './physical-queue-bridge.ts';
 import type { TransportAttemptResult } from '../packages/printer/src/transport-attempt.ts';
 
 const hash = /^[a-f0-9]{64}$/;
@@ -54,10 +54,11 @@ const openSession = () => (openUsbSession as unknown as (options: {
 
 try {
   if (values.action === 'send') {
+    assertFreshPhysicalSendJournal(store);
     // Refuse to claim a cloud slot if this Mac cannot currently see an idle printer.
     const session = await openSession();
     try {
-      const snapshot = await new ReadOnlyPixCut(session.io).snapshot();
+      const snapshot = await new ReadOnlyPixCut(session.io).physicalIdleProof();
       if (!printerIsIdle(snapshot)) {
         throw new Error('Printer is not idle and clear of alerts and active jobs.');
       }

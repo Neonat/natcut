@@ -26,10 +26,11 @@ type ExpectedPhysicalJob = {
 };
 
 export function printerIsIdle(snapshot: {
+  firmwareShapeVerified: boolean;
   status: { state: number; sub: number; alerts: number[] };
-  activeJobs: number[];
+  activeJobs: unknown[];
 }): boolean {
-  return (snapshot.status.state === 20 || snapshot.status.state === 30) &&
+  return snapshot.firmwareShapeVerified === true && (snapshot.status.state === 20 || snapshot.status.state === 30) &&
     snapshot.status.sub === 2000 && snapshot.status.alerts.length === 0 &&
     snapshot.activeJobs.length === 0;
 }
@@ -37,6 +38,15 @@ export function printerIsIdle(snapshot: {
 export function transportJournalPath(directory: string, submissionId: string): string {
   if (!path.isAbsolute(directory) || !submissionId) throw new Error('A durable absolute physical journal directory and submission ID are required.');
   return path.join(directory, `${createHash('sha256').update(submissionId).digest('hex')}.sqlite`);
+}
+
+// A physical send starts from an empty, ticket-specific worker journal. Recovery of
+// any prior ticket or attempt is an operator action, never another USB send.
+export function assertFreshPhysicalSendJournal(store: JobStore): void {
+  if (store.list().length > 0 || store.listPendingPublicStatuses().length > 0 ||
+      store.listBlockingSubmissionIds().length > 0 || store.hasLiveExecutionGuard()) {
+    throw new Error('Physical send requires a fresh ticket-specific worker journal; inspect the existing attempt instead of resending.');
+  }
 }
 
 async function prepareJob(job: LocalPrintJob, store: JobStore) {
@@ -58,7 +68,9 @@ export class PhysicalQueueExecutor implements PhysicalExecutor {
     journalDirectory: string;
     expected: ExpectedPhysicalJob;
     openSession: () => Promise<UsbSession>;
-    inspectSession?: (session: UsbSession) => Promise<{ status: { state: number; sub: number; alerts: number[] }; activeJobs: number[] }>;
+    inspectSession?: (session: UsbSession) => Promise<{
+      firmwareShapeVerified: boolean; status: { state: number; sub: number; alerts: number[] }; activeJobs: unknown[];
+    }>;
     createTransport?: (session: UsbSession) => TransportMutationPort;
     now?: () => string;
     onTransferResult?: (result: TransportAttemptResult) => void;
@@ -85,7 +97,7 @@ export class PhysicalQueueExecutor implements PhysicalExecutor {
     const session = await this.openSession();
     try {
       // Hold the same claimed USB interfaces between read-only idle check and mutation.
-      const snapshot = await (this.options.inspectSession ?? (opened => new ReadOnlyPixCut(opened.io).snapshot()))(session);
+      const snapshot = await (this.options.inspectSession ?? (opened => new ReadOnlyPixCut(opened.io).physicalIdleProof()))(session);
       if (!printerIsIdle(snapshot)) {
         throw new Error('Printer is not idle and clear of alerts and active jobs.');
       }
@@ -130,25 +142,16 @@ export async function completeObservedPhysicalJob(options: {
   try {
     const job = store.getBySubmissionId(expected.submissionId);
     if (!job || job.bundleSha256 !== expected.bundleSha256 || !job.eventId ||
-        !['needs_reconciliation', 'ready'].includes(job.state)) {
+        !['declaring', 'uploading_cut', 'uploading_image', 'printing', 'cutting',
+          'needs_reconciliation', 'ready'].includes(job.state)) {
       return { kind: 'needs_reconciliation', submissionId: expected.submissionId };
     }
     const { evidence, artifacts } = await prepareJob(job, store);
     if (artifacts.print.sha256 !== expected.jpegSha256 || artifacts.cut.sha256 !== expected.pltSha256) {
       return { kind: 'needs_reconciliation', submissionId: expected.submissionId };
     }
-    if (job.state === 'ready' && job.completionAcknowledgedAt) return { kind: 'completed', submissionId: expected.submissionId };
     const token = store.getExecutionToken(job.submissionId);
-    const claimed = await cloud.recoverClaim(workerId, expected.submissionId);
-    if (!token || !claimed || claimed.submission.publicStatus !== 'printing' || claimed.executionToken !== token ||
-        claimed.submission.id !== job.submissionId || claimed.submission.eventId !== job.eventId) {
-      return { kind: 'needs_reconciliation', submissionId: expected.submissionId };
-    }
-    if (!isDeepStrictEqual(claimed.submission.artifact, evidence.receipt) ||
-        claimed.submission.manifestHash !== evidence.manifestHash ||
-        !isDeepStrictEqual(claimed.submission.validation, evidence.validation)) {
-      return { kind: 'needs_reconciliation', submissionId: expected.submissionId };
-    }
+    if (!token) return { kind: 'needs_reconciliation', submissionId: expected.submissionId };
     const binding: TransportAttemptBinding = {
       submissionId: job.submissionId, eventId: job.eventId, workerId,
       executionToken: token, manifestHash: job.manifestHash, receipt: artifacts.receipt,
@@ -157,11 +160,33 @@ export async function completeObservedPhysicalJob(options: {
     if (!prepared) return { kind: 'needs_reconciliation', submissionId: expected.submissionId };
     const physical = new QueuePhysicalQcJournal(transportJournalPath(journalDirectory, job.submissionId));
     try {
-      physical.recordPass(job.submissionId, prepared.evidenceHash, now());
+      if (job.state === 'ready') {
+        // A staged or acknowledged ready state is trusted only if a pass was
+        // already recorded against this exact physical transport attempt.
+        if (!physical.getPass(job.submissionId, prepared.evidenceHash)) {
+          return { kind: 'needs_reconciliation', submissionId: expected.submissionId };
+        }
+        if (job.completionAcknowledgedAt) return { kind: 'completed', submissionId: expected.submissionId };
+        const pending = store.listPendingPublicStatuses().find(intent =>
+          intent.submissionId === job.submissionId && intent.status === 'ready' && intent.updatedAt === job.stateChangedAt);
+        if (!pending) return { kind: 'needs_reconciliation', submissionId: expected.submissionId };
+      } else {
+        const claimed = await cloud.recoverClaim(workerId, expected.submissionId);
+        if (!claimed || claimed.submission.publicStatus !== 'printing' || claimed.executionToken !== token ||
+            claimed.submission.id !== job.submissionId || claimed.submission.eventId !== job.eventId ||
+            !isDeepStrictEqual(claimed.submission.artifact, evidence.receipt) ||
+            claimed.submission.manifestHash !== evidence.manifestHash ||
+            !isDeepStrictEqual(claimed.submission.validation, evidence.validation)) {
+          return { kind: 'needs_reconciliation', submissionId: expected.submissionId };
+        }
+        // This also safely recovers a crash after the final frame acknowledgement
+        // but before the local executor could leave `declaring`.
+        physical.recordPass(job.submissionId, prepared.evidenceHash, now());
+        store.transitionAndStagePublicStatus(job.submissionId, 'ready', now(), 'ready');
+      }
     } finally {
       physical.close();
     }
-    if (job.state !== 'ready') store.transitionAndStagePublicStatus(job.submissionId, 'ready', now(), 'ready');
   } finally {
     store.releaseExecutionGuard(guard);
   }

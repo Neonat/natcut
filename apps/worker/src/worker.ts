@@ -171,6 +171,12 @@ export async function prepareNextWorkerJob(
 ): Promise<{ kind: 'prepared'; job: PreparedJob } | WorkerResult> {
   const now = deps.now ?? (() => new Date().toISOString());
   try {
+    // An exact-ticket run must never publish an unrelated durable completion intent.
+    if (deps.expectedSubmissionId) {
+      const unrelated = deps.store.listPendingPublicStatuses()
+        .find(intent => intent.submissionId !== deps.expectedSubmissionId);
+      if (unrelated) return { kind: 'needs_reconciliation', submissionId: unrelated.submissionId };
+    }
     // Completion retries carry the same verified journal and execution identity. A committed
     // response may be lost, but only the exact persisted cloud completion fence confirms it.
     const pendingIntents = deps.store.listPendingPublicStatuses();

@@ -8,9 +8,10 @@ import { DEVFEST_SG_V1, NATIVE_SRGB_EVIDENCE, encodeLogicalSourceBundle } from '
 import { preparePhysicalArtifacts } from '@natcut/printer';
 import { verifyClaim } from '../src/artifact-verification.ts';
 import { JobStore } from '../src/job-store.ts';
-import { runLocalJob } from '../src/worker.ts';
+import { prepareNextWorkerJob, runLocalJob } from '../src/worker.ts';
 import { SqliteTransportAttemptJournal } from '../../../packages/printer/src/transport-attempt.ts';
-import { completeObservedPhysicalJob, PhysicalQueueExecutor, printerIsIdle, transportJournalPath } from '../../../scripts/physical-queue-bridge.ts';
+import { QueuePhysicalQcJournal } from '../../../packages/printer/src/queue-physical-qc.ts';
+import { assertFreshPhysicalSendJournal, completeObservedPhysicalJob, PhysicalQueueExecutor, printerIsIdle, transportJournalPath } from '../../../scripts/physical-queue-bridge.ts';
 import { submission } from './fixtures/submission.ts';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -61,7 +62,7 @@ async function fixture() {
   };
   const session = { io: { read: async () => new Uint8Array(), write: async () => undefined }, close: vi.fn(async () => undefined) };
   const openSession = vi.fn(async () => session);
-  const inspectSession = vi.fn(async () => ({ status: { state: 30, sub: 2000, alerts: [] }, activeJobs: [] }));
+  const inspectSession = vi.fn(async () => ({ firmwareShapeVerified: true, status: { state: 30, sub: 2000, alerts: [] }, activeJobs: [] }));
   const journalDirectory = path.join(directory, 'attempts');
   const journalJob = store.getBySubmissionId(id);
   const prepared = {
@@ -75,13 +76,27 @@ async function fixture() {
 }
 
 describe('physical queue bridge', () => {
+  it('refuses a reused journal and never publishes an unrelated pending ticket in exact-ticket mode', async () => {
+    const f = await fixture();
+    try {
+      expect(() => assertFreshPhysicalSendJournal(f.store)).toThrow(/fresh ticket-specific/);
+      const cloud = { recoverClaim: vi.fn(), claimNextSubmission: vi.fn() };
+      const store = { listPendingPublicStatuses: () => [{ submissionId: 'another-ticket', status: 'ready' }] };
+      expect(await prepareNextWorkerJob({ workerId: 'mac-1', expectedSubmissionId: f.id,
+        cloud, store, artifactReader: f.reader })).toEqual({ kind: 'needs_reconciliation', submissionId: 'another-ticket' });
+      expect(cloud.recoverClaim).not.toHaveBeenCalled();
+      expect(cloud.claimNextSubmission).not.toHaveBeenCalled();
+    } finally { await f.cleanup(); }
+  });
+
   it('treats only awake or asleep idle with no alerts and no active jobs as ready', () => {
-    const asleep = { status: { state: 30, sub: 2000, alerts: [] }, activeJobs: [] };
+    const asleep = { firmwareShapeVerified: true, status: { state: 30, sub: 2000, alerts: [] }, activeJobs: [] };
     expect(printerIsIdle(asleep)).toBe(true);
     expect(printerIsIdle({ ...asleep, status: { ...asleep.status, state: 20 } })).toBe(true);
     expect(printerIsIdle({ ...asleep, status: { ...asleep.status, state: 40 } })).toBe(false);
     expect(printerIsIdle({ ...asleep, status: { ...asleep.status, alerts: [1] } })).toBe(false);
     expect(printerIsIdle({ ...asleep, activeJobs: [9] })).toBe(false);
+    expect(printerIsIdle({ ...asleep, firmwareShapeVerified: false })).toBe(false);
   });
 
   it('fences cloud execution before USB, holds the ticket for physical QC, then publishes only the observed pass', async () => {
@@ -170,6 +185,59 @@ describe('physical queue bridge', () => {
         journalDirectory: f.journalDirectory, expected: f.expected })).rejects.toThrow(/fully acknowledged/);
       expect(f.cloud.completeExecution).not.toHaveBeenCalled();
       expect(f.store.getBySubmissionId(f.id).state).toBe('needs_reconciliation');
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  it('recovers the fully acknowledged attempt after a crash before local reconciliation', async () => {
+    const f = await fixture();
+    try {
+      const executor = new PhysicalQueueExecutor({
+        store: f.store, workerId: 'mac-1', journalDirectory: f.journalDirectory, expected: f.expected,
+        openSession: f.openSession, inspectSession: f.inspectSession, createTransport: () => f.transport,
+      });
+      await runLocalJob({ workerId: 'mac-1', cloud: f.cloud, store: f.store,
+        executor, artifactReader: f.reader }, f.prepared);
+      f.store.transition(f.id, 'declaring', new Date().toISOString(), 'simulated crash before local reconciliation');
+      expect(await completeObservedPhysicalJob({ store: f.store, cloud: f.cloud, workerId: 'mac-1',
+        journalDirectory: f.journalDirectory, expected: f.expected })).toEqual({ kind: 'completed', submissionId: f.id });
+      expect(f.transport.declareCombo).toHaveBeenCalledTimes(1);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  it('replays an observed ready outbox after cloud committed but its response was lost', async () => {
+    const f = await fixture();
+    try {
+      const executor = new PhysicalQueueExecutor({
+        store: f.store, workerId: 'mac-1', journalDirectory: f.journalDirectory, expected: f.expected,
+        openSession: f.openSession, inspectSession: f.inspectSession, createTransport: () => f.transport,
+      });
+      await runLocalJob({ workerId: 'mac-1', cloud: f.cloud, store: f.store,
+        executor, artifactReader: f.reader }, f.prepared);
+      const file = transportJournalPath(f.journalDirectory, f.id);
+      const transport = new SqliteTransportAttemptJournal(file, { existingOnly: true });
+      const evidenceHash = transport.get(f.id).evidenceHash;
+      transport.close();
+      const physical = new QueuePhysicalQcJournal(file);
+      physical.recordPass(f.id, evidenceHash, new Date().toISOString());
+      physical.close();
+      f.store.transitionAndStagePublicStatus(f.id, 'ready', new Date().toISOString(), 'ready');
+      f.cloud.recoverClaim.mockResolvedValueOnce(null);
+      f.cloud.completeExecution.mockResolvedValueOnce('confirmed');
+      expect(await completeObservedPhysicalJob({ store: f.store, cloud: f.cloud, workerId: 'mac-1',
+        journalDirectory: f.journalDirectory, expected: f.expected })).toEqual({ kind: 'completed', submissionId: f.id });
+      expect(f.cloud.recoverClaim).not.toHaveBeenCalled();
+      expect(f.cloud.completeExecution).toHaveBeenCalledTimes(1);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  it('cannot claim a simulator-ready job as a physical completion', async () => {
+    const f = await fixture();
+    try {
+      f.store.getOrCreateExecutionToken(f.id);
+      f.store.transitionAndStagePublicStatus(f.id, 'ready', new Date().toISOString(), 'ready');
+      await expect(completeObservedPhysicalJob({ store: f.store, cloud: f.cloud, workerId: 'mac-1',
+        journalDirectory: f.journalDirectory, expected: f.expected })).rejects.toThrow(/open database|exact transport attempt is missing/i);
+      expect(f.cloud.completeExecution).not.toHaveBeenCalled();
     } finally { await f.cleanup(); }
   }, 30_000);
 });
