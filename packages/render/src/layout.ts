@@ -16,6 +16,7 @@ export type PlannedLayer = {
   width: number;
   height: number;
   zIndex: number;
+  flipX?: boolean;
 };
 
 export type PlannedComposition = {
@@ -64,8 +65,12 @@ export function planComposition(
 
   if (manifest.trainerAssetId === null) {
     const artworkIds = spriteArtworkIds(catalogSpriteEntry(manifest.spriteAssetId), manifest.spriteAssetId, manifest.sheetVariant);
-    const placements = manifest.sheetVariant === 'trio'
-      ? [{ x: 360, y: 70, size: 480 }, { x: 360, y: 660, size: 480 }, { x: 360, y: 1250, size: 480 }]
+    const runtime = manifest.renderVersion === 'runtime-catalog-v1';
+    const placements: { x: number; y: number; size: number; flipX?: boolean }[] = manifest.sheetVariant === 'trio'
+      ? runtime
+        ? [{ x: 330, y: 50, size: 540, flipX: false }, { x: 220, y: 700, size: 390, flipX: false },
+          { x: 625, y: 1280, size: 390, flipX: true }]
+        : [{ x: 360, y: 70, size: 480 }, { x: 360, y: 660, size: 480 }, { x: 360, y: 1250, size: 480 }]
       : manifest.sheetVariant === 'duo'
         ? [{ x: 300, y: 260, size: 600 }, { x: 300, y: 1080, size: 600 }]
         : [{ x: 220, y: 470, size: 760 }];
@@ -80,7 +85,20 @@ export function planComposition(
         width: placement.size,
         height: placement.size,
         zIndex: 10,
+        ...(placement.flipX === undefined ? {} : { flipX: placement.flipX }),
       });
+    }
+    if (runtime && manifest.sheetVariant === 'trio') {
+      for (const [index, y] of [690, 1270].entries()) {
+        layers.push({ id: `sprite-card-${index + 2}`, member: 'sprite', assetId: 'decoration/live-card-v1',
+          cutGroupId: cutGroupFor(manifest, 'sprite'), x: 170, y, width: 860, height: 410, zIndex: 5 });
+      }
+      layers.push(
+        { id: 'sprite-card-sprout', member: 'sprite', assetId: 'branding/sprout-approved-v1',
+          cutGroupId: cutGroupFor(manifest, 'sprite'), x: 620, y: 805, width: 350, height: 130, zIndex: 20 },
+        { id: 'sprite-card-devfest', member: 'sprite', assetId: 'branding/devfest-approved-v1',
+          cutGroupId: cutGroupFor(manifest, 'sprite'), x: 235, y: 1390, width: 350, height: 119, zIndex: 20 },
+      );
     }
   } else {
     layers.push(

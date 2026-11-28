@@ -61,6 +61,7 @@ export function CutPreview({ manifest, contours, unavailable, reloadKey = 0, onA
               y={layer.y}
               width={layer.width}
               height={layer.height}
+              transform={layer.flipX ? `translate(${2 * layer.x + layer.width} 0) scale(-1 1)` : undefined}
               preserveAspectRatio="none"
               imageRendering="pixelated"
               filter="url(#cut-border)"

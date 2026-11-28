@@ -31,7 +31,8 @@ export async function renderServerRaster(
     for (let targetY = 0; targetY < layer.height; targetY++) {
       const sourceY = nearestSourceCoordinate(targetY, layer.height, asset.height);
       for (let targetX = 0; targetX < layer.width; targetX++) {
-        const sourceX = nearestSourceCoordinate(targetX, layer.width, asset.width);
+        const sourceX = nearestSourceCoordinate(layer.flipX ? layer.width - 1 - targetX : targetX,
+          layer.width, asset.width);
         const sourceOffset = (sourceY * asset.width + sourceX) * 4;
         const destinationOffset = ((layer.y + targetY) * plan.width + layer.x + targetX) * 4;
         compositeRgbaPixel(rendered, destinationOffset, asset.rgba, sourceOffset);

@@ -22,7 +22,8 @@ function compositeLayerAlpha(mask: Uint8Array, sheetWidth: number, layer: Planne
   for (let targetY = 0; targetY < layer.height; targetY++) {
     const sourceY = nearestSourceCoordinate(targetY, layer.height, asset.height);
     for (let targetX = 0; targetX < layer.width; targetX++) {
-      const sourceX = nearestSourceCoordinate(targetX, layer.width, asset.width);
+      const sourceX = nearestSourceCoordinate(layer.flipX ? layer.width - 1 - targetX : targetX,
+        layer.width, asset.width);
       const sourceAlpha = asset.rgba[(sourceY * asset.width + sourceX) * 4 + 3] ?? 0;
       if (sourceAlpha === 0) continue;
       const destination = (layer.y + targetY) * sheetWidth + layer.x + targetX;
