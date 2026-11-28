@@ -131,6 +131,8 @@ gcloud run deploy natcut-submission \
 
 The service is public at the network layer because Firebase Hosting must reach it. Submission creation still requires a Firebase anonymous-auth bearer token, while status access requires the opaque per-submission status token.
 
+The visitor now navigates to `/queue/:submissionId` without putting that bearer in the address bar. The submitting tab keeps the token in session storage. An older `#token=...` link is imported into that tab and immediately scrubbed with `history.replaceState`; the fragment is never sent in the page request. A cleaned URL copied into another browser or reopened after the tab's session storage is lost cannot recover the ticket by itself. A portable, secret-free recovery flow needs a separate authenticated or HttpOnly-cookie design. Treat any previously copied fragment link as a bearer credential because it can read status and request queue departure.
+
 ## Build and deploy Hosting
 
 Fetch the public SDK configuration for the NatCut web app, then inject only those public values at build time:
