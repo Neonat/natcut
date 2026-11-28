@@ -4,7 +4,8 @@ import { z } from 'zod';
 
 export const PLANT_JOB_CONTRACT_VERSION = 'sprout-plant-job-v1' as const;
 export const PLANT_ID_THRESHOLD_BPS = 7000;
-export const LIVE_DEADLINE_MS = 15_000;
+// Operational ceiling for a generation attempt; visitors may choose the catalog sooner.
+export const LIVE_DEADLINE_MS = 120_000;
 
 const id = z.string().min(1).max(256).regex(/^[A-Za-z0-9_-]+$/);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
@@ -29,7 +30,7 @@ export const PlantJobCreateResponseSchema = z.object({
   generationIntentId: id,
   state,
   createdAt: isoUtc,
-  liveDeadlineMs: z.literal(LIVE_DEADLINE_MS),
+  liveDeadlineMs: z.union([z.literal(15_000), z.literal(LIVE_DEADLINE_MS)]),
 }).strict();
 export type PlantJobCreateResponse = z.infer<typeof PlantJobCreateResponseSchema>;
 
@@ -60,7 +61,7 @@ export const PlantJobStatusSchema = z.object({
   generationIntentId: id,
   state,
   createdAt: isoUtc,
-  liveDeadlineMs: z.literal(LIVE_DEADLINE_MS),
+  liveDeadlineMs: z.union([z.literal(15_000), z.literal(LIVE_DEADLINE_MS)]),
   identificationThresholdBps: z.literal(PLANT_ID_THRESHOLD_BPS),
   identification: z.object({
     isPlant: z.boolean(),

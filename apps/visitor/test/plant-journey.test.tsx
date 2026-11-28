@@ -18,6 +18,31 @@ it('opens the approved sprite editor without starting a plant generation job', (
   expect(api.begin).not.toHaveBeenCalled();
 });
 
+it('keeps the generation wait open and offers the approved backup immediately', async () => {
+  const acceptFallback = vi.fn().mockResolvedValue({ state: 'accepted', generationIntentId: 'intent',
+    decision: { outcome: 'catalog_fallback_accepted', catalogAssetId: catalogManifest.spriteAssetId },
+    sproutAck: 'confirmed' });
+  const api = { capture: vi.fn().mockResolvedValue({ captureId: 'capture', status: 'confirmed' }),
+    begin: vi.fn().mockResolvedValue({ state: 'waiting', generationIntentId: 'intent', remainingMs: 120_000 }),
+    plantStatus: vi.fn(), acceptGenerated: vi.fn(), acceptFallback, syncOutcome: vi.fn(),
+    acceptedSprite: vi.fn(), candidatePreview: vi.fn(), submitPlant: vi.fn() } satisfies PlantVisitorApi;
+  vi.stubGlobal('URL', class extends URL {
+    static createObjectURL() { return 'blob:plant-photo'; }
+    static revokeObjectURL() {}
+  });
+  vi.stubGlobal('Worker', class extends EventTarget { postMessage() {} });
+  render(<PlantJourney api={api} onNavigate={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText(/tap to take or upload/i), {
+    target: { files: [new File(['plant'], 'plant.jpg', { type: 'image/jpeg' })] },
+  });
+  fireEvent.click(screen.getByRole('button', { name: /create my sprite/i }));
+  const backup = await screen.findByRole('button', { name: 'Use my backup sprite now' });
+  expect(screen.getByText('We’ll show your sprite as soon as it’s ready.')).toBeTruthy();
+  fireEvent.click(backup);
+  expect(acceptFallback).toHaveBeenCalledWith(expect.any(String));
+  expect(await screen.findByRole('heading', { name: /your sprite sticker/i })).toBeTruthy();
+});
+
 it('uploads a plant, starts the private job, and opens the accepted fallback in the sticker editor', async () => {
   const capture = vi.fn().mockResolvedValue({ captureId: 'capture-one', status: 'confirmed' });
   const begin = vi.fn().mockResolvedValue({ state: 'accepted', generationIntentId: 'intent-one',

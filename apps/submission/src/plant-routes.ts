@@ -114,7 +114,7 @@ export function registerPlantRoutes(app: FastifyInstance, prefix: string, deps: 
       if (state.state === 'identification_review') {
         return publicResult(await deps.coordinator.acceptFallback(key, 'identification_below_threshold'));
       }
-      if (state.state === 'candidate_available') {
+      if (state.state === 'waiting' || state.state === 'candidate_available') {
         return publicResult(await deps.coordinator.acceptFallback(key, 'operator_fallback'));
       }
       if (state.state === 'needs_reconciliation') {

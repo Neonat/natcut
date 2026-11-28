@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import { expect, it, vi } from 'vitest';
 import { createPlantFlowCoordinator, createTrustedCandidateRegistrar, type PlantFlowClock } from '../src/plant-flow.ts';
 import { PlantFlowConflictError, type PlantFlow, type PlantFlowKey, type PlantFlowRepository } from '../src/plant-flow-repository.ts';
-import { sourcePhotoDigest, type PlantCandidate, type PlantJobCreateRequest, type PlantJobStatus, type PlantOutcome } from '../src/plant-job-contract.ts';
+import { LIVE_DEADLINE_MS, sourcePhotoDigest, type PlantCandidate, type PlantJobCreateRequest, type PlantJobStatus, type PlantOutcome } from '../src/plant-job-contract.ts';
 import { SproutEvidenceConflictError, SproutHttpError, type SproutPlantJobClient } from '../src/sprout-client.ts';
 
 const key: PlantFlowKey = { eventId: 'devfest-sg', visitorSessionId: 'visitor-1', captureId: 'capture-1' };
@@ -71,12 +71,12 @@ function harness() {
   const regressWall = (ms: number) => { wall -= ms; };
   let currentStatus: PlantJobStatus = {
     plantJobId: 'job-1', generationIntentId: 'intent-1', state: 'generating',
-    createdAt: new Date(wall).toISOString(), liveDeadlineMs: 15_000, identificationThresholdBps: 7000,
+    createdAt: new Date(wall).toISOString(), liveDeadlineMs: LIVE_DEADLINE_MS, identificationThresholdBps: 7000,
     lateResultStored: false,
   };
   const create = vi.fn(async (request: PlantJobCreateRequest) => ({
     plantJobId: 'job-1', generationIntentId: request.generationIntentId,
-    state: 'received' as const, createdAt: new Date(wall).toISOString(), liveDeadlineMs: 15_000 as const,
+    state: 'received' as const, createdAt: new Date(wall).toISOString(), liveDeadlineMs: LIVE_DEADLINE_MS as typeof LIVE_DEADLINE_MS,
   }));
   const status = vi.fn(async () => currentStatus);
   const candidate = vi.fn(async () => Buffer.from('candidate'));
@@ -125,11 +125,21 @@ it('lets a visitor accept the approved backup after a bound Sprout job needs rec
   expect(h.stage).not.toHaveBeenCalled();
 });
 
+it('lets a visitor choose the catalog while generation is still running', async () => {
+  const h = harness();
+  await h.coordinator.begin(input);
+  expect(await h.coordinator.advance(key)).toMatchObject({ state: 'waiting' });
+  expect(await h.coordinator.acceptFallback(key, 'operator_fallback')).toMatchObject({
+    state: 'accepted', decision: { outcome: 'catalog_fallback_accepted', reason: 'operator_fallback' },
+  });
+  expect(h.candidate).not.toHaveBeenCalled();
+});
+
 it('commits one immutable fallback at the monotonic deadline and retries a lost outcome acknowledgement', async () => {
   const h = harness();
   await h.coordinator.begin(input);
   await h.coordinator.advance(key);
-  h.tick(14_999);
+  h.tick(LIVE_DEADLINE_MS - 1);
   expect((await h.coordinator.advance(key)).state).toBe('waiting');
   h.tick(1);
   h.outcome.mockRejectedValueOnce(new Error('response lost'));
@@ -166,7 +176,7 @@ it('keeps an on-time candidate available for visitor review after the generation
   await h.coordinator.advance(key);
   h.setStatus({ state: 'candidate_ready', candidate: candidateMeta });
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'candidate_available' });
-  h.tick(15_001);
+  h.tick(LIVE_DEADLINE_MS + 1);
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'candidate_available', candidate: candidateMeta });
   expect(await h.coordinator.acceptGenerated(key, candidateMeta.candidateId)).toMatchObject({ state: 'accepted',
     decision: { outcome: 'generated_accepted', reason: 'candidate_ready_before_deadline' } });
@@ -176,7 +186,7 @@ it('does not expose a candidate first observed after the generation deadline', a
   const h = harness();
   await h.coordinator.begin(input);
   await h.coordinator.advance(key);
-  h.tick(15_000);
+  h.tick(LIVE_DEADLINE_MS);
   h.setStatus({ state: 'late_completed', lateResultStored: true, candidate: candidateMeta });
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'accepted',
     decision: { outcome: 'catalog_fallback_accepted', reason: 'deadline_elapsed' } });
@@ -189,7 +199,7 @@ it('lets a visitor choose the catalog fallback after an on-time candidate is hel
   await h.coordinator.begin(input);
   h.setStatus({ state: 'candidate_ready', candidate: candidateMeta });
   await h.coordinator.advance(key);
-  h.tick(15_001);
+  h.tick(LIVE_DEADLINE_MS + 1);
   expect(await h.coordinator.acceptFallback(key, 'identification_below_threshold')).toMatchObject({ state: 'accepted',
     decision: { outcome: 'catalog_fallback_accepted', reason: 'operator_fallback' } });
   expect(h.stage).not.toHaveBeenCalled();
@@ -203,7 +213,7 @@ it('holds a different Sprout outcome for reconciliation and never synthesizes ac
     outcome: 'catalog_fallback_accepted', catalogAssetId: fallbackAssetId, reason: 'operator_fallback' } });
   expect(await h.coordinator.advance(key)).toEqual({ state: 'needs_reconciliation', generationIntentId: 'intent-1' });
   expect(h.repository.flow!.accepted).toBeNull();
-  h.tick(15_000);
+  h.tick(LIVE_DEADLINE_MS);
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'needs_reconciliation' });
   expect(h.outcome).not.toHaveBeenCalled();
 });
@@ -215,7 +225,7 @@ it('holds malformed remote evidence through the deadline', async () => {
   h.status.mockRejectedValueOnce(new SproutEvidenceConflictError('wrong job'));
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'needs_reconciliation' });
   expect(h.repository.flow!.accepted).toBeNull();
-  h.tick(15_000);
+  h.tick(LIVE_DEADLINE_MS);
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'needs_reconciliation' });
 });
 
@@ -223,20 +233,20 @@ it('marks a contradictory outcome acknowledgement for reconciliation', async () 
   const h = harness();
   await h.coordinator.begin(input);
   await h.coordinator.advance(key);
-  h.tick(15_000);
+  h.tick(LIVE_DEADLINE_MS);
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'accepted', sproutAck: 'pending' });
   h.outcome.mockRejectedValueOnce(new SproutEvidenceConflictError('different outcome'));
   expect(await h.coordinator.syncOutcome(key)).toMatchObject({ state: 'accepted', sproutAck: 'needs_reconciliation' });
 });
 
-it('keeps a below-threshold visitor in identification review after 15 seconds', async () => {
+it('keeps a below-threshold visitor in identification review after the generation ceiling', async () => {
   const h = harness();
   await h.coordinator.begin(input);
   h.setStatus({ state: 'below_threshold', identification: { isPlant: true,
     suggestions: [{ name: 'Rose', scoreBps: 6500 }], thresholdDecision: 'review' } });
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'identification_review',
     suggestions: [{ name: 'Rose', scoreBps: 6500 }] });
-  h.tick(15_000);
+  h.tick(LIVE_DEADLINE_MS);
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'identification_review',
     suggestions: [{ name: 'Rose', scoreBps: 6500 }] });
   expect(h.repository.flow!.accepted).toBeNull();
@@ -247,7 +257,7 @@ it('bounds a stalled status read by the remaining wait and falls back only for k
   const h = harness();
   await h.coordinator.begin(input);
   await h.coordinator.advance(key);
-  h.tick(14_995);
+  h.tick(LIVE_DEADLINE_MS - 5);
   h.status.mockImplementationOnce(() => new Promise(() => { setTimeout(() => h.tick(5), 5); }));
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'accepted',
     decision: { outcome: 'catalog_fallback_accepted', reason: 'deadline_elapsed' } });
@@ -256,7 +266,7 @@ it('bounds a stalled status read by the remaining wait and falls back only for k
 it('holds an unknown identification state when status stalls through the deadline', async () => {
   const h = harness();
   await h.coordinator.begin(input);
-  h.tick(14_995);
+  h.tick(LIVE_DEADLINE_MS - 5);
   h.status.mockImplementationOnce(() => new Promise(() => { setTimeout(() => h.tick(5), 5); }));
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'needs_reconciliation' });
   expect(h.repository.flow!.accepted).toBeNull();
@@ -266,7 +276,7 @@ it('commits eligible fallback when monotonic time expires despite wall-clock rol
   const h = harness();
   await h.coordinator.begin(input);
   await h.coordinator.advance(key);
-  h.tick(14_999);
+  h.tick(LIVE_DEADLINE_MS - 1);
   h.regressWall(5_000);
   h.tick(1);
   expect(await h.coordinator.advance(key)).toMatchObject({ state: 'accepted',
@@ -298,7 +308,7 @@ it('bounds a hung create, including identity-token acquisition, without restarti
   const h = harness();
   h.create.mockRejectedValueOnce(new TypeError('network unavailable'));
   await expect(h.coordinator.begin(input)).rejects.toThrow('network unavailable');
-  h.tick(14_995);
+  h.tick(LIVE_DEADLINE_MS - 5);
   h.create.mockImplementationOnce(() => new Promise(() => { setTimeout(() => h.tick(5), 5); }));
   expect(await h.coordinator.begin(input)).toMatchObject({ state: 'needs_reconciliation' });
   expect(h.repository.flow!.plantJobId).toBeNull();
