@@ -155,7 +155,8 @@ export function PlantJourney({ api, onNavigate }: { api: PlantVisitorApi; onNavi
       <button className="primary-action" disabled={!photo || busy} onClick={() => void upload()}>{busy ? 'Uploading…' : 'Create my sprite'}</button>
     </>}
     {status?.state === 'waiting' && <section className="plant-progress"><span className="plant-eyebrow">02 / MAKING YOUR SPRITE</span>
-      <h2>A little magic is growing.</h2><p>About {Math.max(1, Math.ceil(status.remainingMs / 1000))} seconds left before your backup is ready.</p></section>}
+      <h2>A little magic is growing.</h2><p>We’ll show your sprite as soon as it’s ready.</p>
+      <button className="plant-secondary" disabled={busy} onClick={() => void run(() => api.acceptFallback(captureId))}>Use my backup sprite now</button></section>}
     {status?.state === 'candidate_available' && <section className="plant-progress"><span className="plant-eyebrow">02 / YOUR SPRITE IS READY</span>
       <h2>Is this sprite cute enough?</h2>
       {candidateUrl ? <img className="plant-candidate" src={candidateUrl} alt="Your generated plant sprite" />
