@@ -48,7 +48,7 @@ class MemoryFlows implements PlantFlowRepository {
   }
   async commit(_key: PlantFlowKey, intentId: string, decision: PlantOutcome) {
     if (!this.flow || this.flow.generationIntentId !== intentId || !this.flow.plantJobId) throw new PlantFlowConflictError();
-    if (this.flow.eligibility === 'needs_reconciliation' ||
+    if ((this.flow.eligibility === 'needs_reconciliation' && decision.reason !== 'operator_fallback') ||
       (decision.reason === 'deadline_elapsed' && this.flow.eligibility !== 'eligible')) throw new PlantFlowConflictError();
     if (!this.flow.accepted) this.flow = { ...this.flow, accepted: decision };
     return this.flow;
@@ -111,6 +111,18 @@ it('holds a conflicting create response for reconciliation across retries', asyn
   expect(h.repository.flow!.eligibility).toBe('needs_reconciliation');
   expect(await h.coordinator.begin(input)).toMatchObject({ state: 'needs_reconciliation' });
   expect(h.create).toHaveBeenCalledTimes(1);
+});
+
+it('lets a visitor accept the approved backup after a bound Sprout job needs reconciliation', async () => {
+  const h = harness();
+  await h.coordinator.begin(input);
+  h.setStatus({ state: 'needs_reconciliation' });
+  expect(await h.coordinator.advance(key)).toMatchObject({ state: 'needs_reconciliation' });
+  const fallback = await h.coordinator.acceptFallback(key, 'operator_fallback');
+  expect(fallback).toMatchObject({ state: 'accepted', decision: {
+    outcome: 'catalog_fallback_accepted', catalogAssetId: fallbackAssetId, reason: 'operator_fallback',
+  } });
+  expect(h.stage).not.toHaveBeenCalled();
 });
 
 it('commits one immutable fallback at the monotonic deadline and retries a lost outcome acknowledgement', async () => {

@@ -120,13 +120,13 @@ export function createPlantFlowRepository(firestore: Firestore): PlantFlowReposi
         const existing = snapshot.data() as PlantFlow;
         if (existing.generationIntentId !== generationIntentId || !existing.plantJobId) throw new PlantFlowConflictError();
         if (existing.accepted) return existing;
-        if (existing.eligibility === 'needs_reconciliation' ||
+        if ((existing.eligibility === 'needs_reconciliation' && decision.reason !== 'operator_fallback') ||
           (decision.outcome === 'generated_accepted' && (existing.eligibility !== 'eligible' ||
             !existing.heldCandidate || existing.heldCandidate.candidate.candidateId !== decision.candidateId ||
             decision.reason !== 'candidate_ready_before_deadline')) ||
           (decision.reason === 'deadline_elapsed' && (existing.eligibility !== 'eligible' || existing.heldCandidate)) ||
           (decision.reason === 'identification_below_threshold' && existing.eligibility !== 'below_threshold') ||
-          (decision.reason === 'operator_fallback' && existing.eligibility !== 'eligible') ||
+          (decision.reason === 'operator_fallback' && !['eligible', 'unknown', 'needs_reconciliation'].includes(existing.eligibility)) ||
           (decision.reason === 'generation_failed' && existing.eligibility !== 'eligible')) {
           throw new PlantFlowConflictError();
         }

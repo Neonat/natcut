@@ -225,8 +225,7 @@ export function createPlantFlowCoordinator(deps: {
       const flow = await deps.repository.get(key);
       if (!flow || !flow.plantJobId) throw new Error('Plant job is not bound.');
       if (flow.accepted) return reportAccepted(flow);
-      if (flow.eligibility === 'unknown' || flow.eligibility === 'needs_reconciliation') return reconcile(flow);
-      return commitFallback(flow, flow.eligibility === 'eligible' ? 'operator_fallback' : reason);
+      return commitFallback(flow, flow.eligibility === 'below_threshold' ? reason : 'operator_fallback');
     },
 
     async acceptGenerated(key: PlantFlowKey, candidateId: string): Promise<PlantFlowResult> {
