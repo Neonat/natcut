@@ -273,16 +273,26 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
       ...plant, eventId: deps.eventId, verifyBearerToken: deps.verifyBearerToken,
       async submitRuntime(ownerUid, flowKey, body) {
         const parsed = RuntimeCreateBodySchema.safeParse(body);
-        if (!parsed.success || parsed.data.manifest.renderVersion !== 'runtime-catalog-v1') {
-          return { statusCode: 400, payload: { error: 'INVALID_RUNTIME_SUBMISSION' } };
+        if (!parsed.success) {
+          return { statusCode: 400, payload: { error: 'INVALID_PLANT_SUBMISSION' } };
         }
         const { manifest, warningAcknowledgement } = parsed.data;
-        try {
-          await plant.verifyRuntimeAcceptance(flowKey, manifest);
-        } catch {
-          return { statusCode: 409, payload: { error: 'RUNTIME_ARTWORK_NOT_ACCEPTED' } };
+        const state = await plant.coordinator.advance(flowKey);
+        if (state.state !== 'accepted' || state.sproutAck !== 'confirmed') {
+          return { statusCode: 409, payload: { error: 'PLANT_ARTWORK_NOT_ACCEPTED' } };
         }
-        const scopedKey = 'runtime-' + createHash('sha256').update(`${flowKey.eventId}\0${flowKey.visitorSessionId}\0${flowKey.captureId}\0${parsed.data.idempotencyKey}`).digest('hex');
+        const generated = state.decision.outcome === 'generated_accepted';
+        if (state.decision.outcome === 'generated_accepted') {
+          if (manifest.renderVersion !== 'runtime-catalog-v1' || manifest.spriteAssetId !== state.decision.natcutAssetId) {
+            return { statusCode: 409, payload: { error: 'PLANT_ARTWORK_MISMATCH' } };
+          }
+          try { await plant.verifyRuntimeAcceptance(flowKey, manifest); }
+          catch { return { statusCode: 409, payload: { error: 'RUNTIME_ARTWORK_NOT_ACCEPTED' } }; }
+        } else if (manifest.renderVersion !== 'catalog-v1' || manifest.spriteAssetId !== state.decision.catalogAssetId) {
+          return { statusCode: 409, payload: { error: 'PLANT_ARTWORK_MISMATCH' } };
+        }
+        // The capture owns one physical ticket. A new client nonce or layout cannot create another.
+        const scopedKey = 'plant-' + createHash('sha256').update(`${flowKey.eventId}\0${flowKey.visitorSessionId}\0${flowKey.captureId}`).digest('hex');
         const lookup = { ownerUid, eventId: deps.eventId, idempotencyKey: scopedKey,
           manifestHash: await manifestHash(manifest), requeuedFrom: null };
         const publicStatusToken = statusToken(deps.statusTokenSecret, ownerUid, deps.eventId, scopedKey);
@@ -294,7 +304,9 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
           const existing = await deps.repository.findAccepted(lookup);
           if (existing) return accepted(existing, false);
           let prepared;
-          try { prepared = await plant.prepareRuntimeArtifact(flowKey, manifest); }
+          try { prepared = generated
+            ? await plant.prepareRuntimeArtifact(flowKey, manifest)
+            : await deps.prepareArtifact(manifest); }
           catch { return { statusCode: 409, payload: { error: 'RUNTIME_ARTWORK_UNAVAILABLE' } }; }
           let validation = prepared.report;
           if (!validation.valid || validation.severity === 'error') {
