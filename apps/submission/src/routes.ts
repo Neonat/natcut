@@ -278,7 +278,8 @@ export function buildSubmissionServer(deps: SubmissionServerDependencies) {
         }
         const { manifest, warningAcknowledgement } = parsed.data;
         const state = await plant.coordinator.advance(flowKey);
-        if (state.state !== 'accepted' || state.sproutAck !== 'confirmed') {
+        if (state.state !== 'accepted' ||
+          (state.decision.outcome === 'generated_accepted' && state.sproutAck !== 'confirmed')) {
           return { statusCode: 409, payload: { error: 'PLANT_ARTWORK_NOT_ACCEPTED' } };
         }
         const generated = state.decision.outcome === 'generated_accepted';

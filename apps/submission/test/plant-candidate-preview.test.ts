@@ -72,3 +72,24 @@ it('requires the capture owner before serving candidate PNG bytes', async () => 
   expect(previewCandidate).toHaveBeenCalledWith({ eventId: 'event', visitorSessionId: 'session', captureId: 'capture' }, 'candidate');
   await app.close();
 });
+
+it('lets a visitor take the approved backup when generation needs reconciliation', async () => {
+  const app = Fastify();
+  const acceptFallback = vi.fn(async () => ({ state: 'accepted' as const, generationIntentId: 'intent',
+    decision: { outcome: 'catalog_fallback_accepted' as const, catalogAssetId: 'sprite/monstera-v1',
+      reason: 'operator_fallback' as const, decisionId: 'decision', decidedAt: new Date().toISOString() },
+    sproutAck: 'pending' as const }));
+  registerPlantRoutes(app, '/api', { eventId: 'event', policyVersion: 'policy',
+    captureSource: { async findOwned() { return { visitorSessionId: 'session', captureId: 'capture' }; },
+      async resolveConfirmed() { return null; } },
+    coordinator: { advance: async () => ({ state: 'needs_reconciliation', generationIntentId: 'intent' }),
+      acceptFallback } as unknown as ReturnType<typeof createPlantFlowCoordinator>,
+    verifyBearerToken: async () => ({ uid: 'visitor' }), submitRuntime: async () => ({ statusCode: 500, payload: {} }),
+  });
+  const response = await app.inject({ method: 'POST', url: '/api/v1/plant-jobs/capture/accept-fallback',
+    headers: { authorization: 'Bearer visitor' }, payload: {} });
+  expect(response.statusCode).toBe(200);
+  expect(response.json().decision.outcome).toBe('catalog_fallback_accepted');
+  expect(acceptFallback).toHaveBeenCalledWith({ eventId: 'event', visitorSessionId: 'session', captureId: 'capture' }, 'operator_fallback');
+  await app.close();
+});

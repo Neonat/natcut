@@ -234,7 +234,7 @@ describe('submission routes', () => {
             async resolveConfirmed() { return null; },
           },
           coordinator: { async advance() { return { state: 'accepted', generationIntentId: 'intent',
-            decision: accepted, sproutAck: 'confirmed' }; } } as unknown as ReturnType<typeof createPlantFlowCoordinator>,
+            decision: accepted, sproutAck: outcome === 'generated_accepted' ? 'confirmed' : 'pending' }; } } as unknown as ReturnType<typeof createPlantFlowCoordinator>,
           verifyRuntimeAcceptance: async () => {},
           prepareRuntimeArtifact: async () => ({ report: report(), bundle }),
         },

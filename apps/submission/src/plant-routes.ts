@@ -85,6 +85,9 @@ export function registerPlantRoutes(app: FastifyInstance, prefix: string, deps: 
     try { return await action(key, visitor.uid); }
     catch (error) {
       if (error instanceof PlantFlowConflictError) return reply.code(409).send({ error: 'PLANT_OUTCOME_CONFLICT' });
+      if (error instanceof Error && /Plant job is not bound/.test(error.message)) {
+        return reply.code(409).send({ error: 'FALLBACK_NOT_AVAILABLE' });
+      }
       if (error instanceof Error && /Unknown plant intent|No accepted plant outcome/.test(error.message)) {
         return reply.code(404).send({ error: 'PLANT_JOB_NOT_FOUND' });
       }
@@ -112,6 +115,9 @@ export function registerPlantRoutes(app: FastifyInstance, prefix: string, deps: 
         return publicResult(await deps.coordinator.acceptFallback(key, 'identification_below_threshold'));
       }
       if (state.state === 'candidate_available') {
+        return publicResult(await deps.coordinator.acceptFallback(key, 'operator_fallback'));
+      }
+      if (state.state === 'needs_reconciliation') {
         return publicResult(await deps.coordinator.acceptFallback(key, 'operator_fallback'));
       }
       return reply.code(409).send({ error: 'FALLBACK_NOT_AVAILABLE' });

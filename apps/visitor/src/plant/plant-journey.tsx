@@ -159,7 +159,9 @@ export function PlantJourney({ api, onNavigate }: { api: PlantVisitorApi; onNavi
       <button className="primary-action" disabled={busy} onClick={() => void run(() => api.acceptFallback(captureId))}>Choose my backup sprite</button>
       <button className="plant-secondary" onClick={startOver}>Try another photo</button></section>}
     {status?.state === 'needs_reconciliation' && <section className="plant-progress"><h2>We need a moment to check your sprite.</h2>
-      <p>Your photo is safe. Please ask the booth host for help.</p></section>}
+      <p>You can keep going with your backup sprite while we check what happened.</p>
+      <button className="primary-action" disabled={busy}
+        onClick={() => void run(() => api.acceptFallback(captureId))}>Use my backup sprite</button></section>}
     {error && <div className="notice error" role="alert">{error}
       {status ? <button onClick={() => void run(() => api.plantStatus(captureId))}>Retry status</button> : null}
       <button onClick={startOver}>Use another photo</button></div>}
