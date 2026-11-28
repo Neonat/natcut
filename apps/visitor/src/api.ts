@@ -40,12 +40,35 @@ export type SurveyRequest = {
 export type SurveyResponse = { surveyId: string; created: boolean };
 export type SurveyStatus = { eligible: boolean; submitted: boolean };
 
+export type PlantFlowStatus =
+  | { state: 'needs_create_retry' | 'needs_reconciliation'; generationIntentId: string }
+  | { state: 'waiting'; generationIntentId: string; remainingMs: number }
+  | { state: 'identification_review'; generationIntentId: string; suggestions: { name: string; scoreBps: number }[] }
+  | { state: 'candidate_available'; generationIntentId: string; candidateId: string; remainingMs: number }
+  | { state: 'accepted'; generationIntentId: string; decision:
+      | { outcome: 'generated_accepted'; natcutAssetId: string }
+      | { outcome: 'catalog_fallback_accepted'; catalogAssetId: string };
+      sproutAck: 'confirmed' | 'pending' | 'needs_reconciliation' };
+
+export interface PlantVisitorApi {
+  capture(captureId: string, image: Blob): Promise<{ captureId: string; status: 'confirmed' }>;
+  begin(captureId: string, fallbackAssetId: string): Promise<PlantFlowStatus>;
+  plantStatus(captureId: string): Promise<PlantFlowStatus>;
+  acceptGenerated(captureId: string, candidateId: string): Promise<PlantFlowStatus>;
+  acceptFallback(captureId: string): Promise<PlantFlowStatus>;
+  syncOutcome(captureId: string): Promise<PlantFlowStatus>;
+  acceptedSprite(captureId: string): Promise<Blob>;
+  candidatePreview(captureId: string, candidateId: string): Promise<Blob>;
+  submitPlant(captureId: string, request: SubmissionRequest): Promise<SubmissionResponse>;
+}
+
 export interface VisitorApi {
   submit(request: SubmissionRequest): Promise<SubmissionResponse>;
   getStatus(submissionId: string, statusToken: string): Promise<PublicQueueStatus>;
   leave(submissionId: string, statusToken: string): Promise<{ submissionId: string; publicStatus: 'cancelled' }>;
   submitSurvey(request: SurveyRequest): Promise<SurveyResponse>;
   getSurveyStatus(stickerSubmissionId: string): Promise<SurveyStatus>;
+  plant?: PlantVisitorApi;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -68,7 +91,45 @@ export function createVisitorApi(options: {
   };
   const url = (path: string) => `${options.submissionApiUrl.replace(/\/$/, '')}${path}`;
 
+  const plantJson = async <T>(path: string, method: 'GET' | 'POST', body?: object): Promise<T> =>
+    parseResponse<T>(await fetch(url(path), {
+      method,
+      headers: { authorization: `Bearer ${await identityToken()}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    }));
+  const plantPath = (captureId: string) => `/v1/plant-jobs/${encodeURIComponent(captureId)}`;
+
   return {
+    plant: {
+      async capture(captureId, image) {
+        const bytes = new Uint8Array(await image.arrayBuffer());
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 8192) {
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+        }
+        return plantJson('/v1/plant-captures', 'POST', { captureId, imageBase64: btoa(binary) });
+      },
+      begin: (captureId, fallbackAssetId) => plantJson('/v1/plant-jobs', 'POST', { captureId, fallbackAssetId }),
+      plantStatus: captureId => plantJson(plantPath(captureId), 'GET'),
+      acceptGenerated: (captureId, candidateId) => plantJson(`${plantPath(captureId)}/accept-generated`, 'POST', { candidateId }),
+      acceptFallback: captureId => plantJson(`${plantPath(captureId)}/accept-fallback`, 'POST', {}),
+      syncOutcome: captureId => plantJson(`${plantPath(captureId)}/sync-outcome`, 'POST', {}),
+      async acceptedSprite(captureId) {
+        const response = await fetch(url(`${plantPath(captureId)}/accepted-sprite`), {
+          headers: { authorization: `Bearer ${await identityToken()}` },
+        });
+        if (!response.ok) throw new Error(`Sprite preview unavailable (${response.status})`);
+        return response.blob();
+      },
+      async candidatePreview(captureId, candidateId) {
+        const response = await fetch(url(`${plantPath(captureId)}/candidates/${encodeURIComponent(candidateId)}`), {
+          headers: { authorization: `Bearer ${await identityToken()}` },
+        });
+        if (!response.ok) throw new Error(`Sprite preview unavailable (${response.status})`);
+        return response.blob();
+      },
+      submitPlant: (captureId, request) => plantJson(`${plantPath(captureId)}/submissions`, 'POST', request),
+    },
     async submit(request) {
       return parseResponse<SubmissionResponse>(await fetch(url('/v1/submissions'), {
         method: 'POST',

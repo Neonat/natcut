@@ -3,6 +3,7 @@ import { assertSupportedRecipe } from '@natcut/render/browser';
 import type { VisitorApi } from './api.ts';
 import { EditorPage, overlapFixtureManifest } from './editor/editor-page.tsx';
 import { QueuePage } from './queue/queue-page.tsx';
+import { PlantJourney } from './plant/plant-journey.tsx';
 
 function navigate(path: string) {
   window.location.assign(path);
@@ -40,6 +41,10 @@ function requeueDraft(id: string) {
 }
 
 function VisitorRoute({ api, simulation }: { api: VisitorApi; simulation: boolean }) {
+  const plantHome = window.location.pathname === '/' && import.meta.env.VITE_NATCUT_PLANT_FLOW_ENABLED === 'true';
+  if ((window.location.pathname === '/plant' || plantHome) && api.plant) {
+    return <PlantJourney api={api.plant} submitCatalog={request => api.submit(request)} onNavigate={navigate} />;
+  }
   const queueMatch = /^\/queue\/([^/]+)$/.exec(window.location.pathname);
   if (queueMatch) {
     const submissionId = decodeURIComponent(queueMatch[1]!);

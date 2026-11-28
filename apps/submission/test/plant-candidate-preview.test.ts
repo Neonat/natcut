@@ -14,9 +14,10 @@ it('shows only the active matching candidate without staging or accepting it', a
     raw: { width: 1, height: 1, channels: 4 },
   }).withIccProfile('srgb').png().toBuffer();
   const key = { eventId: 'event', visitorSessionId: 'visitor', captureId: 'capture' };
-  const flow: PlantFlow & { heldCandidate?: { candidate: PlantCandidate; observedAt: string } | null } = { ...key, generationIntentId: 'intent', requestFingerprint: 'fingerprint',
+  const flow: PlantFlow = { ...key, generationIntentId: 'intent', requestFingerprint: 'fingerprint',
     liveDeadlineAt: new Date(20_000).toISOString(), fallbackAssetId: 'sprite/monstera-v1',
-    plantJobId: 'job', eligibility: 'eligible', identificationSuggestions: [], accepted: null, sproutAck: 'pending' };
+    plantJobId: 'job', eligibility: 'eligible', identificationSuggestions: [], heldCandidate: null,
+    accepted: null, sproutAck: 'pending' };
   const get = vi.fn(async () => flow);
   const flows = { get } as unknown as PlantFlowRepository;
   const candidate = { candidateId: 'candidate', mediaType: 'image/png' as const,

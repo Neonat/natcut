@@ -45,6 +45,13 @@ it('preserves mask acknowledgements across server artwork color changes', async 
   expect(changed.bundle.descriptor.bundleSha256).not.toBe(original.bundle.descriptor.bundleSha256);
 });
 
+it.each([['duo', 3], ['trio', 4]] as const)('keeps %s sheet stickers as separate trusted cuts', async (sheetVariant, minimumCuts) => {
+  const prepared = await createTrustedArtifactPreparer()({ ...catalogManifest, sheetVariant });
+  expect(prepared.report.valid).toBe(true);
+  expect(prepared.report.contourCount).toBeGreaterThanOrEqual(minimumCuts);
+  expect(prepared.contours).toHaveLength(prepared.report.contourCount);
+});
+
 it('rejects unpublished profiles and artifact fields supplied in a manifest', async () => {
   expect(() => createTrustedArtifactPreparer(undefined, { ...DEVFEST_SG_V1, copies: 3 })).toThrow(/profile/i);
   await expect(createTrustedManifestValidator(undefined, { ...DEVFEST_SG_V1, copies: 3 })(catalogManifest))

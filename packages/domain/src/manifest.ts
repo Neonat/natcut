@@ -24,6 +24,7 @@ export const CompositionManifestSchema = z
     spriteAssetId: z.string().trim().min(1).max(256),
     trainerAssetId: z.string().trim().min(1).max(256).nullable(),
     theme: z.enum(['default', 'hugging', 'battling', 'side-by-side']),
+    sheetVariant: z.enum(['classic', 'duo', 'trio']).optional(),
     brandingVariant: z.enum(['logo', 'logo-and-sprites', 'logo-and-species']),
     cutGroups: z.array(CutGroupSchema).min(1).max(64),
     cutMarginMm: finiteNumber.min(0.5).max(3),

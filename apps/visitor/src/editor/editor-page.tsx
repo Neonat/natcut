@@ -20,6 +20,7 @@ import {
   type SubmissionAttempt,
 } from './submission-attempt.ts';
 import { useCutPreview } from './use-cut-preview.ts';
+import sproutWordmark from '../assets/sprout-wordmark.png';
 
 export const fixtureManifest = legacyManifest;
 
@@ -45,6 +46,8 @@ export type EditorPageProps = {
   previewReportOverride?: GeometryReport;
   requeuedFrom?: string;
   initialManifest?: CompositionManifest;
+  runtimeSpriteUrl?: string;
+  lockSpriteChoice?: boolean;
 };
 
 export function EditorPage(props: EditorPageProps) {
@@ -55,7 +58,7 @@ export function EditorPage(props: EditorPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [artworkState, setArtworkState] = useState<'loading' | 'ready' | 'error'>(props.previewReportOverride ? 'ready' : 'loading');
   const [assetReload, setAssetReload] = useState(0);
-  const preview = useCutPreview();
+  const preview = useCutPreview(undefined, props.runtimeSpriteUrl);
   const current = preview.result?.manifestFingerprint === canonicalManifestJson(manifest) ? preview.result : null;
   const report = props.previewReportOverride ?? current?.report;
   const submissionAttempt = useRef<SubmissionAttempt | null>(null);
@@ -135,16 +138,26 @@ export function EditorPage(props: EditorPageProps) {
   };
   return (
     <main className="editor-page">
-      <header className="brand-bar"><span className="brand-mark">sprout</span><span>Sticker studio</span></header>
+      <header className="brand-bar"><img className="brand-wordmark" src={sproutWordmark} alt="Sprout" /><span>Sticker studio</span></header>
       <div className="page-intro">
         <h1>Your sprite sticker</h1>
       </div>
       <fieldset className="studio-layout" disabled={submitting} aria-label="Sticker design">
-        {manifest.renderVersion === 'catalog-v1' && (
+        {manifest.renderVersion === 'catalog-v1' && !props.lockSpriteChoice && (
           <SpritePicker selected={manifest.spriteAssetId} reloadKey={assetReload}
             onChange={(spriteAssetId) => update({ ...manifest, spriteAssetId }, true)} />
         )}
+        {manifest.trainerAssetId === null && <div className="sheet-variants" role="group" aria-label="Choose sticker sheet layout">
+          <p className="eyebrow">Your sheet</p><h2>Choose a layout</h2>
+          <div className="sheet-variant-options">
+            {([['classic', 'One large sticker'], ['duo', 'Two stickers'], ['trio', 'Three stickers']] as const).map(([value, label]) =>
+              <button key={value} type="button" className={(manifest.sheetVariant ?? 'classic') === value ? 'selected' : ''}
+                aria-pressed={(manifest.sheetVariant ?? 'classic') === value}
+                onClick={() => update(CompositionManifestSchema.parse({ ...manifest, sheetVariant: value }), true)}>{label}</button>)}
+          </div>
+        </div>}
         <CutPreview manifest={manifest} contours={current?.contours ?? []} reloadKey={assetReload}
+          {...(props.runtimeSpriteUrl ? { runtimeSpriteUrl: props.runtimeSpriteUrl } : {})}
           unavailable={previewFailed} onArtworkState={setArtworkState} />
         <CutBorderControl
           value={manifest.cutMarginMm}

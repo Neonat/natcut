@@ -1,11 +1,11 @@
 /// <reference lib="webworker" />
 import { buildDistanceField, evaluateCutGeometry } from '@natcut/cut-geometry';
 import { canonicalManifestJson, DEVFEST_SG_V1, type CompositionManifest } from '@natcut/domain';
-import { loadPlannedAssets, planComposition, renderCutGroupMasks, type RgbaAsset } from '@natcut/render/browser';
+import { assetPngFilename, planComposition, renderCutGroupMasks, type RgbaAsset } from '@natcut/render/browser';
 import type { CutPreviewRequest, CutPreviewResult } from '../editor/use-cut-preview.ts';
 
-async function loadAsset(filename: string, id: string): Promise<RgbaAsset> {
-  const response = await fetch('/' + filename);
+async function loadAsset(url: string, id: string): Promise<RgbaAsset> {
+  const response = await fetch(url);
   if (!response.ok) throw new Error('Artwork unavailable');
   const image = await createImageBitmap(await response.blob());
   try {
@@ -34,13 +34,18 @@ let prepared: {
 let pending: CutPreviewRequest | null = null;
 let busy = false;
 
-async function processPreview({ revision, manifest }: CutPreviewRequest): Promise<void> {
+async function processPreview({ revision, manifest, runtimeSpriteUrl }: CutPreviewRequest): Promise<void> {
   const manifestFingerprint = canonicalManifestJson(manifest);
   const key = compositionKey(manifest);
   if (prepared?.key !== key) {
     prepared = null;
-    const plan = planComposition(manifest, DEVFEST_SG_V1);
-    const assets = await loadPlannedAssets(plan, loadAsset);
+    const plan = planComposition(manifest, DEVFEST_SG_V1,
+      manifest.renderVersion === 'runtime-catalog-v1' ? manifest.spriteAssetId : undefined);
+    const assets = new Map(await Promise.all([...new Set(plan.layers.map(layer => layer.assetId))].map(async assetId => {
+      const url = assetId === manifest.spriteAssetId && runtimeSpriteUrl
+        ? runtimeSpriteUrl : `/${assetPngFilename(assetId)}`;
+      return [assetId, await loadAsset(url, assetId)] as const;
+    })));
     if (pending && compositionKey(pending.manifest) !== key) return;
     const masks = renderCutGroupMasks(plan, assets);
     prepared = { key, masks, fields: masks.map((mask) => buildDistanceField(mask, DEVFEST_SG_V1.alphaThreshold)) };
